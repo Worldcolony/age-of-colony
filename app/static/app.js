@@ -4,6 +4,7 @@ const state = {
   source: "historical",
   liveSource: null,
   timelineEvents: [],
+  fullData: null,
   replay: {
     events: [],
     index: 0,
@@ -27,6 +28,14 @@ const els = {
   scoreBox: document.querySelector("#scoreBox"),
   manualFixture: document.querySelector("#manualFixture"),
   manualFixtureId: document.querySelector("#manualFixtureId"),
+  matchDetailsStatus: document.querySelector("#matchDetailsStatus"),
+  matchInfoGrid: document.querySelector("#matchInfoGrid"),
+  lineupsGrid: document.querySelector("#lineupsGrid"),
+  fullDataStatus: document.querySelector("#fullDataStatus"),
+  fullDataGrid: document.querySelector("#fullDataGrid"),
+  fullDataPreview: document.querySelector("#fullDataPreview"),
+  loadFullData: document.querySelector("#loadFullData"),
+  downloadFullData: document.querySelector("#downloadFullData"),
   importantOnly: document.querySelector("#importantOnly"),
   includePossession: document.querySelector("#includePossession"),
   loadTimeline: document.querySelector("#loadTimeline"),
@@ -77,6 +86,8 @@ function bindEvents() {
     loadTimeline();
   });
   els.loadTimeline.addEventListener("click", loadTimeline);
+  els.loadFullData.addEventListener("click", loadFullData);
+  els.downloadFullData.addEventListener("click", downloadFullData);
   els.replayPlay.addEventListener("click", toggleReplay);
   els.replayReset.addEventListener("click", resetReplay);
   els.replaySpeed.addEventListener("change", () => {
@@ -189,7 +200,30 @@ function selectFixture(fixture) {
   els.selectedTitle.textContent = `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`;
   els.selectedMeta.textContent = `${fixture.competition || "Competition inconnue"} - Fixture ${fixture.fixtureId}`;
   els.scoreBox.textContent = "-";
+  renderFullData(null);
+  loadMatchDetails();
   renderFixtures();
+}
+
+async function loadMatchDetails() {
+  if (!state.selected?.fixtureId) {
+    renderMatchDetails(null);
+    return;
+  }
+
+  els.matchDetailsStatus.textContent = "Chargement des infos...";
+  els.matchInfoGrid.innerHTML = "";
+  els.lineupsGrid.innerHTML = "";
+  const params = new URLSearchParams();
+  if (state.selected.participant1) params.set("participant1", state.selected.participant1);
+  if (state.selected.participant2) params.set("participant2", state.selected.participant2);
+
+  try {
+    const data = await getJson(`/api/scores/${state.selected.fixtureId}/details?${params.toString()}`);
+    renderMatchDetails(data);
+  } catch (error) {
+    els.matchDetailsStatus.textContent = error.message;
+  }
 }
 
 async function loadTimeline() {
@@ -224,6 +258,186 @@ async function loadTimeline() {
     renderEvents(els.timeline, [], error.message);
     return [];
   }
+}
+
+function renderMatchDetails(data) {
+  if (!data) {
+    els.matchDetailsStatus.textContent = "Selectionne un match.";
+    els.matchInfoGrid.innerHTML = "";
+    els.lineupsGrid.innerHTML = "";
+    return;
+  }
+
+  els.matchDetailsStatus.textContent = `${data.recordCount || 0} updates bruts - source ${data.source || "-"}`;
+  const env = data.environment || {};
+  const stats = data.stats || {};
+  const infoItems = [
+    ["Terrain", env.pitchConditions?.join(", ")],
+    ["Meteo", env.weatherConditions?.join(", ")],
+    ["Stade", env.venueType],
+    ["Maillots", formatJerseys(env.jerseys)],
+    ["Stats", formatStats(stats)],
+    ["Temps additionnel", formatAdditionalTime(data.additionalTime)],
+  ].filter(([, value]) => value);
+
+  els.matchInfoGrid.replaceChildren(
+    ...infoItems.map(([label, value]) => {
+      const item = document.createElement("div");
+      item.className = "info-item";
+      item.innerHTML = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`;
+      return item;
+    }),
+  );
+
+  const teams = data.lineups || [];
+  els.lineupsGrid.replaceChildren(...teams.map(renderLineupTeam));
+}
+
+async function loadFullData() {
+  if (!state.selected?.fixtureId) {
+    renderFullData(null);
+    return;
+  }
+
+  els.fullDataStatus.textContent = "Chargement du paquet complet...";
+  els.fullDataGrid.innerHTML = "";
+  els.fullDataPreview.textContent = "{}";
+  els.downloadFullData.disabled = true;
+
+  const params = new URLSearchParams({ include_raw: "true" });
+  if (state.selected.participant1) params.set("participant1", state.selected.participant1);
+  if (state.selected.participant2) params.set("participant2", state.selected.participant2);
+
+  try {
+    const data = await getJson(`/api/scores/${state.selected.fixtureId}/full?${params.toString()}`);
+    renderFullData(data);
+  } catch (error) {
+    state.fullData = null;
+    els.fullDataStatus.textContent = error.message;
+  }
+}
+
+function renderFullData(data) {
+  state.fullData = data;
+  if (!data) {
+    els.fullDataStatus.textContent = "Aucun paquet chargé.";
+    els.fullDataGrid.innerHTML = "";
+    els.fullDataPreview.textContent = "{}";
+    els.downloadFullData.disabled = true;
+    return;
+  }
+
+  const inventory = data.inventory || {};
+  const timeline = data.timeline || {};
+  const sourceCounts = data.sourceCounts || {};
+  const items = [
+    ["Source", `${data.source || "-"} (${formatSourceCounts(sourceCounts)})`],
+    ["Records", `${data.recordCount || 0} bruts / ${timeline.count || 0} normalisés`],
+    ["Actions", formatTopEntries(inventory.actionCounts, 8)],
+    ["Champs top", formatTopEntries(inventory.topFieldCounts, 8)],
+    ["Champs Data", formatTopEntries(inventory.dataFieldCounts, 8)],
+    ["Possession", formatTopEntries(inventory.possessionTypeCounts, 6)],
+    ["Score", formatTopEntries(inventory.scoreFieldPaths, 6)],
+    ["Stats", formatTopEntries(inventory.statsFieldPaths, 6)],
+  ].filter(([, value]) => value);
+
+  els.fullDataStatus.textContent = `${data.recordCount || 0} records conservés pour la suite`;
+  els.fullDataGrid.replaceChildren(
+    ...items.map(([label, value]) => {
+      const item = document.createElement("div");
+      item.className = "info-item";
+      item.innerHTML = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`;
+      return item;
+    }),
+  );
+  els.fullDataPreview.textContent = JSON.stringify(
+    {
+      source: data.source,
+      sourceCounts: data.sourceCounts,
+      latestState: data.latestState,
+      inventory: data.inventory,
+    },
+    null,
+    2,
+  );
+  els.downloadFullData.disabled = false;
+}
+
+function downloadFullData() {
+  if (!state.fullData) return;
+  const fixtureId = state.selected?.fixtureId || state.fullData.fixture?.fixtureId || "fixture";
+  const blob = new Blob([JSON.stringify(state.fullData, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `txline-${fixtureId}-full.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function renderLineupTeam(team) {
+  const section = document.createElement("section");
+  section.className = "lineup-team";
+  const starters = team.starters || [];
+  const substitutes = team.substitutes || [];
+  section.innerHTML = `
+    <h4>${escapeHtml(team.teamName || "Equipe")}</h4>
+    <p>${starters.length} titulaire(s), ${substitutes.length} remplacant(s)</p>
+    <div class="lineup-list">
+      ${starters.slice(0, 11).map(formatPlayerChip).join("")}
+    </div>
+    <details>
+      <summary>Remplacants</summary>
+      <div class="lineup-list">${substitutes.map(formatPlayerChip).join("")}</div>
+    </details>
+  `;
+  return section;
+}
+
+function formatPlayerChip(player) {
+  const number = player.rosterNumber ? `#${escapeHtml(player.rosterNumber)} ` : "";
+  const name = escapeHtml(player.name || `Player ${player.normativeId || ""}`);
+  return `<span class="player-chip">${number}${name}</span>`;
+}
+
+function formatJerseys(jerseys = {}) {
+  const entries = Object.entries(jerseys);
+  if (!entries.length) return null;
+  return entries.map(([team, color]) => `${team}: ${color}`).join(" / ");
+}
+
+function formatStats(stats = {}) {
+  const teams = [stats.participant1, stats.participant2].filter(Boolean);
+  if (!teams.length) return null;
+  return teams
+    .map((team) => {
+      const bits = [
+        team.goals != null ? `${team.goals} buts` : null,
+        team.corners != null ? `${team.corners} corners` : null,
+        team.yellowCards != null ? `${team.yellowCards} jaunes` : null,
+        team.redCards != null ? `${team.redCards} rouges` : null,
+      ].filter(Boolean);
+      return bits.length ? `${team.label || "Equipe"}: ${bits.join(", ")}` : null;
+    })
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function formatAdditionalTime(items = []) {
+  if (!items.length) return null;
+  return items.map((item) => `${item.period || "periode"} +${item.minutes}'`).join(" / ");
+}
+
+function formatSourceCounts(sourceCounts = {}) {
+  return Object.entries(sourceCounts)
+    .map(([source, count]) => `${source}:${count}`)
+    .join(" / ");
+}
+
+function formatTopEntries(counts = {}, limit = 6) {
+  const entries = Object.entries(counts).slice(0, limit);
+  if (!entries.length) return null;
+  return entries.map(([name, count]) => `${name} ${count}`).join(" / ");
 }
 
 async function loadInterval() {
@@ -325,6 +539,13 @@ function renderEvent(event, options = {}) {
   ]
     .filter(Boolean)
     .join(" - ");
+  const details = event.details || [];
+  if (details.length) {
+    const detailNode = document.createElement("div");
+    detailNode.className = "event-details";
+    detailNode.textContent = details.join(" - ");
+    node.append(detailNode);
+  }
   return node;
 }
 
@@ -474,6 +695,7 @@ function labelFor(flag) {
       red_card: "Rouge",
       yellow_card: "Jaune",
       possession: "Possession",
+      discarded: "Annule",
       var: "VAR",
       error: "Erreur",
       update: "Update",

@@ -16,6 +16,8 @@ from .txline import (
     TxLineConfigError,
     TxLineSettings,
     annotate_possession_changes,
+    build_full_match_data,
+    build_match_details,
     build_timeline,
     epoch_day_from_date,
     normalize_fixture,
@@ -132,6 +134,9 @@ async def score_timeline(
         if not records:
             records = await client.score_updates(fixture_id)
             resolved_source = "updates"
+        if not records:
+            records = await client.score_snapshot(fixture_id)
+            resolved_source = "snapshot"
 
     fixture = {
         "fixtureId": fixture_id,
@@ -149,6 +154,56 @@ async def score_timeline(
     timeline["resolvedSource"] = resolved_source
     timeline["includePossession"] = include_possession
     return timeline
+
+
+@app.get("/api/scores/{fixture_id}/details")
+async def score_details(
+    fixture_id: int,
+    participant1: str | None = Query(default=None),
+    participant2: str | None = Query(default=None),
+) -> dict[str, Any]:
+    client = TxLineClient()
+    records = await client.score_historical(fixture_id)
+    resolved_source = "historical"
+    if not records:
+        records = await client.score_updates(fixture_id)
+        resolved_source = "updates"
+    if not records:
+        records = await client.score_snapshot(fixture_id)
+        resolved_source = "snapshot"
+
+    fixture = {
+        "fixtureId": fixture_id,
+        "participant1": participant1,
+        "participant2": participant2,
+    }
+    details = build_match_details(records, fixture=fixture)
+    details["source"] = resolved_source
+    return details
+
+
+@app.get("/api/scores/{fixture_id}/full")
+async def score_full(
+    fixture_id: int,
+    include_raw: bool = Query(default=True),
+    include_source_records: bool = Query(default=False),
+    participant1: str | None = Query(default=None),
+    participant2: str | None = Query(default=None),
+) -> dict[str, Any]:
+    client = TxLineClient()
+    source_records = await _fetch_score_sources(client, fixture_id)
+    chosen_source, records = _choose_best_source(source_records)
+    fixture = {
+        "fixtureId": fixture_id,
+        "participant1": participant1,
+        "participant2": participant2,
+    }
+    data = build_full_match_data(records, fixture=fixture, include_raw=include_raw)
+    data["source"] = chosen_source
+    data["sourceCounts"] = {name: len(items) for name, items in source_records.items()}
+    if include_source_records:
+        data["sourceRecords"] = source_records
+    return data
 
 
 @app.get("/api/scores/interval")
@@ -226,6 +281,27 @@ async def live_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _fetch_score_sources(client: TxLineClient, fixture_id: int) -> dict[str, list[dict[str, Any]]]:
+    historical, updates, snapshot = await asyncio.gather(
+        client.score_historical(fixture_id),
+        client.score_updates(fixture_id),
+        client.score_snapshot(fixture_id),
+    )
+    return {
+        "historical": historical,
+        "updates": updates,
+        "snapshot": snapshot,
+    }
+
+
+def _choose_best_source(source_records: dict[str, list[dict[str, Any]]]) -> tuple[str, list[dict[str, Any]]]:
+    for source in ("historical", "updates", "snapshot"):
+        records = source_records.get(source) or []
+        if records:
+            return source, records
+    return "historical", []
 
 
 def _sse(event: str, data: Any, event_id: str | None = None) -> str:

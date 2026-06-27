@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TXLine Match Monitor</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=full-data-1" />
   </head>
   <body>
     <header class="topbar">
@@ -74,6 +74,33 @@
           </label>
           <button type="submit">Ouvrir</button>
         </form>
+
+        <div id="matchDetails" class="match-details">
+          <div class="match-details-header">
+            <h3>Infos match</h3>
+            <p id="matchDetailsStatus">Selectionne un match.</p>
+          </div>
+          <div id="matchInfoGrid" class="info-grid"></div>
+          <div id="lineupsGrid" class="lineups-grid"></div>
+        </div>
+
+        <div id="fullData" class="full-data">
+          <div class="full-data-header">
+            <div>
+              <h3>Données max</h3>
+              <p id="fullDataStatus">Aucun paquet chargé.</p>
+            </div>
+            <div class="button-row">
+              <button id="loadFullData" type="button">Charger</button>
+              <button id="downloadFullData" type="button" disabled>Exporter JSON</button>
+            </div>
+          </div>
+          <div id="fullDataGrid" class="info-grid"></div>
+          <details class="raw-preview">
+            <summary>Inventaire champs</summary>
+            <pre id="fullDataPreview">{}</pre>
+          </details>
+        </div>
 
         <div class="tabs" role="tablist">
           <button class="tab active" type="button" data-source="historical">Historique</button>
@@ -182,6 +209,6 @@
       </li>
     </template>
 
-    <script src="/static/app.js" type="module"></script>
+    <script src="/static/app.js?v=full-data-1" type="module"></script>
   </body>
 </html>

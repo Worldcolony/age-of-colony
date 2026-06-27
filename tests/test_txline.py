@@ -1,6 +1,13 @@
 import unittest
 
-from app.txline import build_timeline, normalize_score_record
+from app.txline import (
+    _decode_sse_payloads,
+    build_full_match_data,
+    build_match_details,
+    build_record_inventory,
+    build_timeline,
+    normalize_score_record,
+)
 
 
 class TxLineNormalizationTest(unittest.TestCase):
@@ -74,6 +81,138 @@ class TxLineNormalizationTest(unittest.TestCase):
         self.assertEqual(event["previousPossessionLabel"], "France")
         self.assertEqual(event["possessionLabel"], "Spain")
         self.assertIn("possession", event["highlights"])
+
+    def test_decodes_sse_batch_payloads(self):
+        text = 'data: {"FixtureId":42,"Action":"corner"}\n\ndata: {"FixtureId":42,"Action":"penalty"}\n\n'
+
+        events = _decode_sse_payloads(text)
+
+        self.assertEqual(events, [{"FixtureId": 42, "Action": "corner"}, {"FixtureId": 42, "Action": "penalty"}])
+
+    def test_top_level_participant_data_and_discarded_actions_are_descriptive(self):
+        records = [
+            {"FixtureId": 42, "Seq": 1, "Id": 10, "Action": "penalty", "Participant": 2, "Confirmed": True},
+            {"FixtureId": 42, "Seq": 2, "Id": 10, "Action": "action_discarded"},
+            {
+                "FixtureId": 42,
+                "Seq": 3,
+                "Id": 11,
+                "Action": "free_kick",
+                "Participant": 1,
+                "Possession": 1,
+                "Data": {"FreeKickType": "Safe"},
+                "Confirmed": True,
+            },
+        ]
+
+        timeline = build_timeline(
+            records,
+            fixture={"fixtureId": 42, "participant1": "France", "participant2": "Belgium"},
+            important_only=True,
+        )
+
+        self.assertEqual(timeline["events"][0]["participantLabel"], "Belgium")
+        self.assertIn("Belgium", timeline["events"][0]["description"])
+        self.assertEqual(timeline["events"][1]["discardedAction"], "penalty")
+        self.assertIn("Action annulee", timeline["events"][1]["description"])
+        self.assertIn("free_kick", timeline["events"][2]["highlights"])
+        self.assertIn("Coup franc: Safe", timeline["events"][2]["details"])
+
+    def test_lineups_enrich_player_ids_and_match_details(self):
+        records = [
+            {
+                "FixtureId": 42,
+                "Action": "lineups",
+                "Lineups": [
+                    {
+                        "normativeId": 1,
+                        "preferredName": "France",
+                        "lineups": [
+                            {
+                                "fixturePlayerId": 10,
+                                "rosterNumber": "7",
+                                "starter": True,
+                                "positionId": 36,
+                                "player": {"normativeId": 100, "preferredName": "Player, One"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "FixtureId": 42,
+                "Action": "lineups",
+                "Lineups": [
+                    {
+                        "normativeId": 1,
+                        "preferredName": "France",
+                        "lineups": [
+                            {
+                                "fixturePlayerId": 10,
+                                "rosterNumber": "7",
+                                "starter": True,
+                                "positionId": 36,
+                                "player": {"normativeId": 100, "preferredName": "Player, One"},
+                            }
+                        ],
+                    }
+                ],
+            },
+            {"FixtureId": 42, "Seq": 2, "Action": "goal", "Participant": 1, "Data": {"PlayerId": 100}},
+            {"FixtureId": 42, "Seq": 3, "Action": "weather", "Data": {"Conditions": ["Cloudy", "Night"]}},
+            {"FixtureId": 42, "Seq": 4, "Action": "additional_time", "Clock": {"seconds": 2705}, "Data": {"Minutes": 6}},
+            {"FixtureId": 42, "Seq": 5, "Action": "additional_time", "Clock": {"seconds": 5404}, "Data": {"Minutes": 4}},
+        ]
+
+        fixture = {"fixtureId": 42, "participant1": "France", "participant2": "Belgium"}
+        timeline = build_timeline(records, fixture=fixture, important_only=True)
+        details = build_match_details(records, fixture=fixture)
+
+        self.assertEqual(timeline["playersIndexed"], 1)
+        self.assertEqual(timeline["events"][0]["player"]["name"], "Player, One")
+        self.assertIn("#7 Player, One", timeline["events"][0]["description"])
+        self.assertEqual(len(details["lineups"][0]["starters"]), 1)
+        self.assertEqual(details["lineups"][0]["starters"][0]["name"], "Player, One")
+        self.assertEqual(details["environment"]["weatherConditions"], ["Cloudy", "Night"])
+        self.assertEqual(details["additionalTime"], [{"minute": 46, "minutes": 6, "period": "H1"}, {"minute": 91, "minutes": 4, "period": "H2"}])
+
+    def test_full_match_data_keeps_raw_records_and_field_inventory(self):
+        records = [
+            {
+                "FixtureId": 42,
+                "Seq": 1,
+                "Action": "attack_possession",
+                "GameState": "PreMatch",
+                "StatusId": 1,
+                "CoverageType": "Full",
+                "PossessionType": "Attack",
+                "Stats": {"Participant1": {"Shots": 3}},
+                "Parti1State": {"Pressure": "High"},
+                "PossibleEvent": {"Goal": True},
+                "Score": {"Participant1": {"H1": {"Goals": 1}, "Total": {"Goals": 1}}},
+                "Data": {"Outcome": "Safe"},
+            },
+            {
+                "FixtureId": 42,
+                "Seq": 2,
+                "Action": "shot",
+                "Data": {"PlayerId": 100, "Outcome": "Blocked"},
+            },
+        ]
+
+        inventory = build_record_inventory(records)
+        full = build_full_match_data(records, fixture={"fixtureId": 42, "participant1": "France"}, include_raw=True)
+
+        self.assertEqual(inventory["actionCounts"]["attack_possession"], 1)
+        self.assertEqual(inventory["dataFieldCounts"]["Outcome"], 2)
+        self.assertIn("Participant1.H1.Goals", inventory["scoreFieldPaths"])
+        self.assertIn("Participant1.Shots", inventory["statsFieldPaths"])
+        self.assertIn("Parti1State.Pressure", inventory["participantStateFieldPaths"])
+        self.assertIn("Goal", inventory["possibleEventFieldPaths"])
+        self.assertEqual(full["recordCount"], 2)
+        self.assertEqual(len(full["rawRecords"]), 2)
+        self.assertEqual(full["timeline"]["count"], 2)
+        self.assertEqual(full["latestState"]["fixtureId"], 42)
 
 
 if __name__ == "__main__":
