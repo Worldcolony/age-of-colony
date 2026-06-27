@@ -1,9 +1,45 @@
+# --- Secrets / env ---
 .env
 .env.*
 !.env.example
-.venv/
+*.pem
+*.key
+# Solana wallet keypairs
+*-keypair.json
+id.json
+wallet.json
+
+# --- Node ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp.*
+dist/
+build/
+.next/
+out/
+coverage/
+
+# --- Python ---
 __pycache__/
 *.py[cod]
+.venv/
+venv/
+env/
 .pytest_cache/
+.mypy_cache/
 .ruff_cache/
+
+# --- Rust / Anchor (Solana programs) ---
+target/
+.anchor/
+test-ledger/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
 .DS_Store
+*.swp
+*.log
