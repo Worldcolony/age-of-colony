@@ -19,6 +19,8 @@ const els = {
   fixtureCount: document.querySelector("#fixtureCount"),
   refreshFixtures: document.querySelector("#refreshFixtures"),
   fixtureFilters: document.querySelector("#fixtureFilters"),
+  upcomingOnly: document.querySelector("#upcomingOnly"),
+  upcomingDays: document.querySelector("#upcomingDays"),
   fixtureDate: document.querySelector("#fixtureDate"),
   competitionId: document.querySelector("#competitionId"),
   fixtureSearch: document.querySelector("#fixtureSearch"),
@@ -76,6 +78,8 @@ function bindEvents() {
     loadFixtures();
   });
   els.fixtureSearch.addEventListener("input", debounce(loadFixtures, 300));
+  els.upcomingOnly.addEventListener("change", loadFixtures);
+  els.upcomingDays.addEventListener("change", loadFixtures);
   els.competitionId.addEventListener("change", loadFixtures);
   els.fixtureDate.addEventListener("change", loadFixtures);
   els.manualFixture.addEventListener("submit", (event) => {
@@ -133,11 +137,18 @@ async function loadFixtures() {
   if (els.fixtureDate.value) params.set("date", els.fixtureDate.value);
   if (els.competitionId.value) params.set("competition_id", els.competitionId.value);
   if (els.fixtureSearch.value.trim()) params.set("search", els.fixtureSearch.value.trim());
+  const endpoint = els.upcomingOnly.checked ? "/api/fixtures/upcoming" : "/api/fixtures";
+  if (els.upcomingOnly.checked) {
+    params.set("days", els.upcomingDays.value || "14");
+    params.set("limit", "100");
+  }
 
   try {
-    const data = await getJson(`/api/fixtures?${params.toString()}`);
+    const data = await getJson(`${endpoint}?${params.toString()}`);
     state.fixtures = data.fixtures || [];
-    els.fixtureCount.textContent = `${data.count || 0} match(s)`;
+    els.fixtureCount.textContent = els.upcomingOnly.checked
+      ? `${data.count || 0} match(s) à venir sur ${data.days || els.upcomingDays.value || 14} jour(s)`
+      : `${data.count || 0} match(s)`;
     renderFixtures();
   } catch (error) {
     state.fixtures = [];

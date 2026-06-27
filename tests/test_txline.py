@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from app.txline import (
     _decode_sse_payloads,
@@ -6,6 +7,7 @@ from app.txline import (
     build_match_details,
     build_record_inventory,
     build_timeline,
+    filter_upcoming_fixtures,
     normalize_score_record,
 )
 
@@ -213,6 +215,19 @@ class TxLineNormalizationTest(unittest.TestCase):
         self.assertEqual(len(full["rawRecords"]), 2)
         self.assertEqual(full["timeline"]["count"], 2)
         self.assertEqual(full["latestState"]["fixtureId"], 42)
+
+    def test_filter_upcoming_fixtures_removes_past_and_duplicates(self):
+        now = datetime(2026, 6, 27, 12, 0, tzinfo=timezone.utc)
+        fixtures = [
+            {"fixtureId": 1, "startTime": int((now - timedelta(hours=1)).timestamp())},
+            {"fixtureId": 2, "startTime": int((now + timedelta(hours=2)).timestamp())},
+            {"fixtureId": 2, "startTime": int((now + timedelta(hours=2)).timestamp())},
+            {"fixtureId": 3, "startTime": int((now + timedelta(days=3)).timestamp() * 1000)},
+        ]
+
+        upcoming = filter_upcoming_fixtures(fixtures, now=now, until=now + timedelta(days=2))
+
+        self.assertEqual([fixture["fixtureId"] for fixture in upcoming], [2])
 
 
 if __name__ == "__main__":

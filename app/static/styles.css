@@ -173,7 +173,7 @@ p {
 .filters,
 .manual {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
   margin-bottom: 1rem;
 }
@@ -455,6 +455,11 @@ tbody tr.selected {
 .checkbox input {
   width: 1rem;
   height: 1rem;
+}
+
+.checkbox-filter {
+  align-self: end;
+  min-height: 2.55rem;
 }
 
 .timeline,

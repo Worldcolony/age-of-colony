@@ -305,6 +305,50 @@ def normalize_fixtures(raw_fixtures: Iterable[dict[str, Any]], search: str | Non
     return sorted(fixtures, key=lambda item: (item.get("startTime") or 0, item.get("fixtureId") or 0))
 
 
+def fixture_start_timestamp(fixture: dict[str, Any]) -> float | None:
+    start_time = fixture.get("startTime")
+    if start_time is None:
+        return None
+    try:
+        timestamp = float(start_time)
+    except (TypeError, ValueError):
+        return None
+    if timestamp > 10_000_000_000:
+        timestamp /= 1000
+    return timestamp
+
+
+def filter_upcoming_fixtures(
+    fixtures: Iterable[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    until: datetime | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    now_ts = (now or datetime.now(timezone.utc)).timestamp()
+    until_ts = until.timestamp() if until else None
+    upcoming: list[dict[str, Any]] = []
+    seen: set[Any] = set()
+
+    for fixture in sorted(fixtures, key=lambda item: (fixture_start_timestamp(item) or float("inf"), item.get("fixtureId") or 0)):
+        fixture_id = fixture.get("fixtureId")
+        key = fixture_id if fixture_id is not None else (fixture.get("participant1"), fixture.get("participant2"), fixture.get("startTime"))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        start_ts = fixture_start_timestamp(fixture)
+        if start_ts is None or start_ts < now_ts:
+            continue
+        if until_ts is not None and start_ts > until_ts:
+            continue
+        upcoming.append(fixture)
+
+    if limit is not None and limit > 0:
+        return upcoming[:limit]
+    return upcoming
+
+
 def normalize_score_record(
     raw: dict[str, Any],
     fixture: dict[str, Any] | None = None,

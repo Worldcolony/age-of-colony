@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -20,6 +20,7 @@ from .txline import (
     build_match_details,
     build_timeline,
     epoch_day_from_date,
+    filter_upcoming_fixtures,
     normalize_fixture,
     normalize_fixtures,
     normalize_score_record,
@@ -88,6 +89,35 @@ async def fixtures(
     raw = await client.fixture_snapshot(start_epoch_day=start_epoch_day, competition_id=competition_id)
     normalized = normalize_fixtures(raw, search=search)
     return {"count": len(normalized), "fixtures": normalized}
+
+
+@app.get("/api/fixtures/upcoming")
+async def upcoming_fixtures(
+    date_: date | None = Query(default=None, alias="date"),
+    days: int = Query(default=14, ge=1, le=90),
+    limit: int = Query(default=100, ge=1, le=500),
+    competition_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+) -> dict[str, Any]:
+    start_date = date_ or datetime.now(timezone.utc).date()
+    start_datetime = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    now = max(datetime.now(timezone.utc), start_datetime)
+    until = start_datetime + timedelta(days=days)
+    client = TxLineClient()
+    raw = await client.fixture_snapshot(
+        start_epoch_day=epoch_day_from_date(start_date),
+        competition_id=competition_id,
+    )
+    normalized = normalize_fixtures(raw, search=search)
+    upcoming = filter_upcoming_fixtures(normalized, now=now, until=until, limit=limit)
+    return {
+        "mode": "upcoming",
+        "fromDate": start_date.isoformat(),
+        "days": days,
+        "limit": limit,
+        "count": len(upcoming),
+        "fixtures": upcoming,
+    }
 
 
 @app.get("/api/scores/{fixture_id}/snapshot")
