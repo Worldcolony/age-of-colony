@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TXLine Match Monitor</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">TXLine World Cup</p>
+        <h1>Match Monitor</h1>
+      </div>
+      <div id="healthBadge" class="badge badge-muted">Connexion...</div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-fixtures">
+        <div class="panel-heading">
+          <div>
+            <h2>Matchs</h2>
+            <p id="fixtureCount">Aucun match charge</p>
+          </div>
+          <button id="refreshFixtures" type="button">Rafraichir</button>
+        </div>
+
+        <form id="fixtureFilters" class="filters">
+          <label>
+            Date UTC
+            <input id="fixtureDate" type="date" />
+          </label>
+          <label>
+            Competition ID
+            <input id="competitionId" type="number" inputmode="numeric" placeholder="Optionnel" />
+          </label>
+          <label>
+            Recherche
+            <input id="fixtureSearch" type="search" placeholder="Equipe, competition..." />
+          </label>
+        </form>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Heure</th>
+                <th>Match</th>
+                <th>Competition</th>
+              </tr>
+            </thead>
+            <tbody id="fixturesBody">
+              <tr>
+                <td colspan="3" class="empty">Charge les fixtures...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel panel-detail">
+        <div class="panel-heading">
+          <div>
+            <h2 id="selectedTitle">Selectionne un match</h2>
+            <p id="selectedMeta">Clique sur une fixture ou entre un Fixture ID.</p>
+          </div>
+          <div class="score" id="scoreBox">-</div>
+        </div>
+
+        <form id="manualFixture" class="manual">
+          <label>
+            Fixture ID
+            <input id="manualFixtureId" type="number" inputmode="numeric" placeholder="ex: 123456" />
+          </label>
+          <button type="submit">Ouvrir</button>
+        </form>
+
+        <div class="tabs" role="tablist">
+          <button class="tab active" type="button" data-source="historical">Historique</button>
+          <button class="tab" type="button" data-source="updates">Actions completes</button>
+          <button class="tab" type="button" data-source="snapshot">Snapshot</button>
+        </div>
+
+        <div class="toolbar">
+          <label class="checkbox">
+            <input id="importantOnly" type="checkbox" checked />
+            Moments forts seulement
+          </label>
+          <label class="checkbox">
+            <input id="includePossession" type="checkbox" checked />
+            Changements possession
+          </label>
+          <button id="loadTimeline" type="button">Charger</button>
+        </div>
+
+        <div class="replay">
+          <div class="replay-controls">
+            <button id="replayPlay" type="button" disabled>Play</button>
+            <button id="replayReset" type="button" disabled>Reset</button>
+            <label>
+              Vitesse
+              <select id="replaySpeed">
+                <option value="1400">0.5x</option>
+                <option value="900" selected>1x</option>
+                <option value="450">2x</option>
+                <option value="220">4x</option>
+              </select>
+            </label>
+          </div>
+          <input id="replayProgress" class="replay-progress" type="range" min="0" max="0" value="0" disabled />
+          <p id="replayStatus">Charge une timeline pour lancer le replay.</p>
+        </div>
+
+        <ol id="timeline" class="timeline">
+          <li class="empty">Aucune timeline chargee.</li>
+        </ol>
+      </section>
+
+      <section class="panel panel-live">
+        <div class="panel-heading">
+          <div>
+            <h2>Direct</h2>
+            <p id="liveStatus">Flux arrete</p>
+          </div>
+          <div class="button-row">
+            <button id="startLive" type="button">Connecter</button>
+            <button id="stopLive" type="button" disabled>Stop</button>
+          </div>
+        </div>
+
+        <label class="checkbox">
+          <input id="liveImportantOnly" type="checkbox" />
+          Direct: moments forts seulement
+        </label>
+        <label class="checkbox">
+          <input id="liveIncludePossession" type="checkbox" checked />
+          Direct: changements possession
+        </label>
+
+        <ul id="liveFeed" class="live-feed">
+          <li class="empty">Le flux live apparaitra ici.</li>
+        </ul>
+      </section>
+
+      <section class="panel panel-interval">
+        <div class="panel-heading">
+          <div>
+            <h2>Intervalle historique</h2>
+            <p>Lecture d'un bloc TXLine de 5 minutes.</p>
+          </div>
+        </div>
+
+        <form id="intervalForm" class="filters filters-interval">
+          <label>
+            Date UTC
+            <input id="intervalDate" type="date" required />
+          </label>
+          <label>
+            Heure
+            <input id="intervalHour" type="number" min="0" max="23" value="0" required />
+          </label>
+          <label>
+            Intervalle
+            <input id="intervalIndex" type="number" min="0" max="11" value="0" required />
+          </label>
+          <button type="submit">Charger</button>
+        </form>
+
+        <ol id="intervalTimeline" class="timeline compact">
+          <li class="empty">Aucun intervalle charge.</li>
+        </ol>
+      </section>
+    </main>
+
+    <template id="eventTemplate">
+      <li>
+        <div class="event-main">
+          <span class="event-label"></span>
+          <span class="event-desc"></span>
+        </div>
+        <div class="event-meta"></div>
+      </li>
+    </template>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
