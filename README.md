@@ -122,7 +122,9 @@ Starting configuration:
 
 In the interface:
 
-- **Run previous TX** finds a real completed TXLine match with score/historical/updates/snapshot data and runs Age of Colony on it. If `TXLINE_COMPETITION_ID` targets the World Cup, the button stays inside that scope.
-- **Run local demo** runs a fictional but normalized match, useful for testing the game loop without TXLine credentials, but still with DeepSeek/OpenRouter required.
-- **Run match** starts the active room simulation in the background; the journal fills while the replay runs.
-- **Rerun sim** creates a new room with the same colonies and restarts the replay.
+- the match list opens on recent completed fixtures from the last 3 days by default, with filters for upcoming matches or a specific UTC date
+- **Create room** creates a private room from the selected fixture
+- **Run match** starts the active room simulation in replay mode; the journal fills while ants vote and settlements resolve
+- **Rerun sim** creates a new room with the same colonies and restarts the replay
+
+The raw TXLine explorer endpoints remain available for debugging, but the main page now focuses on the playable colony loop.

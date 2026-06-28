@@ -1,25 +1,14 @@
 const state = {
   fixtures: [],
   selected: null,
-  source: "historical",
-  liveSource: null,
-  timelineEvents: [],
-  fullData: null,
   game: {
     id: null,
-    source: null,
+    stream: null,
     events: [],
     colonyCount: 0,
     status: null,
     activeOpportunities: [],
     agentUsage: null,
-  },
-  replay: {
-    events: [],
-    index: 0,
-    timer: null,
-    playing: false,
-    speedMs: 900,
   },
 };
 
@@ -28,8 +17,8 @@ const els = {
   fixtureCount: document.querySelector("#fixtureCount"),
   refreshFixtures: document.querySelector("#refreshFixtures"),
   fixtureFilters: document.querySelector("#fixtureFilters"),
-  upcomingOnly: document.querySelector("#upcomingOnly"),
-  upcomingDays: document.querySelector("#upcomingDays"),
+  fixtureMode: document.querySelector("#fixtureMode"),
+  fixtureDays: document.querySelector("#fixtureDays"),
   fixtureDate: document.querySelector("#fixtureDate"),
   competitionId: document.querySelector("#competitionId"),
   fixtureSearch: document.querySelector("#fixtureSearch"),
@@ -39,40 +28,9 @@ const els = {
   scoreBox: document.querySelector("#scoreBox"),
   manualFixture: document.querySelector("#manualFixture"),
   manualFixtureId: document.querySelector("#manualFixtureId"),
-  matchDetailsStatus: document.querySelector("#matchDetailsStatus"),
-  matchInfoGrid: document.querySelector("#matchInfoGrid"),
-  lineupsGrid: document.querySelector("#lineupsGrid"),
-  fullDataStatus: document.querySelector("#fullDataStatus"),
-  fullDataGrid: document.querySelector("#fullDataGrid"),
-  fullDataPreview: document.querySelector("#fullDataPreview"),
-  loadFullData: document.querySelector("#loadFullData"),
-  downloadFullData: document.querySelector("#downloadFullData"),
-  importantOnly: document.querySelector("#importantOnly"),
-  includePossession: document.querySelector("#includePossession"),
-  loadTimeline: document.querySelector("#loadTimeline"),
-  replayPlay: document.querySelector("#replayPlay"),
-  replayReset: document.querySelector("#replayReset"),
-  replaySpeed: document.querySelector("#replaySpeed"),
-  replayProgress: document.querySelector("#replayProgress"),
-  replayStatus: document.querySelector("#replayStatus"),
-  timeline: document.querySelector("#timeline"),
-  startLive: document.querySelector("#startLive"),
-  stopLive: document.querySelector("#stopLive"),
-  liveImportantOnly: document.querySelector("#liveImportantOnly"),
-  liveIncludePossession: document.querySelector("#liveIncludePossession"),
-  liveStatus: document.querySelector("#liveStatus"),
-  liveFeed: document.querySelector("#liveFeed"),
-  intervalForm: document.querySelector("#intervalForm"),
-  intervalDate: document.querySelector("#intervalDate"),
-  intervalHour: document.querySelector("#intervalHour"),
-  intervalIndex: document.querySelector("#intervalIndex"),
-  intervalTimeline: document.querySelector("#intervalTimeline"),
-  runPreviousTxGame: document.querySelector("#runPreviousTxGame"),
-  runDemoGame: document.querySelector("#runDemoGame"),
   createGame: document.querySelector("#createGame"),
   startGameReplay: document.querySelector("#startGameReplay"),
   rerunGame: document.querySelector("#rerunGame"),
-  startGameLive: document.querySelector("#startGameLive"),
   gameStatus: document.querySelector("#gameStatus"),
   simulationStatus: document.querySelector("#simulationStatus"),
   simulationStats: document.querySelector("#simulationStats"),
@@ -87,15 +45,14 @@ const els = {
   addColony: document.querySelector("#addColony"),
   gameLeaderboard: document.querySelector("#gameLeaderboard"),
   gameFeed: document.querySelector("#gameFeed"),
-  eventTemplate: document.querySelector("#eventTemplate"),
 };
 
 const today = new Date().toISOString().slice(0, 10);
 els.fixtureDate.value = today;
-els.intervalDate.value = today;
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
+  updateFixtureFilterState();
   await checkHealth();
   await loadFixtures();
 });
@@ -106,9 +63,12 @@ function bindEvents() {
     event.preventDefault();
     loadFixtures();
   });
+  els.fixtureMode.addEventListener("change", () => {
+    updateFixtureFilterState();
+    loadFixtures();
+  });
   els.fixtureSearch.addEventListener("input", debounce(loadFixtures, 300));
-  els.upcomingOnly.addEventListener("change", loadFixtures);
-  els.upcomingDays.addEventListener("change", loadFixtures);
+  els.fixtureDays.addEventListener("change", loadFixtures);
   els.competitionId.addEventListener("change", loadFixtures);
   els.fixtureDate.addEventListener("change", loadFixtures);
   els.manualFixture.addEventListener("submit", (event) => {
@@ -116,47 +76,20 @@ function bindEvents() {
     const fixtureId = Number(els.manualFixtureId.value);
     if (!fixtureId) return;
     selectFixture({ fixtureId, participant1: null, participant2: null, competition: "Manual" });
-    loadTimeline();
   });
-  els.loadTimeline.addEventListener("click", loadTimeline);
-  els.loadFullData.addEventListener("click", loadFullData);
-  els.downloadFullData.addEventListener("click", downloadFullData);
-  els.replayPlay.addEventListener("click", toggleReplay);
-  els.replayReset.addEventListener("click", resetReplay);
-  els.replaySpeed.addEventListener("change", () => {
-    state.replay.speedMs = Number(els.replaySpeed.value);
-    if (state.replay.playing) {
-      window.clearTimeout(state.replay.timer);
-      state.replay.timer = window.setTimeout(stepReplay, state.replay.speedMs);
-    }
-  });
-  els.replayProgress.addEventListener("input", () => {
-    seekReplay(Number(els.replayProgress.value));
-  });
-  document.querySelectorAll(".tab").forEach((button) => {
-    button.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
-      button.classList.add("active");
-      state.source = button.dataset.source;
-      loadTimeline();
-    });
-  });
-  els.startLive.addEventListener("click", startLive);
-  els.stopLive.addEventListener("click", stopLive);
-  els.intervalForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    loadInterval();
-  });
-  els.runPreviousTxGame.addEventListener("click", runPreviousTxGame);
-  els.runDemoGame.addEventListener("click", runDemoGame);
   els.createGame.addEventListener("click", createGame);
-  els.startGameReplay.addEventListener("click", () => startGame("replay"));
+  els.startGameReplay.addEventListener("click", startGameReplay);
   els.rerunGame.addEventListener("click", rerunGame);
-  els.startGameLive.addEventListener("click", () => startGame("live"));
   els.colonyForm.addEventListener("submit", (event) => {
     event.preventDefault();
     addColony();
   });
+}
+
+function updateFixtureFilterState() {
+  const mode = els.fixtureMode.value;
+  els.fixtureDate.disabled = mode === "recent";
+  els.fixtureDays.disabled = mode === "date";
 }
 
 async function checkHealth() {
@@ -170,7 +103,7 @@ async function checkHealth() {
     } else {
       els.healthBadge.textContent = "TXLine configured - DeepSeek required";
     }
-  } catch (error) {
+  } catch {
     els.healthBadge.className = "badge badge-error";
     els.healthBadge.textContent = "Backend unavailable";
   }
@@ -178,28 +111,42 @@ async function checkHealth() {
 
 async function loadFixtures() {
   setFixtureRows([{ loading: true }]);
+  const mode = els.fixtureMode.value;
   const params = new URLSearchParams();
-  if (els.fixtureDate.value) params.set("date", els.fixtureDate.value);
   if (els.competitionId.value) params.set("competition_id", els.competitionId.value);
   if (els.fixtureSearch.value.trim()) params.set("search", els.fixtureSearch.value.trim());
-  const endpoint = els.upcomingOnly.checked ? "/api/fixtures/upcoming" : "/api/fixtures";
-  if (els.upcomingOnly.checked) {
-    params.set("days", els.upcomingDays.value || "14");
+
+  let endpoint = "/api/fixtures/recent";
+  if (mode === "recent") {
+    params.set("days", els.fixtureDays.value || "3");
     params.set("limit", "100");
+  } else if (mode === "upcoming") {
+    endpoint = "/api/fixtures/upcoming";
+    params.set("days", els.fixtureDays.value || "14");
+    params.set("limit", "100");
+    if (els.fixtureDate.value) params.set("date", els.fixtureDate.value);
+  } else {
+    endpoint = "/api/fixtures";
+    if (els.fixtureDate.value) params.set("date", els.fixtureDate.value);
   }
 
   try {
     const data = await getJson(`${endpoint}?${params.toString()}`);
     state.fixtures = data.fixtures || [];
-    els.fixtureCount.textContent = els.upcomingOnly.checked
-      ? `${data.count || 0} match(es) upcoming across ${data.days || els.upcomingDays.value || 14} day(s)`
-      : `${data.count || 0} match(es)`;
+    els.fixtureCount.textContent = fixtureCountLabel(mode, data);
     renderFixtures();
   } catch (error) {
     state.fixtures = [];
     els.fixtureCount.textContent = "Error";
     setFixtureRows([{ error: error.message }]);
   }
+}
+
+function fixtureCountLabel(mode, data) {
+  const count = data.count || 0;
+  if (mode === "recent") return `${count} completed match(es)`;
+  if (mode === "upcoming") return `${count} upcoming match(es)`;
+  return `${count} match(es)`;
 }
 
 function renderFixtures() {
@@ -213,7 +160,7 @@ function renderFixtures() {
       const row = document.createElement("tr");
       if (state.selected?.fixtureId === fixture.fixtureId) row.classList.add("selected");
       row.innerHTML = `
-        <td>${formatDate(fixture.startTimeIso)}</td>
+        <td>${formatDate(fixture.startTimeIso || fixture.startTime)}</td>
         <td>
           <div class="match-name">${escapeHtml(fixture.participant1 || "Participant 1")} - ${escapeHtml(
             fixture.participant2 || "Participant 2",
@@ -225,10 +172,7 @@ function renderFixtures() {
           <div class="muted">ID ${escapeHtml(fixture.competitionId || "-")}</div>
         </td>
       `;
-      row.addEventListener("click", () => {
-        selectFixture(fixture);
-        loadTimeline();
-      });
+      row.addEventListener("click", () => selectFixture(fixture));
       return row;
     }),
   );
@@ -250,76 +194,14 @@ function setFixtureRows(rows) {
 }
 
 function selectFixture(fixture) {
-  stopReplay();
   resetGameUi();
   state.selected = fixture;
   els.manualFixtureId.value = fixture.fixtureId || "";
   els.selectedTitle.textContent = `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`;
   els.selectedMeta.textContent = `${fixture.competition || "Unknown competition"} - Fixture ${fixture.fixtureId}`;
-  els.scoreBox.textContent = "-";
-  renderFullData(null);
-  loadMatchDetails();
+  updateScore(fixture.score);
   renderFixtures();
-}
-
-async function runPreviousTxGame() {
-  closeGameStream();
-  state.game.agentUsage = null;
-  els.gameStatus.textContent = "Searching for the latest TXLine match with data...";
-  try {
-    const payload = {
-      days: 30,
-      limit: 60,
-    };
-    if (els.competitionId.value) payload.competitionId = Number(els.competitionId.value);
-    if (els.fixtureSearch.value.trim()) payload.search = els.fixtureSearch.value.trim();
-    const game = await postJson("/api/games/run-previous", payload);
-    state.game.id = game.gameId;
-    state.selected = {
-      fixtureId: game.fixtureId,
-      participant1: game.participant1,
-      participant2: game.participant2,
-      competition: "TXLine previous match",
-    };
-    els.selectedTitle.textContent = `${game.participant1 || "Participant 1"} - ${game.participant2 || "Participant 2"}`;
-    els.selectedMeta.textContent = `TXLine previous match - Fixture ${game.fixtureId}`;
-    updateScore(game.match?.score);
-    els.addColony.disabled = true;
-    els.startGameReplay.disabled = true;
-    els.startGameLive.disabled = true;
-    renderGameState(game);
-    await loadGameReplay();
-    els.gameStatus.textContent = `Run TXLine finished - ${state.game.events.length} game events.`;
-  } catch (error) {
-    els.gameStatus.textContent = `Cannot run TXLine: ${error.message}`;
-  }
-}
-
-async function runDemoGame() {
-  closeGameStream();
-  state.game.agentUsage = null;
-  els.gameStatus.textContent = "Local demo run in progress...";
-  try {
-    const game = await postJson("/api/demo/run", {});
-    state.game.id = game.gameId;
-    state.selected = {
-      fixtureId: game.fixtureId,
-      participant1: game.participant1,
-      participant2: game.participant2,
-      competition: "Demo Previous Match",
-    };
-    els.selectedTitle.textContent = `${game.participant1 || "Participant 1"} - ${game.participant2 || "Participant 2"}`;
-    els.selectedMeta.textContent = `Demo Previous Match - Fixture ${game.fixtureId}`;
-    updateScore(game.match?.score);
-    els.addColony.disabled = true;
-    els.startGameReplay.disabled = true;
-    els.startGameLive.disabled = true;
-    renderGameState(game);
-    await loadGameReplay();
-    els.gameStatus.textContent = `Local demo run finished - ${state.game.events.length} game events.`;
-  } catch (error) {
-    els.gameStatus.textContent = error.message;
-  }
+  updateGameActions();
 }
 
 async function createGame() {
@@ -343,7 +225,6 @@ async function createGame() {
     state.game.activeOpportunities = [];
     state.game.agentUsage = null;
     els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
-    els.gameStatus.textContent = `Room ${game.gameId} ready. Add colonies.`;
     renderGameState(game);
     openGameStream();
   } catch (error) {
@@ -371,26 +252,22 @@ async function addColony() {
   }
 }
 
-async function startGame(mode) {
+async function startGameReplay() {
   if (!state.game.id) return;
   if (state.game.colonyCount < 1) {
     els.gameStatus.textContent = "Add at least one colony before starting the match.";
     updateGameActions();
     return;
   }
-  els.gameStatus.textContent = mode === "live" ? "Connecting live..." : "Replay game in progress...";
+  els.gameStatus.textContent = "Replay game in progress...";
   try {
     const game = await postJson(`/api/games/${state.game.id}/start`, {
-      mode,
-      source: state.source,
+      mode: "replay",
+      source: "historical",
     });
     renderGameState(game);
-    if (mode === "replay") {
-      await loadGameReplay();
-      els.gameStatus.textContent = "Match run started. Decisions will appear in the journal.";
-    } else {
-      els.gameStatus.textContent = "Live game started.";
-    }
+    await loadGameReplay();
+    els.gameStatus.textContent = "Match run started. Decisions will appear in the journal.";
   } catch (error) {
     els.gameStatus.textContent = error.message;
   }
@@ -403,7 +280,7 @@ async function rerunGame() {
   try {
     const game = await postJson(`/api/games/${state.game.id}/rerun`, {
       mode: "replay",
-      source: state.source,
+      source: "historical",
     });
     state.game.id = game.gameId;
     state.game.events = [];
@@ -421,24 +298,24 @@ async function rerunGame() {
 function openGameStream() {
   closeGameStream();
   if (!state.game.id) return;
-  state.game.source = new EventSource(`/api/games/${state.game.id}/events`);
-  state.game.source.addEventListener("game_event", (event) => {
-    const item = JSON.parse(event.data);
-    appendGameEvent(item);
+  state.game.stream = new EventSource(`/api/games/${state.game.id}/events`);
+  state.game.stream.addEventListener("game_event", (event) => {
+    appendGameEvent(JSON.parse(event.data));
   });
-  state.game.source.addEventListener("game_state", (event) => {
-    const game = JSON.parse(event.data);
-    renderGameState(game);
+  state.game.stream.addEventListener("game_state", (event) => {
+    renderGameState(JSON.parse(event.data));
   });
-  state.game.source.onerror = () => {
-    els.gameStatus.textContent = "Game stream reconnecting...";
+  state.game.stream.onerror = () => {
+    if (["running_replay", "running_live"].includes(state.game.status)) {
+      els.gameStatus.textContent = "Game stream reconnecting...";
+    }
   };
 }
 
 function closeGameStream() {
-  if (state.game.source) {
-    state.game.source.close();
-    state.game.source = null;
+  if (state.game.stream) {
+    state.game.stream.close();
+    state.game.stream = null;
   }
 }
 
@@ -459,11 +336,11 @@ function resetGameUi() {
   state.game.status = null;
   state.game.activeOpportunities = [];
   state.game.agentUsage = null;
-  updateGameActions();
   els.gameStatus.textContent = "Create a room from the selected match.";
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
   renderSimulationSummary(null);
+  updateGameActions();
 }
 
 function renderGameState(game) {
@@ -474,19 +351,22 @@ function renderGameState(game) {
   state.game.status = game.status || null;
   state.game.activeOpportunities = game.activeOpportunities || [];
   state.game.agentUsage = game.agentUsage || state.game.agentUsage;
+  updateScore(game.match?.score);
   updateGameActions();
   renderSimulationSummary(game);
   els.gameStatus.textContent = [
     game.gameId ? `Room ${game.gameId}` : null,
-    game.status ? `statut ${game.status}` : null,
+    game.status ? `status ${game.status}` : null,
     game.eventIndex != null ? `${game.eventIndex} events` : null,
   ]
     .filter(Boolean)
     .join(" - ");
+
   if (!colonies.length) {
     els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
     return;
   }
+
   els.gameLeaderboard.replaceChildren(
     ...colonies.map((colony, index) => {
       const card = document.createElement("article");
@@ -520,14 +400,14 @@ function renderGameState(game) {
 
 function updateGameActions() {
   const hasRoom = Boolean(state.game.id);
-  const locked = ["running_replay", "running_live", "finished"].includes(state.game.status);
-  const running = ["running_replay", "running_live"].includes(state.game.status);
+  const status = state.game.status || "created";
+  const running = ["running_replay", "running_live"].includes(status);
+  const locked = running || status === "finished";
   const hasColony = state.game.colonyCount > 0;
-  els.createGame.disabled = hasRoom && !locked;
+  els.createGame.disabled = hasRoom && !["finished", "error", "stopped"].includes(status);
   els.addColony.disabled = !hasRoom || locked;
   els.startGameReplay.disabled = !hasRoom || locked || !hasColony;
-  els.rerunGame.disabled = !hasRoom || running || !hasColony;
-  els.startGameLive.disabled = !hasRoom || locked || !hasColony;
+  els.rerunGame.disabled = !hasRoom || !hasColony || !["finished", "error", "stopped"].includes(status);
 }
 
 function appendGameEvent(event) {
@@ -541,13 +421,14 @@ function appendGameEvent(event) {
     state.game.status = "error";
     updateGameActions();
   }
+
   if (els.gameFeed.querySelector(".empty")) els.gameFeed.innerHTML = "";
   const item = document.createElement("li");
   item.className = `game-log-${event.kind || "event"}`;
   item.innerHTML = `
     <div class="event-main">
       <span class="event-label ${escapeHtml(event.kind || "update")}">${escapeHtml(gameKindLabel(event.kind))}</span>
-      <span class="event-desc">${escapeHtml(event.message || "Update game")}</span>
+      <span class="event-desc">${escapeHtml(event.message || "Game update")}</span>
     </div>
   `;
   els.gameFeed.append(item);
@@ -602,7 +483,6 @@ function renderSimulationSummary(game = null) {
 }
 
 function renderAgentCost(status, usage) {
-  if (!els.agentCost) return;
   const apiCalls = Number(usage?.apiCalls || 0);
   const budgetedCalls = Number(usage?.budgetedCalls || 0);
   if (status !== "finished" || !usage || (apiCalls <= 0 && budgetedCalls <= 0)) {
@@ -661,456 +541,6 @@ function formatScoreBreakdown(breakdown) {
   ].join(" · ");
 }
 
-async function loadMatchDetails() {
-  if (!state.selected?.fixtureId) {
-    renderMatchDetails(null);
-    return;
-  }
-
-  els.matchDetailsStatus.textContent = "Loading info...";
-  els.matchInfoGrid.innerHTML = "";
-  els.lineupsGrid.innerHTML = "";
-  const params = new URLSearchParams();
-  if (state.selected.participant1) params.set("participant1", state.selected.participant1);
-  if (state.selected.participant2) params.set("participant2", state.selected.participant2);
-
-  try {
-    const data = await getJson(`/api/scores/${state.selected.fixtureId}/details?${params.toString()}`);
-    renderMatchDetails(data);
-  } catch (error) {
-    els.matchDetailsStatus.textContent = error.message;
-  }
-}
-
-async function loadTimeline() {
-  stopReplay();
-  if (!state.selected?.fixtureId) {
-    prepareReplay([]);
-    renderEvents(els.timeline, [], "Select a match first.");
-    return;
-  }
-
-  prepareReplay([]);
-  els.timeline.innerHTML = `<li class="empty">Loading timeline...</li>`;
-  const params = new URLSearchParams({
-    source: state.source,
-    important_only: String(els.importantOnly.checked),
-    include_possession: String(els.includePossession.checked),
-    limit: els.importantOnly.checked ? "500" : "2000",
-  });
-  if (state.selected.participant1) params.set("participant1", state.selected.participant1);
-  if (state.selected.participant2) params.set("participant2", state.selected.participant2);
-
-  try {
-    const data = await getJson(`/api/scores/${state.selected.fixtureId}/timeline?${params.toString()}`);
-    state.timelineEvents = data.events || [];
-    updateScore(data.score);
-    renderEvents(els.timeline, state.timelineEvents, "No highlight found for this source.");
-    prepareReplay(state.timelineEvents, data);
-    return state.timelineEvents;
-  } catch (error) {
-    state.timelineEvents = [];
-    prepareReplay([]);
-    renderEvents(els.timeline, [], error.message);
-    return [];
-  }
-}
-
-function renderMatchDetails(data) {
-  if (!data) {
-    els.matchDetailsStatus.textContent = "Select a match.";
-    els.matchInfoGrid.innerHTML = "";
-    els.lineupsGrid.innerHTML = "";
-    return;
-  }
-
-  els.matchDetailsStatus.textContent = `${data.recordCount || 0} raw updates - source ${data.source || "-"}`;
-  const env = data.environment || {};
-  const stats = data.stats || {};
-  const infoItems = [
-    ["Pitch", env.pitchConditions?.join(", ")],
-    ["Weather", env.weatherConditions?.join(", ")],
-    ["Venue", env.venueType],
-    ["Jerseys", formatJerseys(env.jerseys)],
-    ["Stats", formatStats(stats)],
-    ["Added time", formatAdditionalTime(data.additionalTime)],
-  ].filter(([, value]) => value);
-
-  els.matchInfoGrid.replaceChildren(
-    ...infoItems.map(([label, value]) => {
-      const item = document.createElement("div");
-      item.className = "info-item";
-      item.innerHTML = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`;
-      return item;
-    }),
-  );
-
-  const teams = data.lineups || [];
-  els.lineupsGrid.replaceChildren(...teams.map(renderLineupTeam));
-}
-
-async function loadFullData() {
-  if (!state.selected?.fixtureId) {
-    renderFullData(null);
-    return;
-  }
-
-  els.fullDataStatus.textContent = "Loading full package...";
-  els.fullDataGrid.innerHTML = "";
-  els.fullDataPreview.textContent = "{}";
-  els.downloadFullData.disabled = true;
-
-  const params = new URLSearchParams({ include_raw: "true" });
-  if (state.selected.participant1) params.set("participant1", state.selected.participant1);
-  if (state.selected.participant2) params.set("participant2", state.selected.participant2);
-
-  try {
-    const data = await getJson(`/api/scores/${state.selected.fixtureId}/full?${params.toString()}`);
-    renderFullData(data);
-  } catch (error) {
-    state.fullData = null;
-    els.fullDataStatus.textContent = error.message;
-  }
-}
-
-function renderFullData(data) {
-  state.fullData = data;
-  if (!data) {
-    els.fullDataStatus.textContent = "No package loaded.";
-    els.fullDataGrid.innerHTML = "";
-    els.fullDataPreview.textContent = "{}";
-    els.downloadFullData.disabled = true;
-    return;
-  }
-
-  const inventory = data.inventory || {};
-  const timeline = data.timeline || {};
-  const sourceCounts = data.sourceCounts || {};
-  const items = [
-    ["Source", `${data.source || "-"} (${formatSourceCounts(sourceCounts)})`],
-    ["Records", `${data.recordCount || 0} raw / ${timeline.count || 0} normalized`],
-    ["Actions", formatTopEntries(inventory.actionCounts, 8)],
-    ["Top fields", formatTopEntries(inventory.topFieldCounts, 8)],
-    ["Data fields", formatTopEntries(inventory.dataFieldCounts, 8)],
-    ["Possession", formatTopEntries(inventory.possessionTypeCounts, 6)],
-    ["Score", formatTopEntries(inventory.scoreFieldPaths, 6)],
-    ["Stats", formatTopEntries(inventory.statsFieldPaths, 6)],
-  ].filter(([, value]) => value);
-
-  els.fullDataStatus.textContent = `${data.recordCount || 0} records kept for later`;
-  els.fullDataGrid.replaceChildren(
-    ...items.map(([label, value]) => {
-      const item = document.createElement("div");
-      item.className = "info-item";
-      item.innerHTML = `<span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>`;
-      return item;
-    }),
-  );
-  els.fullDataPreview.textContent = JSON.stringify(
-    {
-      source: data.source,
-      sourceCounts: data.sourceCounts,
-      latestState: data.latestState,
-      inventory: data.inventory,
-    },
-    null,
-    2,
-  );
-  els.downloadFullData.disabled = false;
-}
-
-function downloadFullData() {
-  if (!state.fullData) return;
-  const fixtureId = state.selected?.fixtureId || state.fullData.fixture?.fixtureId || "fixture";
-  const blob = new Blob([JSON.stringify(state.fullData, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `txline-${fixtureId}-full.json`;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function renderLineupTeam(team) {
-  const section = document.createElement("section");
-  section.className = "lineup-team";
-  const starters = team.starters || [];
-  const substitutes = team.substitutes || [];
-  section.innerHTML = `
-    <h4>${escapeHtml(team.teamName || "Team")}</h4>
-    <p>${starters.length} starter(s), ${substitutes.length} substitute(s)</p>
-    <div class="lineup-list">
-      ${starters.slice(0, 11).map(formatPlayerChip).join("")}
-    </div>
-    <details>
-      <summary>Substitutes</summary>
-      <div class="lineup-list">${substitutes.map(formatPlayerChip).join("")}</div>
-    </details>
-  `;
-  return section;
-}
-
-function formatPlayerChip(player) {
-  const number = player.rosterNumber ? `#${escapeHtml(player.rosterNumber)} ` : "";
-  const name = escapeHtml(player.name || `Player ${player.normativeId || ""}`);
-  return `<span class="player-chip">${number}${name}</span>`;
-}
-
-function formatJerseys(jerseys = {}) {
-  const entries = Object.entries(jerseys);
-  if (!entries.length) return null;
-  return entries.map(([team, color]) => `${team}: ${color}`).join(" / ");
-}
-
-function formatStats(stats = {}) {
-  const teams = [stats.participant1, stats.participant2].filter(Boolean);
-  if (!teams.length) return null;
-  return teams
-    .map((team) => {
-      const bits = [
-        team.goals != null ? `${team.goals} goals` : null,
-        team.corners != null ? `${team.corners} corners` : null,
-        team.yellowCards != null ? `${team.yellowCards} yellow` : null,
-        team.redCards != null ? `${team.redCards} red` : null,
-      ].filter(Boolean);
-      return bits.length ? `${team.label || "Team"}: ${bits.join(", ")}` : null;
-    })
-    .filter(Boolean)
-    .join(" / ");
-}
-
-function formatAdditionalTime(items = []) {
-  if (!items.length) return null;
-  return items.map((item) => `${item.period || "period"} +${item.minutes}'`).join(" / ");
-}
-
-function formatSourceCounts(sourceCounts = {}) {
-  return Object.entries(sourceCounts)
-    .map(([source, count]) => `${source}:${count}`)
-    .join(" / ");
-}
-
-function formatTopEntries(counts = {}, limit = 6) {
-  const entries = Object.entries(counts).slice(0, limit);
-  if (!entries.length) return null;
-  return entries.map(([name, count]) => `${name} ${count}`).join(" / ");
-}
-
-async function loadInterval() {
-  const params = new URLSearchParams({
-    date: els.intervalDate.value,
-    hour: els.intervalHour.value,
-    interval: els.intervalIndex.value,
-    important_only: "true",
-    include_possession: "true",
-    limit: "500",
-  });
-
-  els.intervalTimeline.innerHTML = `<li class="empty">Loading interval...</li>`;
-  try {
-    const data = await getJson(`/api/scores/interval?${params.toString()}`);
-    renderEvents(els.intervalTimeline, data.events || [], "No highlight found in this interval.");
-  } catch (error) {
-    renderEvents(els.intervalTimeline, [], error.message);
-  }
-}
-
-function startLive() {
-  stopLive();
-  const params = new URLSearchParams({
-    important_only: String(els.liveImportantOnly.checked),
-    include_possession: String(els.liveIncludePossession.checked),
-  });
-  if (state.selected?.fixtureId) params.set("fixture_id", state.selected.fixtureId);
-
-  state.liveSource = new EventSource(`/api/live/events?${params.toString()}`);
-  els.liveStatus.textContent = state.selected?.fixtureId
-    ? `Connected to fixture ${state.selected.fixtureId}`
-    : "Connected to all matches";
-  els.startLive.disabled = true;
-  els.stopLive.disabled = false;
-  els.liveFeed.innerHTML = "";
-
-  state.liveSource.onopen = () => {
-    els.liveStatus.textContent = "Connected, waiting for events";
-  };
-  state.liveSource.addEventListener("score", (event) => {
-    const item = JSON.parse(event.data);
-    prependLiveEvent(item);
-  });
-  state.liveSource.addEventListener("heartbeat", () => {
-    els.liveStatus.textContent = "Stream active";
-  });
-  state.liveSource.addEventListener("txline_error", (event) => {
-    const message = event.data ? JSON.parse(event.data).detail : "Stream interrupted";
-    prependLiveEvent({ description: message, highlights: ["error"], fixtureId: "-" });
-    els.liveStatus.textContent = "Stream error";
-  });
-  state.liveSource.onerror = () => {
-    els.liveStatus.textContent = "Reconnecting...";
-  };
-}
-
-function stopLive() {
-  if (state.liveSource) {
-    state.liveSource.close();
-    state.liveSource = null;
-  }
-  els.liveStatus.textContent = "Stream stopped";
-  els.startLive.disabled = false;
-  els.stopLive.disabled = true;
-}
-
-function prependLiveEvent(event) {
-  if (els.liveFeed.querySelector(".empty")) els.liveFeed.innerHTML = "";
-  const node = renderEvent(event);
-  els.liveFeed.prepend(node);
-  while (els.liveFeed.children.length > 100) {
-    els.liveFeed.lastElementChild.remove();
-  }
-}
-
-function renderEvents(container, events, emptyText, options = {}) {
-  if (!events.length) {
-    container.innerHTML = `<li class="empty">${escapeHtml(emptyText)}</li>`;
-    return;
-  }
-  container.replaceChildren(
-    ...events.map((event, index) => renderEvent(event, { current: index === options.currentIndex })),
-  );
-}
-
-function renderEvent(event, options = {}) {
-  const node = els.eventTemplate.content.firstElementChild.cloneNode(true);
-  if (options.current) node.classList.add("current");
-  const primary = event.highlights?.[0] || "update";
-  const label = node.querySelector(".event-label");
-  label.textContent = labelFor(primary);
-  label.classList.add(primary);
-  node.querySelector(".event-desc").textContent = event.description || event.action || "Update score";
-  node.querySelector(".event-meta").textContent = [
-    event.fixtureId ? `Fixture ${event.fixtureId}` : null,
-    event.tsIso ? formatDate(event.tsIso) : null,
-    event.seq != null ? `Seq ${event.seq}` : null,
-  ]
-    .filter(Boolean)
-    .join(" - ");
-  const details = event.details || [];
-  if (details.length) {
-    const detailNode = document.createElement("div");
-    detailNode.className = "event-details";
-    detailNode.textContent = details.join(" - ");
-    node.append(detailNode);
-  }
-  return node;
-}
-
-async function toggleReplay() {
-  if (state.replay.playing) {
-    pauseReplay();
-    return;
-  }
-
-  if (!state.replay.events.length) {
-    const loaded = await loadTimeline();
-    if (!loaded?.length) return;
-  }
-
-  if (state.replay.index >= state.replay.events.length) {
-    state.replay.index = 0;
-  }
-  state.replay.playing = true;
-  els.replayPlay.textContent = "Pause";
-  els.replayReset.disabled = false;
-  stepReplay();
-}
-
-function stepReplay() {
-  if (!state.replay.playing) return;
-  if (state.replay.index >= state.replay.events.length) {
-    pauseReplay();
-    els.replayStatus.textContent = `Replay finished (${state.replay.events.length}/${state.replay.events.length}).`;
-    return;
-  }
-
-  state.replay.index += 1;
-  renderReplayFrame();
-  state.replay.timer = window.setTimeout(stepReplay, state.replay.speedMs);
-}
-
-function renderReplayFrame() {
-  const visibleEvents = state.replay.events.slice(0, state.replay.index);
-  const currentEvent = visibleEvents[visibleEvents.length - 1];
-  renderEvents(els.timeline, visibleEvents, "Replay ready.", { currentIndex: visibleEvents.length - 1 });
-  els.replayProgress.value = String(state.replay.index);
-  els.replayStatus.textContent = currentEvent
-    ? `${state.replay.index}/${state.replay.events.length} - ${currentEvent.description || currentEvent.action || "Action"}`
-    : `0/${state.replay.events.length}`;
-  if (currentEvent?.score && (currentEvent.score.participant1 != null || currentEvent.score.participant2 != null)) {
-    updateScore(currentEvent.score);
-  }
-  els.timeline.scrollTop = els.timeline.scrollHeight;
-}
-
-function pauseReplay() {
-  window.clearTimeout(state.replay.timer);
-  state.replay.timer = null;
-  state.replay.playing = false;
-  els.replayPlay.textContent = "Play";
-}
-
-function stopReplay() {
-  pauseReplay();
-}
-
-function resetReplay() {
-  pauseReplay();
-  state.replay.index = 0;
-  els.replayProgress.value = "0";
-  els.replayStatus.textContent = state.replay.events.length
-    ? `Replay ready (0/${state.replay.events.length}).`
-    : "Load a timeline to start the replay.";
-  renderEvents(els.timeline, state.timelineEvents, "No timeline loaded.");
-}
-
-function seekReplay(index) {
-  state.replay.index = Math.max(0, Math.min(index, state.replay.events.length));
-  if (state.replay.index === 0) {
-    renderEvents(els.timeline, [], "Replay at the beginning. Press Play.");
-    els.replayStatus.textContent = `0/${state.replay.events.length}`;
-    return;
-  }
-  renderReplayFrame();
-}
-
-function prepareReplay(events, timelineData = null) {
-  pauseReplay();
-  state.replay.events = events || [];
-  state.replay.index = 0;
-  els.replayPlay.disabled = !state.replay.events.length;
-  els.replayReset.disabled = !state.replay.events.length;
-  els.replayProgress.disabled = !state.replay.events.length;
-  els.replayProgress.max = String(state.replay.events.length);
-  els.replayProgress.value = "0";
-  if (!state.replay.events.length) {
-    els.replayStatus.textContent = "Load a timeline to start the replay.";
-    return;
-  }
-
-  const rawCount = timelineData?.rawCount;
-  const source =
-    timelineData?.resolvedSource && timelineData.resolvedSource !== timelineData.source
-      ? `Source ${timelineData.resolvedSource} used`
-      : null;
-  els.replayStatus.textContent = [
-    `${state.replay.events.length} action(s) ready for replay`,
-    rawCount != null ? `${rawCount} raw updates` : null,
-    source,
-  ]
-    .filter(Boolean)
-    .join(" - ");
-}
-
 function updateScore(score) {
   if (!score || (score.participant1 == null && score.participant2 == null)) {
     els.scoreBox.textContent = "-";
@@ -1163,24 +593,6 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function labelFor(flag) {
-  return (
-    {
-      goal: "Goal",
-      penalty: "Penalty",
-      free_kick: "Free kick",
-      corner: "Corner",
-      red_card: "Red",
-      yellow_card: "Yellow",
-      possession: "Possession",
-      discarded: "Void",
-      var: "VAR",
-      error: "Error",
-      update: "Update",
-    }[flag] || flag
-  );
 }
 
 function gameKindLabel(kind) {

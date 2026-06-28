@@ -23,7 +23,6 @@ from .txline import (
     build_timeline,
     epoch_day_from_date,
     filter_upcoming_fixtures,
-    normalize_fixture,
     normalize_fixtures,
     normalize_score_record,
     parse_date_to_epoch_day,
@@ -36,6 +35,12 @@ STATIC_DIR = BASE_DIR / "static"
 app = FastAPI(title="Age of Colony TXLine Monitor", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 game_manager = GameManager(decision_agent=OpenRouterColonyAgent.from_env())
+
+AUTORUN_COLONIES = (
+    ("Red Nest", 10, "cautious", "penalties", "high"),
+    ("Amber Swarm", 20, "balanced", "momentum", "medium"),
+    ("Black Rush", 50, "aggressive", "chaos", "low"),
+)
 
 
 class CreateGameRequest(BaseModel):
@@ -257,9 +262,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest) -> dict[str, Any]:
             seed=payload.seed,
         )
         harness = game_manager.harness(room.game_id)
-        harness.add_colony("Red Nest", 10, "cautious", "penalties", "high")
-        harness.add_colony("Amber Swarm", 20, "balanced", "momentum", "medium")
-        harness.add_colony("Black Rush", 50, "aggressive", "chaos", "low")
+        _add_autorun_colonies(harness)
         room.mode = "replay"
         timeline = build_timeline(
             records,
@@ -312,9 +315,7 @@ async def demo_run(payload: DemoRunRequest) -> dict[str, Any]:
         seed=payload.seed,
     )
     harness = game_manager.harness(room.game_id)
-    harness.add_colony("Red Nest", 10, "cautious", "penalties", "high")
-    harness.add_colony("Amber Swarm", 20, "balanced", "momentum", "medium")
-    harness.add_colony("Black Rush", 50, "aggressive", "chaos", "low")
+    _add_autorun_colonies(harness)
     room.mode = "replay"
     events = demo_events(room.fixture_id)
     room.add_log(
@@ -681,6 +682,11 @@ def _get_game_or_404(game_id: str):
     if not room:
         raise HTTPException(status_code=404, detail="Game not found.")
     return room
+
+
+def _add_autorun_colonies(harness: Any) -> None:
+    for name, size, style, favorite_context, info_need in AUTORUN_COLONIES:
+        harness.add_colony(name, size, style, favorite_context, info_need)
 
 
 def _ensure_deepseek_agent() -> None:

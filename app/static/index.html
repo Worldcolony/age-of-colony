@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-10" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-11" />
   </head>
   <body>
     <header class="topbar">
@@ -26,13 +26,17 @@
         </div>
 
         <form id="fixtureFilters" class="filters">
-          <label class="checkbox checkbox-filter">
-            <input id="upcomingOnly" type="checkbox" checked />
-            Upcoming matches
+          <label>
+            List
+            <select id="fixtureMode">
+              <option value="recent" selected>Recent completed</option>
+              <option value="upcoming">Upcoming</option>
+              <option value="date">UTC date</option>
+            </select>
           </label>
           <label>
             Days
-            <input id="upcomingDays" type="number" min="1" max="90" value="14" />
+            <input id="fixtureDays" type="number" min="1" max="90" value="3" />
           </label>
           <label>
             UTC start
@@ -82,88 +86,18 @@
           </label>
           <button type="submit">Open</button>
         </form>
-
-        <div id="matchDetails" class="match-details">
-          <div class="match-details-header">
-            <h3>Match info</h3>
-            <p id="matchDetailsStatus">Select a match.</p>
-          </div>
-          <div id="matchInfoGrid" class="info-grid"></div>
-          <div id="lineupsGrid" class="lineups-grid"></div>
-        </div>
-
-        <div id="fullData" class="full-data">
-          <div class="full-data-header">
-            <div>
-              <h3>Full data</h3>
-              <p id="fullDataStatus">No package loaded.</p>
-            </div>
-            <div class="button-row">
-              <button id="loadFullData" type="button">Load</button>
-              <button id="downloadFullData" type="button" disabled>Exporter JSON</button>
-            </div>
-          </div>
-          <div id="fullDataGrid" class="info-grid"></div>
-          <details class="raw-preview">
-            <summary>Field inventory</summary>
-            <pre id="fullDataPreview">{}</pre>
-          </details>
-        </div>
-
-        <div class="tabs" role="tablist">
-          <button class="tab active" type="button" data-source="historical">Historical</button>
-          <button class="tab" type="button" data-source="updates">Full actions</button>
-          <button class="tab" type="button" data-source="snapshot">Snapshot</button>
-        </div>
-
-        <div class="toolbar">
-          <label class="checkbox">
-            <input id="importantOnly" type="checkbox" checked />
-            Highlights only
-          </label>
-          <label class="checkbox">
-            <input id="includePossession" type="checkbox" checked />
-            Possession changes
-          </label>
-          <button id="loadTimeline" type="button">Load</button>
-        </div>
-
-        <div class="replay">
-          <div class="replay-controls">
-            <button id="replayPlay" type="button" disabled>Play</button>
-            <button id="replayReset" type="button" disabled>Reset</button>
-            <label>
-              Speed
-              <select id="replaySpeed">
-                <option value="1400">0.5x</option>
-                <option value="900" selected>1x</option>
-                <option value="450">2x</option>
-                <option value="220">4x</option>
-              </select>
-            </label>
-          </div>
-          <input id="replayProgress" class="replay-progress" type="range" min="0" max="0" value="0" disabled />
-          <p id="replayStatus">Load a timeline to start the replay.</p>
-        </div>
-
-        <ol id="timeline" class="timeline">
-          <li class="empty">No timeline loaded.</li>
-        </ol>
       </section>
 
       <section class="panel panel-game">
         <div class="panel-heading">
           <div>
-            <h2>Age of Colony</h2>
+            <h2>Colony room</h2>
             <p id="gameStatus">Create a room from the selected match.</p>
           </div>
           <div class="button-row">
-            <button id="runPreviousTxGame" type="button">Run previous TX</button>
-            <button id="runDemoGame" type="button">Run local demo</button>
             <button id="createGame" type="button">Create room</button>
             <button id="startGameReplay" type="button" disabled>Run match</button>
             <button id="rerunGame" type="button" disabled>Rerun sim</button>
-            <button id="startGameLive" type="button" disabled>Live</button>
           </div>
         </div>
 
@@ -235,73 +169,8 @@
           </section>
         </div>
       </section>
-
-      <section class="panel panel-live">
-        <div class="panel-heading">
-          <div>
-            <h2>Live</h2>
-            <p id="liveStatus">Stream stopped</p>
-          </div>
-          <div class="button-row">
-            <button id="startLive" type="button">Connect</button>
-            <button id="stopLive" type="button" disabled>Stop</button>
-          </div>
-        </div>
-
-        <label class="checkbox">
-          <input id="liveImportantOnly" type="checkbox" />
-          Live: highlights only
-        </label>
-        <label class="checkbox">
-          <input id="liveIncludePossession" type="checkbox" checked />
-          Live: possession changes
-        </label>
-
-        <ul id="liveFeed" class="live-feed">
-          <li class="empty">The live stream will appear here.</li>
-        </ul>
-      </section>
-
-      <section class="panel panel-interval">
-        <div class="panel-heading">
-          <div>
-            <h2>Historical interval</h2>
-            <p>Read a 5-minute TXLine block.</p>
-          </div>
-        </div>
-
-        <form id="intervalForm" class="filters filters-interval">
-          <label>
-            Date UTC
-            <input id="intervalDate" type="date" required />
-          </label>
-          <label>
-            Hour
-            <input id="intervalHour" type="number" min="0" max="23" value="0" required />
-          </label>
-          <label>
-            Interval
-            <input id="intervalIndex" type="number" min="0" max="11" value="0" required />
-          </label>
-          <button type="submit">Load</button>
-        </form>
-
-        <ol id="intervalTimeline" class="timeline compact">
-          <li class="empty">No interval loaded.</li>
-        </ol>
-      </section>
     </main>
 
-    <template id="eventTemplate">
-      <li>
-        <div class="event-main">
-          <span class="event-label"></span>
-          <span class="event-desc"></span>
-        </div>
-        <div class="event-meta"></div>
-      </li>
-    </template>
-
-    <script src="/static/app.js?v=colony-10" type="module"></script>
+    <script src="/static/app.js?v=colony-11" type="module"></script>
   </body>
 </html>
