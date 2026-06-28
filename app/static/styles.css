@@ -142,12 +142,14 @@ p {
 .panel-fixtures,
 .panel-detail,
 .panel-live,
-.panel-interval {
+.panel-interval,
+.panel-game {
   padding: 1rem;
 }
 
 .panel-live,
-.panel-interval {
+.panel-interval,
+.panel-game {
   grid-column: span 1;
 }
 
@@ -185,6 +187,11 @@ p {
 
 .filters-interval {
   grid-template-columns: 1.2fr 0.7fr 0.7fr auto;
+  align-items: end;
+}
+
+.colony-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
 }
 
@@ -463,7 +470,8 @@ tbody tr.selected {
 }
 
 .timeline,
-.live-feed {
+.live-feed,
+.game-feed {
   display: grid;
   gap: 0.55rem;
   max-height: 560px;
@@ -474,11 +482,176 @@ tbody tr.selected {
 }
 
 .timeline li,
-.live-feed li {
+.live-feed li,
+.game-feed li {
   border: 1px solid var(--panel-border);
   border-radius: 8px;
   padding: 0.75rem;
   background: #fff;
+}
+
+.game-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.85fr) minmax(260px, 1.15fr);
+  gap: 0.85rem;
+}
+
+.simulation-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1.1fr);
+  gap: 0.85rem;
+  align-items: center;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin: 0.85rem 0;
+  background: #f8fafc;
+}
+
+.simulation-panel p {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.agent-cost {
+  color: var(--brand-dark) !important;
+  font-weight: 850 !important;
+}
+
+.sim-status {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.22rem 0.62rem;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.sim-status.running_replay,
+.sim-status.running_live {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.sim-status.finished {
+  background: #fef0c7;
+  color: #93370d;
+}
+
+.sim-status.error {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+.active-markets {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.market-pill {
+  border: 1px solid #bae6fd;
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  background: #f0f9ff;
+  color: #075985;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.game-grid h3 {
+  margin: 0 0 0.55rem;
+  font-size: 0.95rem;
+}
+
+.leaderboard {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.colony-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #f9fafb;
+}
+
+.colony-rank {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: #ccfbef;
+  color: #0f766e;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.colony-card h4,
+.colony-card p {
+  margin: 0;
+}
+
+.colony-card h4 {
+  font-size: 0.92rem;
+}
+
+.colony-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.colony-head span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+.colony-card p {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.colony-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.45rem;
+}
+
+.colony-stats span {
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 0.16rem 0.45rem;
+  background: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.colony-stats b {
+  color: var(--text);
+}
+
+.colony-dna {
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.game-feed {
+  max-height: 440px;
 }
 
 .timeline li.current {
@@ -505,6 +678,47 @@ tbody tr.selected {
   font-size: 0.74rem;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.event-label.agent_decision {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.event-label.ant_agent_start {
+  background: #eef4ff;
+  color: #3538cd;
+}
+
+.event-label.ant_agent_vote {
+  background: #ecfdf3;
+  color: #047857;
+}
+
+.event-label.prediction {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.event-label.settlement {
+  background: #fef0c7;
+  color: #93370d;
+}
+
+.event-label.hatch {
+  background: #ecfdf3;
+  color: #05603a;
+}
+
+.event-label.starvation {
+  background: #fee4e2;
+  color: var(--danger);
+}
+
+.event-label.void,
+.event-label.markets_closed {
+  background: #f2f4f7;
+  color: #475467;
 }
 
 .event-label.goal {
@@ -567,8 +781,10 @@ tbody tr.selected {
 
   .filters,
   .filters-interval,
+  .colony-form,
   .info-grid,
-  .lineups-grid {
+  .lineups-grid,
+  .game-grid {
     grid-template-columns: 1fr;
   }
 }

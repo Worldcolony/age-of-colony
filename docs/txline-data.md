@@ -1,109 +1,109 @@
-# Données accessibles via TXLine
+# Data Available Through TXLine
 
-Cette app récupère les données TXLine utiles pour suivre, rejouer et analyser un match.
+This app fetches the TXLine data needed to follow, replay, and analyze a match.
 
-## Calendrier
+## Calendar
 
-- Matchs par date ou par fenêtre à venir.
-- Compétition, fixture ID, équipes, heure de début.
-- Filtre par compétition ou recherche texte.
+- Matches by date or upcoming window.
+- Competition, fixture ID, teams, and kickoff time.
+- Filters by competition or text search.
 
-Endpoints :
+Endpoints:
 
 - `GET /api/fixtures`
 - `GET /api/fixtures/upcoming`
 
-## Scores et événements
+## Scores And Events
 
-- Score live, historique et snapshots.
-- Séquence complète des actions d'un fixture.
-- Replay chronologique des événements.
-- Source utilisée : `historical`, `updates` ou `snapshot`.
+- Live score, history, and snapshots.
+- Full action sequence for a fixture.
+- Chronological event replay.
+- Selected source: `historical`, `updates`, or `snapshot`.
 
-Endpoints :
+Endpoints:
 
 - `GET /api/scores/{fixture_id}/historical`
 - `GET /api/scores/{fixture_id}/updates`
 - `GET /api/scores/{fixture_id}/snapshot`
 - `GET /api/scores/{fixture_id}/timeline`
 
-## Actions de match
+## Match Actions
 
-L'API peut exposer notamment :
+The API may expose:
 
-- buts
-- tirs
+- goals
+- shots
 - penalties
-- coups francs
+- free kicks
 - corners
-- touches
-- cartons jaunes / rouges
+- throw-ins
+- yellow / red cards
 - VAR
-- remplacements
-- blessures
-- temps additionnel
-- actions annulées ou amendées
+- substitutions
+- injuries
+- added time
+- discarded or amended actions
 
-Chaque action peut contenir : minute, équipe, possession, type d'action, résultat, confirmation, joueur concerné et détails bruts TXLine.
+Each action can contain minute, team, possession, action type, outcome, confirmation, involved player, and raw TXLine details.
 
-## Possession et pression
+## Possession And Pressure
 
-On récupère les changements de possession et les niveaux d'intensité indiqués par TXLine :
+The app fetches possession changes and intensity levels provided by TXLine:
 
 - `safe_possession`
 - `attack_possession`
 - `danger_possession`
 - `high_danger_possession`
 
-Important : TXLine ne fournit pas de coordonnées précises `x/y` de la balle dans les données utilisées ici.
+Important: TXLine does not provide precise ball `x/y` coordinates in the data used here.
 
-## Joueurs et compositions
+## Players And Lineups
 
-Quand TXLine les fournit :
+When TXLine provides them:
 
-- titulaires
-- remplaçants
-- numéros
-- noms des joueurs
-- joueurs entrants / sortants
-- buteur ou joueur lié à une action
+- starters
+- substitutes
+- numbers
+- player names
+- players in / out
+- scorer or player linked to an action
 
-## Contexte match
+## Match Context
 
-Selon les fixtures, on peut aussi récupérer :
+Depending on the fixture, the app can also fetch:
 
-- météo
-- état du terrain
-- type de venue
-- couleurs de maillots
-- statut du match
-- horloge
+- weather
+- pitch condition
+- venue type
+- jersey colors
+- match status
+- clock
 - kickoff
-- couverture TXLine
+- TXLine coverage
 
 ## Stats
 
-Les stats disponibles dépendent du match et de la couverture TXLine. L'app conserve les champs bruts et extrait les plus utiles :
+Available stats depend on the match and TXLine coverage. The app keeps raw fields and extracts the most useful ones:
 
-- buts
+- goals
 - corners
-- cartons
-- score par période quand disponible
+- cards
+- score by period when available
 - `Stats`, `Parti1State`, `Parti2State`, `PossibleEvent`
 
-## Données brutes et export
+## Raw Data And Export
 
-Pour ne rien perdre, l'endpoint complet renvoie :
+To avoid losing data, the full endpoint returns:
 
-- `rawRecords` : tous les records TXLine bruts
-- `timeline` : événements normalisés
-- `details` : résumé match
-- `inventory` : inventaire des champs disponibles
-- `latestState` : dernier état connu
-- `sourceCounts` : volumes par source
+- `rawRecords`: all raw TXLine records
+- `timeline`: normalized events
+- `details`: match summary
+- `inventory`: available field inventory
+- `latestState`: latest known state
+- `sourceCounts`: volumes by source
 
-Endpoint :
+Endpoint:
 
 - `GET /api/scores/{fixture_id}/full?include_raw=true`
 
-Dans l'interface, le bloc **Données max** permet de charger ce paquet et de l'exporter en JSON.
+In the interface, the **Full data** block loads this package and exports it as JSON.

@@ -5,6 +5,15 @@ const state = {
   liveSource: null,
   timelineEvents: [],
   fullData: null,
+  game: {
+    id: null,
+    source: null,
+    events: [],
+    colonyCount: 0,
+    status: null,
+    activeOpportunities: [],
+    agentUsage: null,
+  },
   replay: {
     events: [],
     index: 0,
@@ -58,6 +67,26 @@ const els = {
   intervalHour: document.querySelector("#intervalHour"),
   intervalIndex: document.querySelector("#intervalIndex"),
   intervalTimeline: document.querySelector("#intervalTimeline"),
+  runPreviousTxGame: document.querySelector("#runPreviousTxGame"),
+  runDemoGame: document.querySelector("#runDemoGame"),
+  createGame: document.querySelector("#createGame"),
+  startGameReplay: document.querySelector("#startGameReplay"),
+  rerunGame: document.querySelector("#rerunGame"),
+  startGameLive: document.querySelector("#startGameLive"),
+  gameStatus: document.querySelector("#gameStatus"),
+  simulationStatus: document.querySelector("#simulationStatus"),
+  simulationStats: document.querySelector("#simulationStats"),
+  agentCost: document.querySelector("#agentCost"),
+  activeMarkets: document.querySelector("#activeMarkets"),
+  colonyForm: document.querySelector("#colonyForm"),
+  colonyName: document.querySelector("#colonyName"),
+  colonySize: document.querySelector("#colonySize"),
+  colonyStyle: document.querySelector("#colonyStyle"),
+  colonyFavorite: document.querySelector("#colonyFavorite"),
+  colonyInfoNeed: document.querySelector("#colonyInfoNeed"),
+  addColony: document.querySelector("#addColony"),
+  gameLeaderboard: document.querySelector("#gameLeaderboard"),
+  gameFeed: document.querySelector("#gameFeed"),
   eventTemplate: document.querySelector("#eventTemplate"),
 };
 
@@ -86,7 +115,7 @@ function bindEvents() {
     event.preventDefault();
     const fixtureId = Number(els.manualFixtureId.value);
     if (!fixtureId) return;
-    selectFixture({ fixtureId, participant1: null, participant2: null, competition: "Manuel" });
+    selectFixture({ fixtureId, participant1: null, participant2: null, competition: "Manual" });
     loadTimeline();
   });
   els.loadTimeline.addEventListener("click", loadTimeline);
@@ -118,16 +147,32 @@ function bindEvents() {
     event.preventDefault();
     loadInterval();
   });
+  els.runPreviousTxGame.addEventListener("click", runPreviousTxGame);
+  els.runDemoGame.addEventListener("click", runDemoGame);
+  els.createGame.addEventListener("click", createGame);
+  els.startGameReplay.addEventListener("click", () => startGame("replay"));
+  els.rerunGame.addEventListener("click", rerunGame);
+  els.startGameLive.addEventListener("click", () => startGame("live"));
+  els.colonyForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    addColony();
+  });
 }
 
 async function checkHealth() {
   try {
     const health = await getJson("/health");
     els.healthBadge.className = health.txlineConfigured ? "badge badge-ok" : "badge badge-error";
-    els.healthBadge.textContent = health.txlineConfigured ? "TXLine configure" : "Credentials manquants";
+    if (!health.txlineConfigured) {
+      els.healthBadge.textContent = "Missing credentials";
+    } else if (health.openrouterConfigured) {
+      els.healthBadge.textContent = `TXLine + ${health.colonyAgentCallMode || "agent"} ${health.colonyAgentModel}`;
+    } else {
+      els.healthBadge.textContent = "TXLine configured - DeepSeek required";
+    }
   } catch (error) {
     els.healthBadge.className = "badge badge-error";
-    els.healthBadge.textContent = "Backend indisponible";
+    els.healthBadge.textContent = "Backend unavailable";
   }
 }
 
@@ -147,12 +192,12 @@ async function loadFixtures() {
     const data = await getJson(`${endpoint}?${params.toString()}`);
     state.fixtures = data.fixtures || [];
     els.fixtureCount.textContent = els.upcomingOnly.checked
-      ? `${data.count || 0} match(s) à venir sur ${data.days || els.upcomingDays.value || 14} jour(s)`
-      : `${data.count || 0} match(s)`;
+      ? `${data.count || 0} match(es) upcoming across ${data.days || els.upcomingDays.value || 14} day(s)`
+      : `${data.count || 0} match(es)`;
     renderFixtures();
   } catch (error) {
     state.fixtures = [];
-    els.fixtureCount.textContent = "Erreur";
+    els.fixtureCount.textContent = "Error";
     setFixtureRows([{ error: error.message }]);
   }
 }
@@ -191,12 +236,12 @@ function renderFixtures() {
 
 function setFixtureRows(rows) {
   if (!rows.length) {
-    els.fixturesBody.innerHTML = `<tr><td colspan="3" class="empty">Aucun match trouve.</td></tr>`;
+    els.fixturesBody.innerHTML = `<tr><td colspan="3" class="empty">No match found.</td></tr>`;
     return;
   }
   const first = rows[0];
   if (first.loading) {
-    els.fixturesBody.innerHTML = `<tr><td colspan="3" class="empty">Chargement...</td></tr>`;
+    els.fixturesBody.innerHTML = `<tr><td colspan="3" class="empty">Loading...</td></tr>`;
     return;
   }
   if (first.error) {
@@ -206,14 +251,414 @@ function setFixtureRows(rows) {
 
 function selectFixture(fixture) {
   stopReplay();
+  resetGameUi();
   state.selected = fixture;
   els.manualFixtureId.value = fixture.fixtureId || "";
   els.selectedTitle.textContent = `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`;
-  els.selectedMeta.textContent = `${fixture.competition || "Competition inconnue"} - Fixture ${fixture.fixtureId}`;
+  els.selectedMeta.textContent = `${fixture.competition || "Unknown competition"} - Fixture ${fixture.fixtureId}`;
   els.scoreBox.textContent = "-";
   renderFullData(null);
   loadMatchDetails();
   renderFixtures();
+}
+
+async function runPreviousTxGame() {
+  closeGameStream();
+  state.game.agentUsage = null;
+  els.gameStatus.textContent = "Searching for the latest TXLine match with data...";
+  try {
+    const payload = {
+      days: 30,
+      limit: 60,
+    };
+    if (els.competitionId.value) payload.competitionId = Number(els.competitionId.value);
+    if (els.fixtureSearch.value.trim()) payload.search = els.fixtureSearch.value.trim();
+    const game = await postJson("/api/games/run-previous", payload);
+    state.game.id = game.gameId;
+    state.selected = {
+      fixtureId: game.fixtureId,
+      participant1: game.participant1,
+      participant2: game.participant2,
+      competition: "TXLine previous match",
+    };
+    els.selectedTitle.textContent = `${game.participant1 || "Participant 1"} - ${game.participant2 || "Participant 2"}`;
+    els.selectedMeta.textContent = `TXLine previous match - Fixture ${game.fixtureId}`;
+    updateScore(game.match?.score);
+    els.addColony.disabled = true;
+    els.startGameReplay.disabled = true;
+    els.startGameLive.disabled = true;
+    renderGameState(game);
+    await loadGameReplay();
+    els.gameStatus.textContent = `Run TXLine finished - ${state.game.events.length} game events.`;
+  } catch (error) {
+    els.gameStatus.textContent = `Cannot run TXLine: ${error.message}`;
+  }
+}
+
+async function runDemoGame() {
+  closeGameStream();
+  state.game.agentUsage = null;
+  els.gameStatus.textContent = "Local demo run in progress...";
+  try {
+    const game = await postJson("/api/demo/run", {});
+    state.game.id = game.gameId;
+    state.selected = {
+      fixtureId: game.fixtureId,
+      participant1: game.participant1,
+      participant2: game.participant2,
+      competition: "Demo Previous Match",
+    };
+    els.selectedTitle.textContent = `${game.participant1 || "Participant 1"} - ${game.participant2 || "Participant 2"}`;
+    els.selectedMeta.textContent = `Demo Previous Match - Fixture ${game.fixtureId}`;
+    updateScore(game.match?.score);
+    els.addColony.disabled = true;
+    els.startGameReplay.disabled = true;
+    els.startGameLive.disabled = true;
+    renderGameState(game);
+    await loadGameReplay();
+    els.gameStatus.textContent = `Local demo run finished - ${state.game.events.length} game events.`;
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
+async function createGame() {
+  if (!state.selected?.fixtureId) {
+    els.gameStatus.textContent = "Select a match before creating a room.";
+    return;
+  }
+
+  closeGameStream();
+  els.gameStatus.textContent = "Creating room...";
+  try {
+    const game = await postJson("/api/games", {
+      fixtureId: state.selected.fixtureId,
+      participant1: state.selected.participant1,
+      participant2: state.selected.participant2,
+    });
+    state.game.id = game.gameId;
+    state.game.events = [];
+    state.game.colonyCount = 0;
+    state.game.status = game.status;
+    state.game.activeOpportunities = [];
+    state.game.agentUsage = null;
+    els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+    els.gameStatus.textContent = `Room ${game.gameId} ready. Add colonies.`;
+    renderGameState(game);
+    openGameStream();
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
+async function addColony() {
+  if (!state.game.id) return;
+  const payload = {
+    name: els.colonyName.value.trim() || `Colony ${Date.now().toString().slice(-4)}`,
+    size: Number(els.colonySize.value),
+    style: els.colonyStyle.value,
+    favoriteContext: els.colonyFavorite.value,
+    infoNeed: els.colonyInfoNeed.value,
+  };
+  els.gameStatus.textContent = "Adding colony...";
+  try {
+    const game = await postJson(`/api/games/${state.game.id}/colonies`, payload);
+    els.colonyName.value = "";
+    els.gameStatus.textContent = `${payload.name} added.`;
+    renderGameState(game);
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
+async function startGame(mode) {
+  if (!state.game.id) return;
+  if (state.game.colonyCount < 1) {
+    els.gameStatus.textContent = "Add at least one colony before starting the match.";
+    updateGameActions();
+    return;
+  }
+  els.gameStatus.textContent = mode === "live" ? "Connecting live..." : "Replay game in progress...";
+  try {
+    const game = await postJson(`/api/games/${state.game.id}/start`, {
+      mode,
+      source: state.source,
+    });
+    renderGameState(game);
+    if (mode === "replay") {
+      await loadGameReplay();
+      els.gameStatus.textContent = "Match run started. Decisions will appear in the journal.";
+    } else {
+      els.gameStatus.textContent = "Live game started.";
+    }
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
+async function rerunGame() {
+  if (!state.game.id) return;
+  els.gameStatus.textContent = "Rerunning simulation...";
+  closeGameStream();
+  try {
+    const game = await postJson(`/api/games/${state.game.id}/rerun`, {
+      mode: "replay",
+      source: state.source,
+    });
+    state.game.id = game.gameId;
+    state.game.events = [];
+    state.game.agentUsage = null;
+    els.gameFeed.innerHTML = "";
+    renderGameState(game);
+    openGameStream();
+    await loadGameReplay();
+    els.gameStatus.textContent = "New simulation started.";
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
+function openGameStream() {
+  closeGameStream();
+  if (!state.game.id) return;
+  state.game.source = new EventSource(`/api/games/${state.game.id}/events`);
+  state.game.source.addEventListener("game_event", (event) => {
+    const item = JSON.parse(event.data);
+    appendGameEvent(item);
+  });
+  state.game.source.addEventListener("game_state", (event) => {
+    const game = JSON.parse(event.data);
+    renderGameState(game);
+  });
+  state.game.source.onerror = () => {
+    els.gameStatus.textContent = "Game stream reconnecting...";
+  };
+}
+
+function closeGameStream() {
+  if (state.game.source) {
+    state.game.source.close();
+    state.game.source = null;
+  }
+}
+
+async function loadGameReplay() {
+  if (!state.game.id) return;
+  const data = await getJson(`/api/games/${state.game.id}/replay`);
+  renderGameState(data.game);
+  state.game.events = [];
+  els.gameFeed.innerHTML = "";
+  (data.events || []).forEach(appendGameEvent);
+}
+
+function resetGameUi() {
+  closeGameStream();
+  state.game.id = null;
+  state.game.events = [];
+  state.game.colonyCount = 0;
+  state.game.status = null;
+  state.game.activeOpportunities = [];
+  state.game.agentUsage = null;
+  updateGameActions();
+  els.gameStatus.textContent = "Create a room from the selected match.";
+  els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
+  els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+  renderSimulationSummary(null);
+}
+
+function renderGameState(game) {
+  if (!game) return;
+  const colonies = game.colonies || [];
+  state.game.id = game.gameId || state.game.id;
+  state.game.colonyCount = colonies.length;
+  state.game.status = game.status || null;
+  state.game.activeOpportunities = game.activeOpportunities || [];
+  state.game.agentUsage = game.agentUsage || state.game.agentUsage;
+  updateGameActions();
+  renderSimulationSummary(game);
+  els.gameStatus.textContent = [
+    game.gameId ? `Room ${game.gameId}` : null,
+    game.status ? `statut ${game.status}` : null,
+    game.eventIndex != null ? `${game.eventIndex} events` : null,
+  ]
+    .filter(Boolean)
+    .join(" - ");
+  if (!colonies.length) {
+    els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
+    return;
+  }
+  els.gameLeaderboard.replaceChildren(
+    ...colonies.map((colony, index) => {
+      const card = document.createElement("article");
+      card.className = "colony-card";
+      const scoreTitle = formatScoreBreakdown(colony.scoreBreakdown);
+      card.innerHTML = `
+        <div class="colony-rank">#${index + 1}</div>
+        <div>
+          <div class="colony-head">
+            <h4>${escapeHtml(colony.name)}</h4>
+            <span>${colony.wins || 0}W / ${colony.losses || 0}L</span>
+          </div>
+          <p>${escapeHtml(colony.style)} - ${escapeHtml(colony.favoriteContext)} - info ${escapeHtml(colony.infoNeed)}</p>
+          <div class="colony-stats">
+            <span><b>${colony.food}</b> food</span>
+            <span><b>${colony.larvae}</b> larvae</span>
+            <span><b>${colony.antsAlive}</b> alive</span>
+            <span><b>${colony.antsBorn || 0}</b> born</span>
+            <span><b>${colony.antsWounded}</b> wounded</span>
+            <span><b>${colony.antsDead}</b> dead</span>
+            <span><b>${colony.infoPurchases || 0}</b> infos</span>
+            <span title="${escapeHtml(scoreTitle)}">score <b>${colony.score}</b></span>
+          </div>
+          <div class="colony-dna">${renderArchetypeSummary(colony.archetypes)}</div>
+        </div>
+      `;
+      return card;
+    }),
+  );
+}
+
+function updateGameActions() {
+  const hasRoom = Boolean(state.game.id);
+  const locked = ["running_replay", "running_live", "finished"].includes(state.game.status);
+  const running = ["running_replay", "running_live"].includes(state.game.status);
+  const hasColony = state.game.colonyCount > 0;
+  els.createGame.disabled = hasRoom && !locked;
+  els.addColony.disabled = !hasRoom || locked;
+  els.startGameReplay.disabled = !hasRoom || locked || !hasColony;
+  els.rerunGame.disabled = !hasRoom || running || !hasColony;
+  els.startGameLive.disabled = !hasRoom || locked || !hasColony;
+}
+
+function appendGameEvent(event) {
+  if (!event || state.game.events.some((item) => item.index === event.index)) return;
+  state.game.events.push(event);
+  if (event.kind === "game_finished") {
+    state.game.status = "finished";
+    state.game.agentUsage = event.data?.agentUsage || state.game.agentUsage;
+    updateGameActions();
+  } else if (event.kind === "game_error") {
+    state.game.status = "error";
+    updateGameActions();
+  }
+  if (els.gameFeed.querySelector(".empty")) els.gameFeed.innerHTML = "";
+  const item = document.createElement("li");
+  item.className = `game-log-${event.kind || "event"}`;
+  item.innerHTML = `
+    <div class="event-main">
+      <span class="event-label ${escapeHtml(event.kind || "update")}">${escapeHtml(gameKindLabel(event.kind))}</span>
+      <span class="event-desc">${escapeHtml(event.message || "Update game")}</span>
+    </div>
+  `;
+  els.gameFeed.append(item);
+  while (els.gameFeed.children.length > 160) {
+    els.gameFeed.firstElementChild.remove();
+  }
+  els.gameFeed.scrollTop = els.gameFeed.scrollHeight;
+  renderSimulationSummary();
+}
+
+function renderSimulationSummary(game = null) {
+  const status = game?.status || state.game.status || "created";
+  const events = state.game.events || [];
+  const counts = countGameEvents(events);
+  const statusLabels = {
+    created: "Room ready",
+    running_replay: "Simulation running",
+    running_live: "Live running",
+    finished: "Simulation finished",
+    error: "Error",
+    stopped: "Stopped",
+  };
+  els.simulationStatus.className = `sim-status ${status}`;
+  els.simulationStatus.textContent = statusLabels[status] || status;
+  const eventIndex = game?.eventIndex;
+  els.simulationStats.textContent = [
+    eventIndex != null ? `${eventIndex} TXLine events read` : null,
+    `${counts.opportunity || 0} markets`,
+    `${counts.ant_agent_vote || 0} AI ant votes`,
+    counts.agent_decision ? `${counts.agent_decision} agent decisions` : null,
+    `${counts.prediction || 0} commitments`,
+    `${counts.settlement || 0} results`,
+    counts.void ? `${counts.void} void` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  renderAgentCost(status, game?.agentUsage || state.game.agentUsage);
+
+  const markets = game?.activeOpportunities || state.game.activeOpportunities || [];
+  if (!markets.length) {
+    els.activeMarkets.innerHTML = `<span class="empty">No active market.</span>`;
+    return;
+  }
+  els.activeMarkets.replaceChildren(
+    ...markets.slice(0, 4).map((market) => {
+      const item = document.createElement("span");
+      item.className = "market-pill";
+      item.textContent = market.label || market.context || "Market";
+      return item;
+    }),
+  );
+}
+
+function renderAgentCost(status, usage) {
+  if (!els.agentCost) return;
+  const apiCalls = Number(usage?.apiCalls || 0);
+  const budgetedCalls = Number(usage?.budgetedCalls || 0);
+  if (status !== "finished" || !usage || (apiCalls <= 0 && budgetedCalls <= 0)) {
+    els.agentCost.hidden = true;
+    els.agentCost.textContent = "";
+    return;
+  }
+
+  if (apiCalls <= 0) {
+    els.agentCost.textContent = `AI cost unavailable · ${formatInteger(budgetedCalls)} calls without usage`;
+    els.agentCost.hidden = false;
+    return;
+  }
+
+  const parts = [
+    `AI cost: ${formatUsd(Number(usage.costUsd || 0))}`,
+    `${formatInteger(apiCalls)} calls`,
+    `${formatInteger(usage.inputTokens || 0)} input`,
+    `${formatInteger(usage.outputTokens || 0)} output tokens`,
+  ];
+  if (!usage.costComplete) {
+    parts.push(`${formatInteger(usage.missingUsageResponses || 0)} without usage`);
+  }
+  els.agentCost.textContent = parts.join(" · ");
+  els.agentCost.hidden = false;
+}
+
+function countGameEvents(events) {
+  return events.reduce((acc, event) => {
+    acc[event.kind] = (acc[event.kind] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function renderArchetypeSummary(archetypes) {
+  if (!archetypes || typeof archetypes !== "object") return "";
+  return Object.entries(archetypes)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 3)
+    .map(([name, count]) => `${escapeHtml(name)} ${count}`)
+    .join(" · ");
+}
+
+function formatScoreBreakdown(breakdown) {
+  if (!breakdown || typeof breakdown !== "object") {
+    return "Relative score = base + survival + growth + net food + reserve + accuracy - losses";
+  }
+  return [
+    `base ${breakdown.base ?? 0}`,
+    `survival ${breakdown.survival ?? 0}`,
+    `growth ${breakdown.growth ?? 0}`,
+    `food net ${breakdown.foodNet ?? 0}`,
+    `reserve ${breakdown.foodReserve ?? 0}`,
+    `accuracy ${breakdown.accuracy ?? 0}`,
+    `losses ${breakdown.lossPenalty ?? 0}`,
+  ].join(" · ");
 }
 
 async function loadMatchDetails() {
@@ -222,7 +667,7 @@ async function loadMatchDetails() {
     return;
   }
 
-  els.matchDetailsStatus.textContent = "Chargement des infos...";
+  els.matchDetailsStatus.textContent = "Loading info...";
   els.matchInfoGrid.innerHTML = "";
   els.lineupsGrid.innerHTML = "";
   const params = new URLSearchParams();
@@ -241,12 +686,12 @@ async function loadTimeline() {
   stopReplay();
   if (!state.selected?.fixtureId) {
     prepareReplay([]);
-    renderEvents(els.timeline, [], "Selectionne un match d'abord.");
+    renderEvents(els.timeline, [], "Select a match first.");
     return;
   }
 
   prepareReplay([]);
-  els.timeline.innerHTML = `<li class="empty">Chargement de la timeline...</li>`;
+  els.timeline.innerHTML = `<li class="empty">Loading timeline...</li>`;
   const params = new URLSearchParams({
     source: state.source,
     important_only: String(els.importantOnly.checked),
@@ -260,7 +705,7 @@ async function loadTimeline() {
     const data = await getJson(`/api/scores/${state.selected.fixtureId}/timeline?${params.toString()}`);
     state.timelineEvents = data.events || [];
     updateScore(data.score);
-    renderEvents(els.timeline, state.timelineEvents, "Aucun moment fort trouve pour cette source.");
+    renderEvents(els.timeline, state.timelineEvents, "No highlight found for this source.");
     prepareReplay(state.timelineEvents, data);
     return state.timelineEvents;
   } catch (error) {
@@ -273,22 +718,22 @@ async function loadTimeline() {
 
 function renderMatchDetails(data) {
   if (!data) {
-    els.matchDetailsStatus.textContent = "Selectionne un match.";
+    els.matchDetailsStatus.textContent = "Select a match.";
     els.matchInfoGrid.innerHTML = "";
     els.lineupsGrid.innerHTML = "";
     return;
   }
 
-  els.matchDetailsStatus.textContent = `${data.recordCount || 0} updates bruts - source ${data.source || "-"}`;
+  els.matchDetailsStatus.textContent = `${data.recordCount || 0} raw updates - source ${data.source || "-"}`;
   const env = data.environment || {};
   const stats = data.stats || {};
   const infoItems = [
-    ["Terrain", env.pitchConditions?.join(", ")],
-    ["Meteo", env.weatherConditions?.join(", ")],
-    ["Stade", env.venueType],
-    ["Maillots", formatJerseys(env.jerseys)],
+    ["Pitch", env.pitchConditions?.join(", ")],
+    ["Weather", env.weatherConditions?.join(", ")],
+    ["Venue", env.venueType],
+    ["Jerseys", formatJerseys(env.jerseys)],
     ["Stats", formatStats(stats)],
-    ["Temps additionnel", formatAdditionalTime(data.additionalTime)],
+    ["Added time", formatAdditionalTime(data.additionalTime)],
   ].filter(([, value]) => value);
 
   els.matchInfoGrid.replaceChildren(
@@ -310,7 +755,7 @@ async function loadFullData() {
     return;
   }
 
-  els.fullDataStatus.textContent = "Chargement du paquet complet...";
+  els.fullDataStatus.textContent = "Loading full package...";
   els.fullDataGrid.innerHTML = "";
   els.fullDataPreview.textContent = "{}";
   els.downloadFullData.disabled = true;
@@ -331,7 +776,7 @@ async function loadFullData() {
 function renderFullData(data) {
   state.fullData = data;
   if (!data) {
-    els.fullDataStatus.textContent = "Aucun paquet chargé.";
+    els.fullDataStatus.textContent = "No package loaded.";
     els.fullDataGrid.innerHTML = "";
     els.fullDataPreview.textContent = "{}";
     els.downloadFullData.disabled = true;
@@ -343,16 +788,16 @@ function renderFullData(data) {
   const sourceCounts = data.sourceCounts || {};
   const items = [
     ["Source", `${data.source || "-"} (${formatSourceCounts(sourceCounts)})`],
-    ["Records", `${data.recordCount || 0} bruts / ${timeline.count || 0} normalisés`],
+    ["Records", `${data.recordCount || 0} raw / ${timeline.count || 0} normalized`],
     ["Actions", formatTopEntries(inventory.actionCounts, 8)],
-    ["Champs top", formatTopEntries(inventory.topFieldCounts, 8)],
-    ["Champs Data", formatTopEntries(inventory.dataFieldCounts, 8)],
+    ["Top fields", formatTopEntries(inventory.topFieldCounts, 8)],
+    ["Data fields", formatTopEntries(inventory.dataFieldCounts, 8)],
     ["Possession", formatTopEntries(inventory.possessionTypeCounts, 6)],
     ["Score", formatTopEntries(inventory.scoreFieldPaths, 6)],
     ["Stats", formatTopEntries(inventory.statsFieldPaths, 6)],
   ].filter(([, value]) => value);
 
-  els.fullDataStatus.textContent = `${data.recordCount || 0} records conservés pour la suite`;
+  els.fullDataStatus.textContent = `${data.recordCount || 0} records kept for later`;
   els.fullDataGrid.replaceChildren(
     ...items.map(([label, value]) => {
       const item = document.createElement("div");
@@ -392,13 +837,13 @@ function renderLineupTeam(team) {
   const starters = team.starters || [];
   const substitutes = team.substitutes || [];
   section.innerHTML = `
-    <h4>${escapeHtml(team.teamName || "Equipe")}</h4>
-    <p>${starters.length} titulaire(s), ${substitutes.length} remplacant(s)</p>
+    <h4>${escapeHtml(team.teamName || "Team")}</h4>
+    <p>${starters.length} starter(s), ${substitutes.length} substitute(s)</p>
     <div class="lineup-list">
       ${starters.slice(0, 11).map(formatPlayerChip).join("")}
     </div>
     <details>
-      <summary>Remplacants</summary>
+      <summary>Substitutes</summary>
       <div class="lineup-list">${substitutes.map(formatPlayerChip).join("")}</div>
     </details>
   `;
@@ -423,12 +868,12 @@ function formatStats(stats = {}) {
   return teams
     .map((team) => {
       const bits = [
-        team.goals != null ? `${team.goals} buts` : null,
+        team.goals != null ? `${team.goals} goals` : null,
         team.corners != null ? `${team.corners} corners` : null,
-        team.yellowCards != null ? `${team.yellowCards} jaunes` : null,
-        team.redCards != null ? `${team.redCards} rouges` : null,
+        team.yellowCards != null ? `${team.yellowCards} yellow` : null,
+        team.redCards != null ? `${team.redCards} red` : null,
       ].filter(Boolean);
-      return bits.length ? `${team.label || "Equipe"}: ${bits.join(", ")}` : null;
+      return bits.length ? `${team.label || "Team"}: ${bits.join(", ")}` : null;
     })
     .filter(Boolean)
     .join(" / ");
@@ -436,7 +881,7 @@ function formatStats(stats = {}) {
 
 function formatAdditionalTime(items = []) {
   if (!items.length) return null;
-  return items.map((item) => `${item.period || "periode"} +${item.minutes}'`).join(" / ");
+  return items.map((item) => `${item.period || "period"} +${item.minutes}'`).join(" / ");
 }
 
 function formatSourceCounts(sourceCounts = {}) {
@@ -461,10 +906,10 @@ async function loadInterval() {
     limit: "500",
   });
 
-  els.intervalTimeline.innerHTML = `<li class="empty">Chargement de l'intervalle...</li>`;
+  els.intervalTimeline.innerHTML = `<li class="empty">Loading interval...</li>`;
   try {
     const data = await getJson(`/api/scores/interval?${params.toString()}`);
-    renderEvents(els.intervalTimeline, data.events || [], "Aucun moment fort trouve dans cet intervalle.");
+    renderEvents(els.intervalTimeline, data.events || [], "No highlight found in this interval.");
   } catch (error) {
     renderEvents(els.intervalTimeline, [], error.message);
   }
@@ -480,29 +925,29 @@ function startLive() {
 
   state.liveSource = new EventSource(`/api/live/events?${params.toString()}`);
   els.liveStatus.textContent = state.selected?.fixtureId
-    ? `Connecte sur fixture ${state.selected.fixtureId}`
-    : "Connecte sur tous les matchs";
+    ? `Connected to fixture ${state.selected.fixtureId}`
+    : "Connected to all matches";
   els.startLive.disabled = true;
   els.stopLive.disabled = false;
   els.liveFeed.innerHTML = "";
 
   state.liveSource.onopen = () => {
-    els.liveStatus.textContent = "Connecte, en attente d'events";
+    els.liveStatus.textContent = "Connected, waiting for events";
   };
   state.liveSource.addEventListener("score", (event) => {
     const item = JSON.parse(event.data);
     prependLiveEvent(item);
   });
   state.liveSource.addEventListener("heartbeat", () => {
-    els.liveStatus.textContent = "Flux actif";
+    els.liveStatus.textContent = "Stream active";
   });
   state.liveSource.addEventListener("txline_error", (event) => {
-    const message = event.data ? JSON.parse(event.data).detail : "Flux interrompu";
+    const message = event.data ? JSON.parse(event.data).detail : "Stream interrupted";
     prependLiveEvent({ description: message, highlights: ["error"], fixtureId: "-" });
-    els.liveStatus.textContent = "Erreur flux";
+    els.liveStatus.textContent = "Stream error";
   });
   state.liveSource.onerror = () => {
-    els.liveStatus.textContent = "Reconnexion...";
+    els.liveStatus.textContent = "Reconnecting...";
   };
 }
 
@@ -511,7 +956,7 @@ function stopLive() {
     state.liveSource.close();
     state.liveSource = null;
   }
-  els.liveStatus.textContent = "Flux arrete";
+  els.liveStatus.textContent = "Stream stopped";
   els.startLive.disabled = false;
   els.stopLive.disabled = true;
 }
@@ -584,7 +1029,7 @@ function stepReplay() {
   if (!state.replay.playing) return;
   if (state.replay.index >= state.replay.events.length) {
     pauseReplay();
-    els.replayStatus.textContent = `Replay termine (${state.replay.events.length}/${state.replay.events.length}).`;
+    els.replayStatus.textContent = `Replay finished (${state.replay.events.length}/${state.replay.events.length}).`;
     return;
   }
 
@@ -596,7 +1041,7 @@ function stepReplay() {
 function renderReplayFrame() {
   const visibleEvents = state.replay.events.slice(0, state.replay.index);
   const currentEvent = visibleEvents[visibleEvents.length - 1];
-  renderEvents(els.timeline, visibleEvents, "Replay pret.", { currentIndex: visibleEvents.length - 1 });
+  renderEvents(els.timeline, visibleEvents, "Replay ready.", { currentIndex: visibleEvents.length - 1 });
   els.replayProgress.value = String(state.replay.index);
   els.replayStatus.textContent = currentEvent
     ? `${state.replay.index}/${state.replay.events.length} - ${currentEvent.description || currentEvent.action || "Action"}`
@@ -623,15 +1068,15 @@ function resetReplay() {
   state.replay.index = 0;
   els.replayProgress.value = "0";
   els.replayStatus.textContent = state.replay.events.length
-    ? `Replay pret (0/${state.replay.events.length}).`
-    : "Charge une timeline pour lancer le replay.";
-  renderEvents(els.timeline, state.timelineEvents, "Aucune timeline chargee.");
+    ? `Replay ready (0/${state.replay.events.length}).`
+    : "Load a timeline to start the replay.";
+  renderEvents(els.timeline, state.timelineEvents, "No timeline loaded.");
 }
 
 function seekReplay(index) {
   state.replay.index = Math.max(0, Math.min(index, state.replay.events.length));
   if (state.replay.index === 0) {
-    renderEvents(els.timeline, [], "Replay au debut. Appuie sur Play.");
+    renderEvents(els.timeline, [], "Replay at the beginning. Press Play.");
     els.replayStatus.textContent = `0/${state.replay.events.length}`;
     return;
   }
@@ -648,18 +1093,18 @@ function prepareReplay(events, timelineData = null) {
   els.replayProgress.max = String(state.replay.events.length);
   els.replayProgress.value = "0";
   if (!state.replay.events.length) {
-    els.replayStatus.textContent = "Charge une timeline pour lancer le replay.";
+    els.replayStatus.textContent = "Load a timeline to start the replay.";
     return;
   }
 
   const rawCount = timelineData?.rawCount;
   const source =
     timelineData?.resolvedSource && timelineData.resolvedSource !== timelineData.source
-      ? `Source ${timelineData.resolvedSource} utilisee`
+      ? `Source ${timelineData.resolvedSource} used`
       : null;
   els.replayStatus.textContent = [
-    `${state.replay.events.length} action(s) pretes pour le replay`,
-    rawCount != null ? `${rawCount} updates bruts` : null,
+    `${state.replay.events.length} action(s) ready for replay`,
+    rawCount != null ? `${rawCount} raw updates` : null,
     source,
   ]
     .filter(Boolean)
@@ -684,11 +1129,35 @@ async function getJson(url) {
   return body;
 }
 
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body.detail || response.statusText;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return body;
+}
+
+function formatInteger(value) {
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function formatUsd(value) {
+  const abs = Math.abs(value);
+  const digits = abs > 0 && abs < 0.01 ? 6 : abs < 1 ? 4 : 2;
+  return `$${value.toFixed(digits)}`;
+}
+
 function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("fr-FR", {
+  return date.toLocaleString("en-US", {
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -699,18 +1168,44 @@ function formatDate(value) {
 function labelFor(flag) {
   return (
     {
-      goal: "But",
+      goal: "Goal",
       penalty: "Penalty",
-      free_kick: "Coup franc",
+      free_kick: "Free kick",
       corner: "Corner",
-      red_card: "Rouge",
-      yellow_card: "Jaune",
+      red_card: "Red",
+      yellow_card: "Yellow",
       possession: "Possession",
-      discarded: "Annule",
+      discarded: "Void",
       var: "VAR",
-      error: "Erreur",
+      error: "Error",
       update: "Update",
     }[flag] || flag
+  );
+}
+
+function gameKindLabel(kind) {
+  return (
+    {
+      game_created: "Room",
+      colony_created: "Colony",
+      game_started: "Start",
+      opportunity: "Window",
+      vote: "Vote",
+      info: "Info",
+      info_result: "Hint",
+      ant_agent_start: "AI calls",
+      ant_agent_vote: "AI ants",
+      agent_decision: "Agent",
+      prediction: "Prediction",
+      settlement: "Result",
+      observe: "Observe",
+      starvation: "Starvation",
+      hatch: "Hatch",
+      void: "Void",
+      markets_closed: "Closure",
+      game_finished: "Final",
+      game_error: "Error",
+    }[kind] || kind || "Game"
   );
 }
 

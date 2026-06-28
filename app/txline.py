@@ -372,7 +372,7 @@ def normalize_score_record(
     goal_type = clean_text(soccer.get("GoalType")) or clean_text(nested_get(soccer, "New", "GoalType"))
     possession = pick(payload, "possession", "Possession")
     possession_type = clean_text(pick(payload, "possessionType", "possessiontype", "PossessionType"))
-    confirmed = pick(payload, "confirmed", "Confirmed")
+    confirmed = pick(payload, "confirmed", "Confirmedd")
     text_blob = " ".join(
         item
         for item in (
@@ -617,7 +617,7 @@ def build_record_inventory(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
             ("GameState", game_state_counts),
             ("StatusId", status_counts),
             ("CoverageType", coverage_counts),
-            ("Confirmed", confirmed_counts),
+            ("Confirmedd", confirmed_counts),
         ):
             value = pick(record, key, key[:1].lower() + key[1:])
             text = clean_text(value)
@@ -859,41 +859,41 @@ def _event_details(
 ) -> list[str]:
     details: list[str] = []
     if participant_label:
-        details.append(f"Equipe: {participant_label}")
+        details.append(f"Team: {participant_label}")
     if possession_label:
         possession_detail = f"Possession: {possession_label}"
         if possession_type:
             possession_detail += f" ({_humanize_token(possession_type)})"
         details.append(possession_detail)
     elif possession_type:
-        details.append(f"Type possession: {_humanize_token(possession_type)}")
+        details.append(f"Possession type: {_humanize_token(possession_type)}")
     if event_type:
         details.append(f"Type: {_humanize_token(event_type)}")
     if outcome:
-        details.append(f"Resultat: {_humanize_token(outcome)}")
+        details.append(f"Result: {_humanize_token(outcome)}")
     if goal_type:
-        details.append(f"Type but: {_humanize_token(goal_type)}")
+        details.append(f"Goal type: {_humanize_token(goal_type)}")
     if free_kick_type:
-        details.append(f"Coup franc: {_humanize_token(free_kick_type)}")
+        details.append(f"Free kick: {_humanize_token(free_kick_type)}")
     if throw_in_type:
-        details.append(f"Touche: {_humanize_token(throw_in_type)}")
+        details.append(f"Throw-in: {_humanize_token(throw_in_type)}")
     if player:
-        details.append(f"Joueur: {_player_label(player)}")
+        details.append(f"Player: {_player_label(player)}")
     if player_in:
-        details.append(f"Entre: {_player_label(player_in)}")
+        details.append(f"Player in: {_player_label(player_in)}")
     if player_out:
-        details.append(f"Sort: {_player_label(player_out)}")
+        details.append(f"Player out: {_player_label(player_out)}")
     if top_data.get("Minutes") is not None:
-        details.append(f"Temps additionnel: +{top_data['Minutes']} min")
+        details.append(f"Added time: +{top_data['Minutes']} min")
     if confirmed is not None:
-        details.append("Confirme" if as_bool(confirmed) else "En attente confirmation")
+        details.append("Confirmed" if as_bool(confirmed) else "Pending confirmation")
     possible_cards = []
     if "RedCard" in top_data:
-        possible_cards.append(f"rouge={'oui' if as_bool(top_data.get('RedCard')) else 'non'}")
+        possible_cards.append(f"red={'yes' if as_bool(top_data.get('RedCard')) else 'no'}")
     if "YellowCard" in top_data:
-        possible_cards.append(f"jaune={'oui' if as_bool(top_data.get('YellowCard')) else 'non'}")
+        possible_cards.append(f"yellow={'yes' if as_bool(top_data.get('YellowCard')) else 'no'}")
     if "VAR" in top_data:
-        possible_cards.append(f"VAR={'oui' if as_bool(top_data.get('VAR')) else 'non'}")
+        possible_cards.append(f"VAR={'yes' if as_bool(top_data.get('VAR')) else 'no'}")
     if possible_cards:
         details.append("Check possible: " + ", ".join(possible_cards))
     return details
@@ -1026,7 +1026,7 @@ def _latest_match_state(records: list[dict[str, Any]], *, fixture: dict[str, Any
         "possession": possession,
         "possessionLabel": _participant_label(possession, latest, fixture),
         "possessionType": pick(latest, "PossessionType", "possessionType"),
-        "confirmed": pick(latest, "Confirmed", "confirmed"),
+        "confirmed": pick(latest, "Confirmedd", "confirmed"),
         "score": _score_summary(latest_score, fixture=fixture),
         "parti1State": latest.get("Parti1State"),
         "parti2State": latest.get("Parti2State"),
@@ -1094,7 +1094,7 @@ def _mark_discarded_action(event: dict[str, Any], previous: dict[str, Any] | Non
     event["discardedAction"] = previous.get("action") if previous else None
     event["discardedParticipantLabel"] = previous.get("participantLabel") if previous else None
     action_label = _event_title(previous.get("action") if previous else None)
-    bits = ["Action annulee"]
+    bits = ["Action discarded"]
     if action_label:
         bits.append(action_label)
     if previous and previous.get("participantLabel"):
@@ -1154,15 +1154,15 @@ def _event_title(action: str | None) -> str | None:
     if not action:
         return None
     return {
-        "goal": "But",
+        "goal": "Goal",
         "penalty": "Penalty",
-        "free_kick": "Coup franc",
+        "free_kick": "Free kick",
         "corner": "Corner",
         "var": "VAR",
-        "var_end": "Fin VAR",
-        "shot": "Tir",
+        "var_end": "VAR end",
+        "shot": "Shot",
         "possible": "Check possible",
-        "action_discarded": "Action annulee",
+        "action_discarded": "Action discarded",
     }.get(action, _humanize_token(action))
 
 
@@ -1188,18 +1188,18 @@ def _description(
     player_out: dict[str, Any] | None,
 ) -> str:
     label_map = {
-        "goal": "But",
+        "goal": "Goal",
         "penalty": "Penalty",
-        "free_kick": "Coup franc",
+        "free_kick": "Free kick",
         "corner": "Corner",
-        "red_card": "Carton rouge",
-        "yellow_card": "Carton jaune",
+        "red_card": "Red card",
+        "yellow_card": "Yellow card",
         "var": "VAR",
         "possession": "Possession",
-        "discarded": "Action annulee",
-        "substitution": "Changement",
+        "discarded": "Action discarded",
+        "substitution": "Substitution",
         "injury": "Blessure",
-        "additional_time": "Temps additionnel",
+        "additional_time": "Added time",
     }
     title = " / ".join(label_map.get(flag, flag) for flag in flags) if flags else (_event_title(action) or event_type or "Update")
     bits = [title]
@@ -1221,7 +1221,7 @@ def _description(
     if detail_text and detail_text.casefold() not in title.casefold():
         bits.append(detail_text)
     if confirmed is not None:
-        bits.append("confirme" if as_bool(confirmed) else "non confirme")
+        bits.append("confirme" if as_bool(confirmed) else "not confirmed")
     return " - ".join(bits)
 
 

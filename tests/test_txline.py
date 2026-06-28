@@ -93,7 +93,7 @@ class TxLineNormalizationTest(unittest.TestCase):
 
     def test_top_level_participant_data_and_discarded_actions_are_descriptive(self):
         records = [
-            {"FixtureId": 42, "Seq": 1, "Id": 10, "Action": "penalty", "Participant": 2, "Confirmed": True},
+            {"FixtureId": 42, "Seq": 1, "Id": 10, "Action": "penalty", "Participant": 2, "Confirmedd": True},
             {"FixtureId": 42, "Seq": 2, "Id": 10, "Action": "action_discarded"},
             {
                 "FixtureId": 42,
@@ -103,7 +103,7 @@ class TxLineNormalizationTest(unittest.TestCase):
                 "Participant": 1,
                 "Possession": 1,
                 "Data": {"FreeKickType": "Safe"},
-                "Confirmed": True,
+                "Confirmedd": True,
             },
         ]
 
@@ -116,9 +116,9 @@ class TxLineNormalizationTest(unittest.TestCase):
         self.assertEqual(timeline["events"][0]["participantLabel"], "Belgium")
         self.assertIn("Belgium", timeline["events"][0]["description"])
         self.assertEqual(timeline["events"][1]["discardedAction"], "penalty")
-        self.assertIn("Action annulee", timeline["events"][1]["description"])
+        self.assertIn("Action discarded", timeline["events"][1]["description"])
         self.assertIn("free_kick", timeline["events"][2]["highlights"])
-        self.assertIn("Coup franc: Safe", timeline["events"][2]["details"])
+        self.assertIn("Free kick: Safe", timeline["events"][2]["details"])
 
     def test_lineups_enrich_player_ids_and_match_details(self):
         records = [

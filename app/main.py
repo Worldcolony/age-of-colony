@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import json
 from datetime import date, datetime, time, timedelta, timezone
@@ -10,7 +8,11 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
+from .game import GameManager
+from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
+from .game.demo import demo_events, demo_fixtures
 from .txline import (
     TxLineClient,
     TxLineConfigError,
@@ -33,6 +35,39 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Age of Colony TXLine Monitor", version="0.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+game_manager = GameManager(decision_agent=OpenRouterColonyAgent.from_env())
+
+
+class CreateGameRequest(BaseModel):
+    fixtureId: int | str
+    participant1: str | None = None
+    participant2: str | None = None
+    seed: int | None = None
+
+
+class CreateColonyRequest(BaseModel):
+    name: str
+    size: int
+    style: str
+    favoriteContext: str
+    infoNeed: str
+
+
+class StartGameRequest(BaseModel):
+    mode: str = "replay"
+    source: str = "historical"
+
+
+class DemoRunRequest(BaseModel):
+    seed: int | None = None
+
+
+class RunPreviousTxRequest(BaseModel):
+    days: int = 14
+    limit: int = 40
+    competitionId: int | None = None
+    search: str | None = None
+    seed: int | None = None
 
 
 @app.exception_handler(TxLineConfigError)
@@ -68,12 +103,269 @@ async def index() -> FileResponse:
 @app.get("/health")
 async def health() -> dict[str, Any]:
     settings = TxLineSettings.from_env()
+    agent_settings = OpenRouterSettings.from_env()
     return {
         "ok": True,
         "txlineConfigured": settings.configured,
         "baseUrl": settings.base_url,
         "defaultCompetitionId": settings.default_competition_id,
+        "openrouterConfigured": agent_settings.configured,
+        "colonyAgentMode": agent_settings.mode,
+        "colonyAgentModel": agent_settings.model if agent_settings.configured else None,
+        "colonyAgentMaxCallsPerGame": agent_settings.max_calls_per_game,
+        "colonyAgentCallMode": agent_settings.call_mode,
+        "colonyAgentAntBatchSize": agent_settings.ant_batch_size,
+        "colonyAgentMaxParallelAntCalls": agent_settings.max_parallel_ant_calls,
+        "colonyAgentMaxRetries": agent_settings.max_retries,
+        "colonyAgentRetryDelaySeconds": agent_settings.retry_delay_seconds,
+        "colonyAgentPricing": {
+            "inputPerMillionUsd": agent_settings.input_price_per_million_usd,
+            "outputPerMillionUsd": agent_settings.output_price_per_million_usd,
+        },
     }
+
+
+@app.post("/api/games")
+async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
+    room = game_manager.create_room(
+        fixture_id=payload.fixtureId,
+        participant1=payload.participant1,
+        participant2=payload.participant2,
+        seed=payload.seed,
+    )
+    return room.public_state()
+
+
+@app.post("/api/games/{game_id}/colonies")
+async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    try:
+        game_manager.harness(game_id).add_colony(
+            name=payload.name,
+            size=payload.size,
+            style=payload.style,
+            favorite_context=payload.favoriteContext,
+            info_need=payload.infoNeed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return room.public_state()
+
+
+@app.post("/api/games/{game_id}/start")
+async def start_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    _ensure_deepseek_agent()
+    mode = payload.mode.strip().casefold()
+    if mode not in {"replay", "live"}:
+        raise HTTPException(status_code=422, detail="mode must be replay or live")
+    if not room.colonies:
+        raise HTTPException(status_code=422, detail="Add at least one colony before starting the match.")
+    if room.status in {"running_replay", "running_live"}:
+        raise HTTPException(status_code=409, detail="The game is already running.")
+
+    room.mode = mode
+    if mode == "replay":
+        return await _start_replay_room(room, payload)
+
+    if game_id not in game_manager.live_tasks:
+        game_manager.live_tasks[game_id] = asyncio.create_task(_run_live_game(game_id))
+    room.status = "running_live"
+    room.add_log("game_started", "Live game connected to the TXLine stream.", {"mode": "live"})
+    return room.public_state()
+
+
+@app.post("/api/games/{game_id}/rerun")
+async def rerun_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
+    _ensure_deepseek_agent()
+    old_room = _get_game_or_404(game_id)
+    if old_room.status in {"running_replay", "running_live"}:
+        raise HTTPException(status_code=409, detail="Wait for the simulation to finish before rerunning.")
+    if not old_room.colonies:
+        raise HTTPException(status_code=422, detail="Add at least one colony before rerunning.")
+    if payload.mode.strip().casefold() != "replay":
+        raise HTTPException(status_code=422, detail="Rerun supports replay mode only.")
+
+    room = game_manager.create_room(
+        fixture_id=old_room.fixture_id,
+        participant1=old_room.participant1,
+        participant2=old_room.participant2,
+        seed=old_room.seed,
+    )
+    harness = game_manager.harness(room.game_id)
+    for colony in old_room.colonies.values():
+        harness.add_colony(
+            colony.name,
+            colony.size,
+            colony.style,
+            colony.favorite_context,
+            colony.info_need,
+        )
+    room.mode = "replay"
+    return await _start_replay_room(room, payload)
+
+
+@app.get("/api/fixtures/recent")
+async def recent_fixtures(
+    days: int = Query(default=14, ge=1, le=90),
+    limit: int = Query(default=50, ge=1, le=200),
+    competition_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+) -> dict[str, Any]:
+    client = TxLineClient()
+    fixtures = await _recent_past_fixtures(client, days=days, limit=limit, competition_id=competition_id, search=search)
+    return {"mode": "recent", "days": days, "limit": limit, "count": len(fixtures), "fixtures": fixtures}
+
+
+@app.post("/api/games/run-previous")
+async def run_previous_tx_game(payload: RunPreviousTxRequest) -> dict[str, Any]:
+    _ensure_deepseek_agent()
+    client = TxLineClient()
+    fixtures = await _recent_past_fixtures(
+        client,
+        days=max(1, min(payload.days, 90)),
+        limit=max(1, min(payload.limit, 200)),
+        competition_id=payload.competitionId,
+        search=payload.search,
+    )
+    if not fixtures:
+        raise HTTPException(status_code=404, detail="No previous TXLine fixtures found for this search/window.")
+
+    inspected: list[dict[str, Any]] = []
+    for fixture in fixtures:
+        fixture_id = fixture.get("fixtureId")
+        if fixture_id is None:
+            continue
+        try:
+            source_records = await _fetch_score_sources(client, int(fixture_id))
+        except (TypeError, ValueError):
+            continue
+        chosen_source, records = _choose_best_source(source_records)
+        inspected.append(
+            {
+                "fixtureId": fixture_id,
+                "sourceCounts": {name: len(items) for name, items in source_records.items()},
+            }
+        )
+        if not records:
+            continue
+
+        room = game_manager.create_room(
+            fixture_id=fixture_id,
+            participant1=fixture.get("participant1"),
+            participant2=fixture.get("participant2"),
+            seed=payload.seed,
+        )
+        harness = game_manager.harness(room.game_id)
+        harness.add_colony("Red Nest", 10, "cautious", "penalties", "high")
+        harness.add_colony("Amber Swarm", 20, "balanced", "momentum", "medium")
+        harness.add_colony("Black Rush", 50, "aggressive", "chaos", "low")
+        room.mode = "replay"
+        timeline = build_timeline(
+            records,
+            fixture={
+                "fixtureId": fixture_id,
+                "participant1": fixture.get("participant1"),
+                "participant2": fixture.get("participant2"),
+            },
+            important_only=False,
+            include_possession_changes=True,
+            limit=None,
+        )
+        room.add_log(
+            "game_started",
+            f"TXLine replay started on {fixture.get('participant1') or 'Participant 1'} - {fixture.get('participant2') or 'Participant 2'} with {len(timeline['events'])} events.",
+            {
+                "mode": "replay",
+                "source": chosen_source,
+                "rawCount": timeline["rawCount"],
+                "fixture": fixture,
+                "sourceCounts": {name: len(items) for name, items in source_records.items()},
+            },
+        )
+        harness.process_events(timeline["events"])
+        return room.public_state()
+
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "message": "Previous TXLine fixtures were found, but none had score data in historical/updates/snapshot.",
+            "inspected": inspected,
+        },
+    )
+
+
+@app.get("/api/demo/matches")
+async def demo_matches() -> dict[str, Any]:
+    fixtures = demo_fixtures()
+    return {"count": len(fixtures), "fixtures": fixtures}
+
+
+@app.post("/api/demo/run")
+async def demo_run(payload: DemoRunRequest) -> dict[str, Any]:
+    _ensure_deepseek_agent()
+    fixture = demo_fixtures()[0]
+    room = game_manager.create_room(
+        fixture_id=fixture["fixtureId"],
+        participant1=fixture["participant1"],
+        participant2=fixture["participant2"],
+        seed=payload.seed,
+    )
+    harness = game_manager.harness(room.game_id)
+    harness.add_colony("Red Nest", 10, "cautious", "penalties", "high")
+    harness.add_colony("Amber Swarm", 20, "balanced", "momentum", "medium")
+    harness.add_colony("Black Rush", 50, "aggressive", "chaos", "low")
+    room.mode = "replay"
+    events = demo_events(room.fixture_id)
+    room.add_log(
+        "game_started",
+        f"Demo run started on {fixture['participant1']} - {fixture['participant2']} with {len(events)} events.",
+        {"mode": "replay", "source": "demo", "rawCount": len(events)},
+    )
+    harness.process_events(events)
+    return room.public_state()
+
+
+@app.get("/api/games/{game_id}")
+async def game_state(game_id: str) -> dict[str, Any]:
+    return _get_game_or_404(game_id).public_state()
+
+
+@app.get("/api/games/{game_id}/replay")
+async def game_replay(game_id: str) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    return {
+        "game": room.public_state(),
+        "events": [event.public_state() for event in room.log],
+    }
+
+
+@app.get("/api/games/{game_id}/events")
+async def game_events(game_id: str) -> StreamingResponse:
+    room = _get_game_or_404(game_id)
+
+    async def generate() -> AsyncIterator[str]:
+        cursor = 0
+        try:
+            while True:
+                while cursor < len(room.log):
+                    event = room.log[cursor]
+                    cursor += 1
+                    yield _sse("game_event", event.public_state(), event_id=str(event.index))
+                yield _sse("game_state", room.public_state())
+                await asyncio.sleep(0.75)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/fixtures")
@@ -332,6 +624,184 @@ def _choose_best_source(source_records: dict[str, list[dict[str, Any]]]) -> tupl
         if records:
             return source, records
     return "historical", []
+
+
+async def _recent_past_fixtures(
+    client: TxLineClient,
+    *,
+    days: int,
+    limit: int,
+    competition_id: int | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    today = datetime.now(timezone.utc).date()
+    now_ts = datetime.now(timezone.utc).timestamp()
+    fixtures: list[dict[str, Any]] = []
+    seen: set[Any] = set()
+
+    for offset in range(days):
+        day = today - timedelta(days=offset)
+        raw = await client.fixture_snapshot(
+            start_epoch_day=epoch_day_from_date(day),
+            competition_id=competition_id,
+        )
+        normalized = normalize_fixtures(raw, search=search)
+        for fixture in normalized:
+            fixture_id = fixture.get("fixtureId")
+            key = fixture_id if fixture_id is not None else (fixture.get("participant1"), fixture.get("participant2"), fixture.get("startTime"))
+            if key in seen:
+                continue
+            seen.add(key)
+            start_ts = _fixture_start_timestamp(fixture)
+            if start_ts is None or start_ts >= now_ts:
+                continue
+            fixtures.append(fixture)
+        if len(fixtures) >= limit:
+            break
+
+    fixtures.sort(key=lambda item: (_fixture_start_timestamp(item) or 0, str(item.get("fixtureId") or "")), reverse=True)
+    return fixtures[:limit]
+
+
+def _fixture_start_timestamp(fixture: dict[str, Any]) -> float | None:
+    value = fixture.get("startTime")
+    if value is None:
+        return None
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return None
+    if timestamp > 10_000_000_000:
+        timestamp /= 1000
+    return timestamp
+
+
+def _get_game_or_404(game_id: str):
+    room = game_manager.get_room(game_id)
+    if not room:
+        raise HTTPException(status_code=404, detail="Game not found.")
+    return room
+
+
+def _ensure_deepseek_agent() -> None:
+    if not callable(getattr(game_manager.decision_agent, "decide_ants", None)):
+        raise HTTPException(
+            status_code=503,
+            detail="DeepSeek/OpenRouter agent required. Configure OPENROUTER_API_KEY and keep COLONY_AGENT_MODE enabled.",
+        )
+
+
+async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
+    if payload.source == "demo":
+        events = demo_events(room.fixture_id)
+        if not events:
+            raise HTTPException(status_code=422, detail="No demo replay is available for this fixture.")
+        room.add_log(
+            "game_started",
+            f"Demo replay started with {len(events)} normalized events.",
+            {"mode": "replay", "source": "demo", "rawCount": len(events)},
+        )
+        room.status = "running_replay"
+        game_manager.replay_tasks[room.game_id] = asyncio.create_task(_run_replay_game(room.game_id, events))
+        return room.public_state()
+
+    try:
+        fixture_id = int(room.fixture_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Replay mode requires a numeric fixture id.") from exc
+    client = TxLineClient()
+    source_records = await _fetch_score_sources(client, fixture_id)
+    if payload.source not in source_records:
+        raise HTTPException(status_code=422, detail="source must be historical, updates or snapshot")
+    records = source_records[payload.source] or _choose_best_source(source_records)[1]
+    timeline = build_timeline(
+        records,
+        fixture={
+            "fixtureId": room.fixture_id,
+            "participant1": room.participant1,
+            "participant2": room.participant2,
+        },
+        important_only=False,
+        include_possession_changes=True,
+        limit=None,
+    )
+    if not timeline["events"]:
+        raise HTTPException(
+            status_code=422,
+            detail="No TXLine replay event for this match. Use a completed match, Run Previous TX, or Live mode when the match starts.",
+        )
+    room.add_log(
+        "game_started",
+        f"Replay started with {len(timeline['events'])} normalized events.",
+        {"mode": "replay", "source": payload.source, "rawCount": timeline["rawCount"]},
+    )
+    room.status = "running_replay"
+    game_manager.replay_tasks[room.game_id] = asyncio.create_task(_run_replay_game(room.game_id, timeline["events"]))
+    return room.public_state()
+
+
+async def _run_replay_game(game_id: str, events: list[dict[str, Any]]) -> None:
+    room = game_manager.get_room(game_id)
+    if not room:
+        return
+    try:
+        await asyncio.to_thread(game_manager.harness(game_id).process_events, events)
+    except asyncio.CancelledError:
+        room.status = "stopped"
+        raise
+    except Exception as exc:
+        _sync_room_agent_usage(game_id)
+        room.status = "error"
+        room.add_log("game_error", f"Replay interrupted: {exc}", _error_log_data(exc))
+    finally:
+        game_manager.replay_tasks.pop(game_id, None)
+
+
+async def _run_live_game(game_id: str) -> None:
+    room = game_manager.get_room(game_id)
+    if not room:
+        return
+    client = TxLineClient()
+    possession_state: dict[Any, dict[str, Any]] = {}
+    harness = game_manager.harness(game_id)
+    fixture = {
+        "fixtureId": room.fixture_id,
+        "participant1": room.participant1,
+        "participant2": room.participant2,
+    }
+    try:
+        async for event in client.stream_score_events():
+            data = event.get("data")
+            if not isinstance(data, dict):
+                continue
+            normalized = normalize_score_record(data, fixture=fixture)
+            annotate_possession_changes([normalized], possession_state)
+            if str(normalized.get("fixtureId")) != str(room.fixture_id):
+                continue
+            harness.process_event(normalized)
+    except asyncio.CancelledError:
+        room.status = "stopped"
+    except Exception as exc:
+        _sync_room_agent_usage(game_id)
+        room.status = "error"
+        room.add_log("game_error", f"Live stream interrupted: {exc}", _error_log_data(exc))
+    finally:
+        game_manager.live_tasks.pop(game_id, None)
+
+
+def _sync_room_agent_usage(game_id: str) -> None:
+    try:
+        game_manager.harness(game_id)._sync_agent_usage()
+    except Exception:
+        return
+
+
+def _error_log_data(exc: Exception) -> dict[str, Any]:
+    data: dict[str, Any] = {"detail": str(exc)}
+    details = getattr(exc, "details", None)
+    if isinstance(details, list) and details:
+        data["details"] = details
+    return data
 
 
 def _sse(event: str, data: Any, event_id: str | None = None) -> str:
