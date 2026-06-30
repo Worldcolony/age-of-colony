@@ -66,7 +66,7 @@ def _truncate(value: Any, limit: int = 700) -> str:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
-def _message_json(data: dict[str, Any]) -> dict[str, Any]:
+def _message_json(data: dict[str, Any]) -> Any:
     message = (data.get("choices") or [{}])[0].get("message") or {}
     content = message.get("content")
     if isinstance(content, str):
@@ -120,7 +120,20 @@ def describe_agent_exception(exc: Exception) -> dict[str, Any]:
         if exc.details:
             first = exc.details[0]
             if isinstance(first, dict):
-                for key in ("category", "statusCode", "retryable", "responseBody", "contentSnippet"):
+                for key in (
+                    "category",
+                    "statusCode",
+                    "retryable",
+                    "responseBody",
+                    "contentSnippet",
+                    "parsedSnippet",
+                    "parsedType",
+                    "rejectionReason",
+                    "expectedAntIds",
+                    "candidateAntIds",
+                    "finishReason",
+                    "model",
+                ):
                     if key in first:
                         detail[key] = first[key]
             detail["details"] = exc.details[:3]
@@ -432,7 +445,7 @@ class OpenRouterColonyAgent:
                         return parsed[0]
                     raise AgentDecisionError(
                         "DeepSeek did not return a decision for this ant.",
-                        details=[{"category": "missing_ant_decision"}],
+                        details=[_ant_decision_failure_detail(data, [ant])],
                     )
                 except Exception as exc:
                     last_error = exc
@@ -672,6 +685,7 @@ class OpenRouterColonyAgent:
         return payload
 
     def _ant_payload(self, *, stage: str, context: dict[str, Any], ants: list[dict[str, Any]]) -> dict[str, Any]:
+        vote_values = _vote_values_from_context(context)
         if len(ants) == 1:
             max_tokens = min(self.settings.max_tokens, 96)
             response_format = {
@@ -684,7 +698,7 @@ class OpenRouterColonyAgent:
                         "additionalProperties": False,
                         "properties": {
                             "antId": {"type": "string"},
-                            "vote": {"type": "string", "enum": ["yes", "no", "abstain"]},
+                            "vote": {"type": "string", "enum": vote_values},
                         },
                         "required": ["antId", "vote"],
                     },
@@ -710,7 +724,7 @@ class OpenRouterColonyAgent:
                                     "additionalProperties": False,
                                     "properties": {
                                         "antId": {"type": "string"},
-                                        "vote": {"type": "string", "enum": ["yes", "no", "abstain"]},
+                                        "vote": {"type": "string", "enum": vote_values},
                                     },
                                     "required": ["antId", "vote"],
                                 },
@@ -735,11 +749,10 @@ class OpenRouterColonyAgent:
                         "Your job is not to guess what the colony wants: each ant follows its own objective "
                         "and decides whether to help the colony now or preserve its strength. "
                         "Do not return a global decision: return exactly one decision per provided antId. "
-                        "The only allowed output for each ant is vote=yes, vote=no or vote=abstain on the provided market. "
+                        "The only allowed output for each ant is one vote from game.market.availableVotes. "
                         "Do not invent confidence, score, probability, stake or info requests. "
                         "Paid info is disabled for now because paid tools will be added later. "
-                        "Vote yes if you think the market proposition will happen, no if you think it will not happen, "
-                        "abstain if you do not want to commit this ant to this market. "
+                        "Use abstain only if you do not want to commit this ant to this market. "
                         "Ants may disagree. JSON only, no explanation."
                     ),
                 },
@@ -756,6 +769,12 @@ class OpenRouterColonyAgent:
 
     def _parse_decision(self, stage: str, data: dict[str, Any], context: dict[str, Any]) -> ColonyAgentDecision:
         parsed = _message_json(data)
+
+        if not isinstance(parsed, dict):
+            raise AgentDecisionError(
+                "DeepSeek returned a JSON value that is not an object.",
+                details=[_assistant_shape_failure_detail(data, parsed)],
+            )
 
         option_ids = {option.get("optionId") for option in context.get("opportunity", {}).get("options", [])}
         action = parsed.get("action") if parsed.get("action") in {"predict", "observe"} else "observe"
@@ -787,14 +806,7 @@ class OpenRouterColonyAgent:
         allowed_ant_ids = {str(ant.get("antId")) for ant in ants}
         decisions: list[AntAgentDecision] = []
         seen: set[str] = set()
-        items = parsed.get("antDecisions")
-        if not isinstance(items, list):
-            if isinstance(parsed.get("antDecision"), dict):
-                items = [parsed["antDecision"]]
-            elif parsed.get("antId") and (parsed.get("vote") or parsed.get("action") or parsed.get("choice")):
-                items = [parsed]
-            else:
-                items = []
+        items = _candidate_ant_decision_items(parsed)
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -818,6 +830,70 @@ class OpenRouterColonyAgent:
                 )
             )
         return decisions
+
+
+def _candidate_ant_decision_items(parsed: Any) -> list[Any]:
+    if isinstance(parsed, list):
+        return parsed
+    if not isinstance(parsed, dict):
+        return []
+    items = parsed.get("antDecisions")
+    if isinstance(items, list):
+        return items
+    if isinstance(parsed.get("antDecision"), dict):
+        return [parsed["antDecision"]]
+    if parsed.get("antId") and (parsed.get("vote") or parsed.get("action") or parsed.get("choice")):
+        return [parsed]
+    return []
+
+
+def _ant_decision_failure_detail(data: dict[str, Any], ants: list[dict[str, Any]]) -> dict[str, Any]:
+    expected_ant_ids = [str(ant.get("antId") or "") for ant in ants]
+    detail: dict[str, Any] = {
+        "category": "missing_ant_decision",
+        "expectedAntIds": expected_ant_ids,
+        "model": data.get("model"),
+    }
+    choice = (data.get("choices") or [{}])[0]
+    if isinstance(choice, dict):
+        if choice.get("finish_reason"):
+            detail["finishReason"] = choice.get("finish_reason")
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            detail["contentSnippet"] = _truncate(content, 1600)
+        elif content is not None:
+            detail["contentSnippet"] = _truncate(json.dumps(content, ensure_ascii=False, separators=(",", ":")), 1600)
+
+    parsed = _message_json(data)
+    detail["parsedType"] = type(parsed).__name__
+    if isinstance(parsed, dict):
+        detail["parsedKeys"] = sorted(str(key) for key in parsed.keys())[:20]
+    detail["parsedSnippet"] = _truncate(json.dumps(parsed, ensure_ascii=False, separators=(",", ":")), 1600)
+
+    candidates = [item for item in _candidate_ant_decision_items(parsed) if isinstance(item, dict)]
+    detail["candidateCount"] = len(candidates)
+    if candidates:
+        candidate_ant_ids = [str(item.get("antId") or "") for item in candidates]
+        detail["candidateAntIds"] = candidate_ant_ids[:20]
+        if not any(ant_id in expected_ant_ids for ant_id in candidate_ant_ids):
+            detail["rejectionReason"] = "unexpected_ant_id"
+    else:
+        detail["rejectionReason"] = "no_ant_decision_object"
+    return detail
+
+
+def _assistant_shape_failure_detail(data: dict[str, Any], parsed: Any) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "category": "invalid_assistant_shape",
+        "parsedType": type(parsed).__name__,
+        "parsedSnippet": _truncate(json.dumps(parsed, ensure_ascii=False, separators=(",", ":")), 1600),
+        "model": data.get("model"),
+    }
+    choice = (data.get("choices") or [{}])[0]
+    if isinstance(choice, dict) and choice.get("finish_reason"):
+        detail["finishReason"] = choice.get("finish_reason")
+    return detail
 
 
 def _parse_squad_votes(value: Any, option_ids: set[Any]) -> list[dict[str, Any]]:
@@ -853,20 +929,35 @@ def _normalize_call_mode(value: str | None) -> str:
 def _vote_map_from_context(context: dict[str, Any]) -> dict[str, Any]:
     market = context.get("market")
     if isinstance(market, dict):
-        parsed = {
-            "yes": market.get("yesOptionId"),
-            "no": market.get("noOptionId"),
-            "abstain": None,
-        }
+        available_votes = market.get("availableVotes")
+        if isinstance(available_votes, list):
+            parsed = {
+                str(item.get("vote")): item.get("optionId")
+                for item in available_votes
+                if isinstance(item, dict) and item.get("vote")
+            }
+            if parsed:
+                return parsed
+        parsed = {"yes": market.get("yesOptionId"), "no": market.get("noOptionId"), "abstain": None}
         if parsed:
             return parsed
 
     option_ids = [option.get("optionId") for option in context.get("opportunity", {}).get("options", [])]
-    return {
-        "yes": option_ids[0] if len(option_ids) >= 1 else None,
-        "no": option_ids[1] if len(option_ids) >= 2 else None,
-        "abstain": None,
-    }
+    if len(option_ids) <= 2:
+        return {
+            "yes": option_ids[0] if len(option_ids) >= 1 else None,
+            "no": option_ids[1] if len(option_ids) >= 2 else None,
+            "abstain": None,
+        }
+    parsed = {f"option_{chr(97 + index)}": option_id for index, option_id in enumerate(option_ids)}
+    parsed["abstain"] = None
+    return parsed
+
+
+def _vote_values_from_context(context: dict[str, Any]) -> list[str]:
+    vote_map = _vote_map_from_context(context)
+    values = [vote for vote in vote_map if vote and vote != "None"]
+    return values or ["yes", "no", "abstain"]
 
 
 def _normalize_vote(value: Any) -> str | None:
@@ -877,6 +968,12 @@ def _normalize_vote(value: Any) -> str | None:
         return "yes"
     if vote in {"no", "non", "n"}:
         return "no"
+    if vote in {"option_a", "option a", "team_a", "team a"}:
+        return "option_a"
+    if vote in {"option_b", "option b", "team_b", "team b"}:
+        return "option_b"
+    if vote in {"option_c", "option c", "none", "no_goal", "no goal"}:
+        return "option_c"
     if vote in {"abstain", "abstention", "neutral", "neutre", "skip"}:
         return "abstain"
     if vote == "a":

@@ -6,13 +6,15 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
-from app.main import app
+from app.main import app, _pick_live_target_fixture
 from app.game.harness import (
     GameHarness,
     GameManager,
     LARVAE_INCUBATION_EVENTS,
     build_info_packet,
     build_opportunity,
+    build_opportunities,
+    create_prediction,
     food_drain_for_colony,
     info_cost_for_colony,
     run_vote,
@@ -89,14 +91,14 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertIsNotNone(opportunity)
         self.assertEqual(opportunity.context, "penalties")
-        self.assertEqual(opportunity.info_cost, 5)
+        self.assertEqual(opportunity.info_cost, 8)
         labels = {option.label: option.multiplier for option in opportunity.options}
         self.assertEqual(labels["yes, penalty scored"], 1.35)
-        self.assertEqual(labels["no, no goal"], 4.0)
+        self.assertEqual(labels["no, missed or saved"], 5.5)
 
-    def test_pressure_event_creates_one_next_five_yes_no_market(self):
+    def test_pressure_event_creates_safe_precision_and_chaos_markets(self):
         room, _ = self.make_room()
-        opportunity = build_opportunity(
+        opportunities = build_opportunities(
             {
                 "fixtureId": 42,
                 "seq": 1,
@@ -113,14 +115,30 @@ class GameHarnessTest(unittest.TestCase):
             room.match_state,
         )
 
-        self.assertIsNotNone(opportunity)
-        self.assertEqual(opportunity.context, "next_5")
-        self.assertEqual([option.option_id for option in opportunity.options], [
-            "goal_next_5_yes",
-            "goal_next_5_no",
+        self.assertEqual([opportunity.context for opportunity in opportunities], ["goal_next_10", "next_goal_team", "next_foul"])
+        goal_market = opportunities[0]
+        precision_market = opportunities[1]
+        foul_market = opportunities[2]
+        self.assertEqual([option.option_id for option in goal_market.options], [
+            "goal_next_10_yes",
+            "goal_next_10_no",
         ])
-        self.assertEqual(opportunity.options[0].label, "yes, France goal in the next 5 min")
-        self.assertEqual(opportunity.options[1].label, "no, no France goal in the next 5 min")
+        self.assertEqual(goal_market.options[0].label, "yes, goal in the next 10 min")
+        self.assertEqual(goal_market.options[1].label, "no goal in the next 10 min")
+        self.assertEqual([option.option_id for option in precision_market.options], [
+            "next_goal_p1",
+            "next_goal_p2",
+            "next_goal_none",
+        ])
+        self.assertEqual(precision_market.options[0].label, "France scores the next goal")
+        self.assertEqual(precision_market.options[1].label, "Belgium scores the next goal")
+        self.assertEqual(precision_market.options[2].label, "no goal before the deadline")
+        self.assertEqual([option.option_id for option in foul_market.options], [
+            "next_foul_p1",
+            "next_foul_p2",
+        ])
+        self.assertEqual(foul_market.options[0].label, "yes, France commits the next foul")
+        self.assertEqual(foul_market.options[1].label, "no, Belgium commits the next foul")
 
     def test_user_config_creates_diverse_ant_distribution(self):
         _, harness = self.make_room()
@@ -135,10 +153,37 @@ class GameHarnessTest(unittest.TestCase):
         archetypes = {ant.archetype for ant in colony.ants}
 
         self.assertEqual(len(colony.ants), 50)
+        self.assertEqual(colony.ants[0].ant_id, "ant_0000")
+        self.assertEqual(colony.ants[-1].ant_id, "ant_0049")
+        self.assertTrue(all(not ant.ant_id.startswith(colony.colony_id) for ant in colony.ants))
         self.assertIn("cautious", archetypes)
         self.assertIn("data_first", archetypes)
         self.assertGreater(len(archetypes), 3)
         self.assertTrue(any(ant.risk_appetite > 0.55 for ant in colony.ants))
+
+    def test_open_bets_do_not_block_future_votes(self):
+        _, harness = self.make_room()
+        colony = harness.add_colony(
+            name="Risk Nest",
+            size=10,
+            style="balanced",
+            favorite_context="momentum",
+            info_need="medium",
+        )
+        colony.ants[0].engaged_prediction_ids.add("pred_open")
+        colony.ants[1].wounded_until_event = 2
+        colony.ants[2].alive = False
+
+        active_ids = [ant.ant_id for ant in colony.active_ants(1)]
+        public = colony.public_state(1)
+
+        self.assertIn("ant_0000", active_ids)
+        self.assertNotIn("ant_0001", active_ids)
+        self.assertNotIn("ant_0002", active_ids)
+        self.assertEqual(public["antsAlive"], 9)
+        self.assertEqual(public["antsActive"], 8)
+        self.assertEqual(public["antsEngaged"], 1)
+        self.assertEqual(public["antsWounded"], 1)
 
     def test_legacy_french_config_values_are_normalized(self):
         _, harness = self.make_room()
@@ -153,6 +198,26 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(colony.style, "balanced")
         self.assertEqual(colony.favorite_context, "balanced")
         self.assertEqual(colony.info_need, "medium")
+
+    def test_room_players_and_strategy_updates_are_public(self):
+        room, harness = self.make_room()
+        player = harness.join_player(" Tanguy ")
+        colony = harness.add_colony("Lobby Nest", 20, "balanced", "momentum", "medium")
+
+        harness.update_colony_strategy(
+            colony.colony_id,
+            style="aggressive",
+            favorite_context="chaos",
+            info_need="low",
+        )
+        public = room.public_state()
+
+        self.assertEqual(public["players"], [{"playerId": player.player_id, "name": "Tanguy"}])
+        self.assertEqual(public["colonies"][0]["style"], "aggressive")
+        self.assertEqual(public["colonies"][0]["favoriteContext"], "chaos")
+        self.assertEqual(public["colonies"][0]["infoNeed"], "low")
+        self.assertTrue(any(event.kind == "player_joined" for event in room.log))
+        self.assertTrue(any(event.kind == "strategy_updated" for event in room.log))
 
     def test_info_high_colony_buys_one_shared_info_packet(self):
         room, harness = self.make_room()
@@ -169,7 +234,7 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertTrue(should_buy_info(colony, opportunity, vote))
         packet = build_info_packet(opportunity, colony, room.match_state)
-        self.assertEqual(packet.cost, 5)
+        self.assertEqual(packet.cost, 8)
         self.assertIn("involved player: Mbappe", packet.facts)
         opportunity.info_bought_by.add(colony.colony_id)
         self.assertFalse(should_buy_info(colony, opportunity, vote))
@@ -181,9 +246,48 @@ class GameHarnessTest(unittest.TestCase):
         medium = harness.add_colony("Medium", 20, "cautious", "penalties", "high")
         large = harness.add_colony("Large", 50, "cautious", "penalties", "high")
 
-        self.assertEqual(info_cost_for_colony(small, opportunity), 1)
-        self.assertEqual(info_cost_for_colony(medium, opportunity), 2)
-        self.assertEqual(info_cost_for_colony(large, opportunity), 5)
+        self.assertEqual(info_cost_for_colony(small, opportunity), 2)
+        self.assertEqual(info_cost_for_colony(medium, opportunity), 3)
+        self.assertEqual(info_cost_for_colony(large, opportunity), 8)
+
+    def test_colony_style_changes_default_stake_size(self):
+        room, harness = self.make_room()
+        opportunity = build_opportunity(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            1,
+            room.match_state,
+        )
+        cautious = harness.add_colony("Careful", 50, "cautious", "momentum", "medium")
+        aggressive = harness.add_colony("Bold", 50, "aggressive", "momentum", "medium")
+
+        def vote_for(colony):
+            votes = [{"antId": ant.ant_id, "vote": "yes", "weight": 1.0} for ant in colony.active_ants(1)[:20]]
+            return {
+                "activeCount": 50,
+                "predictions": {
+                    "goal_next_10_yes": votes,
+                    "goal_next_10_no": [],
+                },
+                "infoRequests": [],
+            }
+
+        cautious_prediction = create_prediction(cautious, opportunity, vote_for(cautious), 1, bought_info=False)
+        aggressive_prediction = create_prediction(aggressive, opportunity, vote_for(aggressive), 1, bought_info=False)
+
+        self.assertIsNotNone(cautious_prediction)
+        self.assertIsNotNone(aggressive_prediction)
+        self.assertLess(len(cautious_prediction.ant_ids), len(aggressive_prediction.ant_ids))
 
     def test_food_drain_uses_alive_ants_not_starting_size(self):
         _, harness = self.make_room()
@@ -194,7 +298,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(len(colony.alive_ants), 10)
         self.assertEqual(food_drain_for_colony(colony), 1)
 
-    def test_late_pressure_event_does_not_create_next_five_market(self):
+    def test_late_pressure_event_can_create_goal_next_ten_market_for_stoppage_time(self):
         room, _ = self.make_room()
         opportunity = build_opportunity(
             {
@@ -213,7 +317,103 @@ class GameHarnessTest(unittest.TestCase):
             room.match_state,
         )
 
-        self.assertIsNone(opportunity)
+        self.assertIsNotNone(opportunity)
+        self.assertEqual(opportunity.context, "goal_next_10")
+        self.assertEqual(opportunity.deadline_clock, 5940)
+
+    def test_precision_market_resolves_on_next_goal_team(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_b"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Precision Nest", 20, "balanced", "momentum", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 60,
+                "clockSeconds": 3600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+        precision_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.option.option_id == "next_goal_p2"
+        ]
+        self.assertTrue(precision_predictions)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "goal",
+                "highlights": ["goal"],
+                "minute": 63,
+                "clockSeconds": 3780,
+                "participant": 2,
+                "participantLabel": "Belgium",
+                "score": {"participant1": 0, "participant2": 1},
+                "confirmed": True,
+                "description": "Goal - Belgium - confirmed",
+            }
+        )
+
+        self.assertTrue(precision_predictions[0].resolved)
+        self.assertGreaterEqual(colony.memory.wins, 1)
+        self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
+
+    def test_next_foul_market_resolves_on_first_foul_team(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Foul Nest", 20, "balanced", "chaos", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 60,
+                "clockSeconds": 3600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+        foul_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.option.option_id == "next_foul_p2"
+        ]
+        self.assertTrue(foul_predictions)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "foul",
+                "highlights": ["foul"],
+                "minute": 61,
+                "clockSeconds": 3660,
+                "participant": 2,
+                "participantLabel": "Belgium",
+                "description": "Foul - Belgium",
+            }
+        )
+
+        self.assertTrue(foul_predictions[0].resolved)
+        self.assertGreaterEqual(colony.memory.wins, 1)
+        self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
 
     def test_successful_prediction_adds_food_and_larvae(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
@@ -406,6 +606,75 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertFalse(any(event.kind == "ant_agent_fallback" for event in room.log))
 
+    def test_replay_finishes_with_two_and_three_colonies(self):
+        def vote_for_market(ant, context):
+            if context["market"]["context"] == "next_goal_team":
+                return "option_a"
+            return "yes"
+
+        colony_configs = [
+            ("A", 10, "balanced", "momentum", "medium"),
+            ("B", 10, "cautious", "penalties", "high"),
+            ("C", 10, "aggressive", "chaos", "low"),
+        ]
+        events = [
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "goal",
+                "highlights": ["goal"],
+                "minute": 11,
+                "clockSeconds": 660,
+                "participant": 1,
+                "participantLabel": "France",
+                "score": {"participant1": 1, "participant2": 0},
+                "confirmed": True,
+                "description": "Goal - France - confirmed",
+            },
+            {
+                "fixtureId": 42,
+                "seq": 3,
+                "action": "foul",
+                "highlights": ["foul"],
+                "minute": 12,
+                "clockSeconds": 720,
+                "participant": 1,
+                "participantLabel": "France",
+                "description": "Foul - France",
+            },
+        ]
+
+        for colony_count in (2, 3):
+            with self.subTest(colony_count=colony_count):
+                agent = FakeDeepSeekAntAgent(vote_for_market)
+                manager = GameManager(decision_agent=agent)
+                room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+                harness = manager.harness(room.game_id)
+                for config in colony_configs[:colony_count]:
+                    harness.add_colony(*config)
+
+                harness.process_events(events)
+
+                self.assertEqual(room.status, "finished")
+                self.assertEqual(len(room.public_state()["colonies"]), colony_count)
+                self.assertFalse([prediction for prediction in room.predictions.values() if not prediction.resolved])
+                self.assertEqual(len(agent.calls), colony_count * 3)
+                self.assertEqual(len([event for event in room.log if event.kind == "ant_agent_vote"]), colony_count * 3)
+                self.assertEqual(len([event for event in room.log if event.kind == "settlement"]), colony_count * 3)
+
     def test_finish_voids_open_predictions_and_clears_markets(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
@@ -476,13 +745,17 @@ class GameHarnessTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(len(agent.calls), 1)
+        self.assertEqual(len(agent.calls), 3)
+        self.assertEqual([call["context"]["market"]["context"] for call in agent.calls], ["goal_next_10", "next_goal_team", "next_foul"])
+        self.assertEqual(agent.calls[0]["context"]["colony"]["style"], "balanced")
+        self.assertEqual(agent.calls[0]["context"]["colony"]["favoriteContext"], "momentum")
+        self.assertEqual(agent.calls[0]["context"]["colony"]["infoNeed"], "medium")
         self.assertEqual(agent.calls[0]["context"]["market"]["availableVotes"][0]["vote"], "yes")
         self.assertIn("objective", agent.calls[0]["ants"][0])
         self.assertIn("personality", agent.calls[0]["ants"][0])
         self.assertIn("memory", agent.calls[0]["ants"][0])
         self.assertTrue(any(event.kind == "ant_agent_vote" for event in room.log))
-        self.assertTrue(any(prediction.option.option_id == "goal_next_5_yes" for prediction in room.predictions.values()))
+        self.assertTrue(any(prediction.option.option_id == "goal_next_10_yes" for prediction in room.predictions.values()))
         self.assertFalse(any(event.kind == "agent_decision" for event in room.log))
 
     def test_deepseek_ant_agent_votes_do_not_buy_info(self):
@@ -621,6 +894,36 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(schema["required"], ["antId", "vote"])
         self.assertNotIn("reason", schema["properties"])
 
+    def test_openrouter_ant_payload_uses_dynamic_market_vote_schema(self):
+        agent = OpenRouterColonyAgent(
+            OpenRouterSettings(api_key="test-key", model="deepseek/deepseek-v4-flash", max_tokens=1200)
+        )
+
+        payload = agent._ant_payload(
+            stage="pre_info",
+            context={
+                "market": {
+                    "availableVotes": [
+                        {"vote": "option_a", "optionId": "next_goal_p1"},
+                        {"vote": "option_b", "optionId": "next_goal_p2"},
+                        {"vote": "option_c", "optionId": "next_goal_none"},
+                        {"vote": "abstain", "optionId": None},
+                    ]
+                },
+                "opportunity": {
+                    "options": [
+                        {"optionId": "next_goal_p1"},
+                        {"optionId": "next_goal_p2"},
+                        {"optionId": "next_goal_none"},
+                    ]
+                },
+            },
+            ants=[{"antId": "ant_1"}],
+        )
+
+        vote_schema = payload["response_format"]["json_schema"]["schema"]["properties"]["vote"]
+        self.assertEqual(vote_schema["enum"], ["option_a", "option_b", "option_c", "abstain"])
+
     def test_openrouter_per_ant_error_keeps_provider_details(self):
         agent = OpenRouterColonyAgent(
             OpenRouterSettings(
@@ -712,6 +1015,94 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(detail["antId"], "ant_1")
         self.assertIn("contentSnippet", detail)
         self.assertIn("broken", detail["contentSnippet"])
+
+    def test_openrouter_missing_ant_decision_keeps_parsed_response_snippet(self):
+        agent = OpenRouterColonyAgent(
+            OpenRouterSettings(
+                api_key="test-key",
+                model="deepseek/deepseek-v4-flash",
+                call_mode="per_ant",
+                max_parallel_ant_calls=1,
+                max_calls_per_game=10,
+                max_retries=0,
+            )
+        )
+
+        def fake_call(*, stage, context, ants):
+            return {
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": {
+                                "vote": "yes",
+                            }
+                        },
+                    }
+                ],
+            }
+
+        agent._call_openrouter_ants = fake_call
+        with self.assertRaises(AgentDecisionError) as raised:
+            agent.decide_ants(
+                game_id="game-test",
+                stage="pre_info",
+                context={
+                    "market": {"yesOptionId": "penalty_goal", "noOptionId": "penalty_no_goal"},
+                    "opportunity": {"options": [{"optionId": "penalty_goal"}, {"optionId": "penalty_no_goal"}]},
+                },
+                ants=[{"antId": "ant_1"}],
+            )
+
+        detail = raised.exception.details[0]
+        self.assertEqual(detail["category"], "missing_ant_decision")
+        self.assertEqual(detail["antId"], "ant_1")
+        self.assertEqual(detail["finishReason"], "stop")
+        self.assertEqual(detail["expectedAntIds"], ["ant_1"])
+        self.assertEqual(detail["rejectionReason"], "no_ant_decision_object")
+        self.assertIn('"vote":"yes"', detail["parsedSnippet"])
+
+    def test_openrouter_single_ant_top_level_array_is_parsed(self):
+        agent = OpenRouterColonyAgent(
+            OpenRouterSettings(
+                api_key="test-key",
+                model="deepseek/deepseek-v4-flash",
+                call_mode="per_ant",
+                max_parallel_ant_calls=1,
+                max_calls_per_game=10,
+                max_retries=0,
+            )
+        )
+
+        def fake_call(*, stage, context, ants):
+            return {
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": '[{"antId":"ant_1","vote":"yes"}]',
+                        },
+                    }
+                ],
+            }
+
+        agent._call_openrouter_ants = fake_call
+        decisions = agent.decide_ants(
+            game_id="game-test",
+            stage="pre_info",
+            context={
+                "market": {"yesOptionId": "penalty_goal", "noOptionId": "penalty_no_goal"},
+                "opportunity": {"options": [{"optionId": "penalty_goal"}, {"optionId": "penalty_no_goal"}]},
+            },
+            ants=[{"antId": "ant_1"}],
+        )
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].ant_id, "ant_1")
+        self.assertEqual(decisions[0].vote, "yes")
+        self.assertEqual(decisions[0].option_id, "penalty_goal")
 
     def test_openrouter_usage_accumulates_deepseek_cost(self):
         agent = OpenRouterColonyAgent(
@@ -808,7 +1199,7 @@ class GameHarnessTest(unittest.TestCase):
                             "content": {
                                 "action": "predict",
                                 "buyInfo": False,
-                                "optionId": "goal_next_5_yes",
+                                "optionId": "goal_next_10_yes",
                                 "stakeFraction": 0.25,
                                 "confidence": 0.72,
                                 "reason": "Momentum supports a small attack.",
@@ -825,7 +1216,7 @@ class GameHarnessTest(unittest.TestCase):
                                         "squad": "momentum",
                                         "ants": 35,
                                         "action": "predict",
-                                        "optionId": "goal_next_5_yes",
+                                        "optionId": "goal_next_10_yes",
                                         "confidence": 0.76,
                                         "reason": "pressure rising",
                                     },
@@ -838,20 +1229,97 @@ class GameHarnessTest(unittest.TestCase):
             {
                 "opportunity": {
                     "options": [
-                        {"optionId": "goal_next_5_yes"},
-                        {"optionId": "goal_next_5_no"},
+                        {"optionId": "goal_next_10_yes"},
+                        {"optionId": "goal_next_10_no"},
                     ]
                 }
             },
         )
 
         self.assertEqual(decision.source, "openrouter")
-        self.assertEqual(decision.option_id, "goal_next_5_yes")
+        self.assertEqual(decision.option_id, "goal_next_10_yes")
         self.assertEqual(len(decision.squad_votes), 2)
         self.assertEqual(decision.public_state()["squadVotes"][1]["squad"], "momentum")
 
 
 class DemoRunApiTest(unittest.TestCase):
+    def test_live_target_prefers_current_match_then_next_fixture(self):
+        now = datetime(2026, 7, 1, 18, 0, tzinfo=timezone.utc)
+        current, kind = _pick_live_target_fixture(
+            [
+                {"fixtureId": 1, "startTime": int((now + timedelta(minutes=20)).timestamp())},
+                {"fixtureId": 2, "startTime": int((now - timedelta(minutes=35)).timestamp())},
+            ],
+            now=now,
+        )
+        self.assertEqual(kind, "current")
+        self.assertEqual(current["fixtureId"], 2)
+
+        next_fixture, next_kind = _pick_live_target_fixture(
+            [
+                {"fixtureId": 3, "startTime": int((now + timedelta(minutes=40)).timestamp())},
+                {"fixtureId": 4, "startTime": int((now + timedelta(minutes=10)).timestamp())},
+            ],
+            now=now,
+        )
+        self.assertEqual(next_kind, "next")
+        self.assertEqual(next_fixture["fixtureId"], 4)
+
+    def test_live_target_endpoint_returns_one_match(self):
+        class FakeTxLineClient:
+            async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
+                start = int((datetime.now(timezone.utc) - timedelta(minutes=20)).timestamp())
+                return [
+                    {
+                        "FixtureId": 555,
+                        "StartTime": start,
+                        "Competition": "World Cup Live",
+                        "CompetitionId": competition_id or 72,
+                        "Participant1": "Japan",
+                        "Participant2": "Brazil",
+                    }
+                ]
+
+        client = TestClient(app)
+        with patch("app.main.TxLineClient", FakeTxLineClient):
+            response = client.get("/api/fixtures/live-target?days=1")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "current")
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["fixture"]["fixtureId"], 555)
+        self.assertEqual(len(payload["fixtures"]), 1)
+
+    def test_room_setup_api_supports_join_and_strategy_patch(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={"fixtureId": 4242, "participant1": "Portugal", "participant2": "Brazil", "seed": 17},
+        ).json()
+
+        joined = client.post(f"/api/games/{created['gameId']}/players", json={"name": "Alice"})
+        self.assertEqual(joined.status_code, 200)
+        self.assertEqual(joined.json()["players"][0]["name"], "Alice")
+
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={"name": "A", "size": 20, "style": "balanced", "favoriteContext": "momentum", "infoNeed": "medium"},
+        )
+        self.assertEqual(colony_response.status_code, 200)
+        colony_id = colony_response.json()["colonies"][0]["colonyId"]
+
+        strategy_response = client.patch(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/strategy",
+            json={"style": "cautious", "favoriteContext": "penalties", "infoNeed": "high"},
+        )
+        self.assertEqual(strategy_response.status_code, 200)
+        game = strategy_response.json()
+        self.assertEqual(game["players"][0]["name"], "Alice")
+        self.assertEqual(game["colonies"][0]["style"], "cautious")
+        self.assertEqual(game["colonies"][0]["favoriteContext"], "penalties")
+        self.assertEqual(game["colonies"][0]["infoNeed"], "high")
+
     def test_demo_run_requires_deepseek_agent(self):
         client = TestClient(app)
 

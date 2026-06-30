@@ -1,4 +1,5 @@
 const state = {
+  role: "user",
   fixtures: [],
   selected: null,
   game: {
@@ -6,14 +7,24 @@ const state = {
     stream: null,
     events: [],
     colonyCount: 0,
+    players: [],
+    coloniesById: {},
+    strategyDrafts: {},
     status: null,
     activeOpportunities: [],
     agentUsage: null,
   },
 };
 
+const ADMIN_REPLAY_DAYS = "14";
+const ADMIN_REPLAY_LIMIT = "150";
+const USER_LIVE_DAYS = "14";
+const USER_LIVE_LIMIT = "100";
+
 const els = {
   healthBadge: document.querySelector("#healthBadge"),
+  modeUser: document.querySelector("#modeUser"),
+  modeAdmin: document.querySelector("#modeAdmin"),
   fixtureCount: document.querySelector("#fixtureCount"),
   refreshFixtures: document.querySelector("#refreshFixtures"),
   fixtureFilters: document.querySelector("#fixtureFilters"),
@@ -22,6 +33,11 @@ const els = {
   fixtureDate: document.querySelector("#fixtureDate"),
   competitionId: document.querySelector("#competitionId"),
   fixtureSearch: document.querySelector("#fixtureSearch"),
+  liveMatchTarget: document.querySelector("#liveMatchTarget"),
+  liveMatchStatus: document.querySelector("#liveMatchStatus"),
+  liveMatchTitle: document.querySelector("#liveMatchTitle"),
+  liveMatchMeta: document.querySelector("#liveMatchMeta"),
+  participateMatch: document.querySelector("#participateMatch"),
   fixturesBody: document.querySelector("#fixturesBody"),
   selectedTitle: document.querySelector("#selectedTitle"),
   selectedMeta: document.querySelector("#selectedMeta"),
@@ -29,9 +45,15 @@ const els = {
   manualFixture: document.querySelector("#manualFixture"),
   manualFixtureId: document.querySelector("#manualFixtureId"),
   createGame: document.querySelector("#createGame"),
+  startGameLive: document.querySelector("#startGameLive"),
   startGameReplay: document.querySelector("#startGameReplay"),
-  rerunGame: document.querySelector("#rerunGame"),
   gameStatus: document.querySelector("#gameStatus"),
+  setupSteps: document.querySelector("#setupSteps"),
+  roomCode: document.querySelector("#roomCode"),
+  joinRoomForm: document.querySelector("#joinRoomForm"),
+  playerName: document.querySelector("#playerName"),
+  joinRoom: document.querySelector("#joinRoom"),
+  playerList: document.querySelector("#playerList"),
   simulationStatus: document.querySelector("#simulationStatus"),
   simulationStats: document.querySelector("#simulationStats"),
   agentCost: document.querySelector("#agentCost"),
@@ -52,12 +74,14 @@ els.fixtureDate.value = today;
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
-  updateFixtureFilterState();
+  applyWorkspaceRole("user", { load: false });
   await checkHealth();
   await loadFixtures();
 });
 
 function bindEvents() {
+  els.modeUser.addEventListener("click", () => applyWorkspaceRole("user"));
+  els.modeAdmin.addEventListener("click", () => applyWorkspaceRole("admin"));
   els.refreshFixtures.addEventListener("click", loadFixtures);
   els.fixtureFilters.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -78,16 +102,47 @@ function bindEvents() {
     selectFixture({ fixtureId, participant1: null, participant2: null, competition: "Manual" });
   });
   els.createGame.addEventListener("click", createGame);
+  els.participateMatch.addEventListener("click", participateInMatch);
+  els.startGameLive.addEventListener("click", startGameLive);
   els.startGameReplay.addEventListener("click", startGameReplay);
-  els.rerunGame.addEventListener("click", rerunGame);
+  els.joinRoomForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    joinRoom();
+  });
   els.colonyForm.addEventListener("submit", (event) => {
     event.preventDefault();
     addColony();
   });
 }
 
+function applyWorkspaceRole(role, options = {}) {
+  const { load = true } = options;
+  state.role = role === "admin" ? "admin" : "user";
+  document.body.dataset.workspaceRole = state.role;
+
+  const isAdmin = state.role === "admin";
+  els.modeUser.classList.toggle("active", !isAdmin);
+  els.modeUser.setAttribute("aria-pressed", String(!isAdmin));
+  els.modeAdmin.classList.toggle("active", isAdmin);
+  els.modeAdmin.setAttribute("aria-pressed", String(isAdmin));
+
+  els.fixtureMode.value = isAdmin ? "recent" : "upcoming";
+  els.fixtureDays.value = isAdmin ? ADMIN_REPLAY_DAYS : USER_LIVE_DAYS;
+  if (!isAdmin && !els.fixtureDate.value) els.fixtureDate.value = today;
+  els.createGame.textContent = isAdmin ? "Create room" : "Participate";
+  els.startGameLive.hidden = isAdmin;
+  els.startGameReplay.hidden = !isAdmin;
+
+  clearSelection();
+  resetGameUi();
+  updateFixtureFilterState();
+  if (load) loadFixtures();
+}
+
 function updateFixtureFilterState() {
-  const mode = els.fixtureMode.value;
+  const mode = state.role === "admin" ? "recent" : "upcoming";
+  els.fixtureMode.value = mode;
+  els.fixtureMode.disabled = true;
   els.fixtureDate.disabled = mode === "recent";
   els.fixtureDays.disabled = mode === "date";
 }
@@ -111,20 +166,21 @@ async function checkHealth() {
 
 async function loadFixtures() {
   setFixtureRows([{ loading: true }]);
-  const mode = els.fixtureMode.value;
+  const mode = state.role === "admin" ? "recent" : "upcoming";
+  els.fixtureMode.value = mode;
   const params = new URLSearchParams();
-  if (els.competitionId.value) params.set("competition_id", els.competitionId.value);
-  if (els.fixtureSearch.value.trim()) params.set("search", els.fixtureSearch.value.trim());
+  if (state.role !== "admin" && els.competitionId.value) params.set("competition_id", els.competitionId.value);
+  if (state.role !== "admin" && els.fixtureSearch.value.trim()) params.set("search", els.fixtureSearch.value.trim());
 
   let endpoint = "/api/fixtures/recent";
   if (mode === "recent") {
-    params.set("days", els.fixtureDays.value || "3");
-    params.set("limit", "100");
+    params.set("days", ADMIN_REPLAY_DAYS);
+    params.set("limit", ADMIN_REPLAY_LIMIT);
   } else if (mode === "upcoming") {
-    endpoint = "/api/fixtures/upcoming";
-    params.set("days", els.fixtureDays.value || "14");
-    params.set("limit", "100");
-    if (els.fixtureDate.value) params.set("date", els.fixtureDate.value);
+    endpoint = state.role === "admin" ? "/api/fixtures/upcoming" : "/api/fixtures/live-target";
+    params.set("days", els.fixtureDays.value || USER_LIVE_DAYS);
+    if (state.role === "admin") params.set("limit", USER_LIVE_LIMIT);
+    if (state.role === "admin" && els.fixtureDate.value) params.set("date", els.fixtureDate.value);
   } else {
     endpoint = "/api/fixtures";
     if (els.fixtureDate.value) params.set("date", els.fixtureDate.value);
@@ -134,19 +190,46 @@ async function loadFixtures() {
     const data = await getJson(`${endpoint}?${params.toString()}`);
     state.fixtures = data.fixtures || [];
     els.fixtureCount.textContent = fixtureCountLabel(mode, data);
+    if (state.role !== "admin") {
+      applyLiveTarget(data);
+      return;
+    }
     renderFixtures();
   } catch (error) {
     state.fixtures = [];
     els.fixtureCount.textContent = "Error";
+    if (state.role !== "admin") renderLiveMatchTarget(null, "error", error.message);
     setFixtureRows([{ error: error.message }]);
   }
 }
 
 function fixtureCountLabel(mode, data) {
   const count = data.count || 0;
-  if (mode === "recent") return `${count} completed match(es)`;
-  if (mode === "upcoming") return `${count} upcoming match(es)`;
+  if (mode === "recent") return `${count} replay fixture(s)`;
+  if (data.mode === "live_target") {
+    if (data.status === "current") return "Current match";
+    if (data.status === "next") return "Next match";
+    return "No live match";
+  }
+  if (mode === "upcoming") return `${count} live fixture(s)`;
   return `${count} match(es)`;
+}
+
+function applyLiveTarget(data) {
+  const target = data.fixture || state.fixtures[0] || null;
+  renderLiveMatchTarget(target, data.status);
+  if (!target) {
+    if (!state.game.id) {
+      state.selected = null;
+      paintSelectedFixture(null);
+    }
+    setFixtureRows([]);
+    updateGameActions();
+    return;
+  }
+
+  state.fixtures = [target];
+  setSelectedFixture(target, { reset: !state.game.id && state.selected?.fixtureId !== target.fixtureId });
 }
 
 function renderFixtures() {
@@ -169,7 +252,6 @@ function renderFixtures() {
         </td>
         <td>
           <div>${escapeHtml(fixture.competition || "-")}</div>
-          <div class="muted">ID ${escapeHtml(fixture.competitionId || "-")}</div>
         </td>
       `;
       row.addEventListener("click", () => selectFixture(fixture));
@@ -194,24 +276,71 @@ function setFixtureRows(rows) {
 }
 
 function selectFixture(fixture) {
-  resetGameUi();
+  setSelectedFixture(fixture, { reset: true });
+}
+
+function setSelectedFixture(fixture, options = {}) {
+  const { reset = true } = options;
+  if (reset) resetGameUi();
+  paintSelectedFixture(fixture);
+  renderFixtures();
+  updateGameActions();
+}
+
+function renderLiveMatchTarget(fixture, status = "empty", message = "") {
+  if (!els.liveMatchTarget) return;
+  const hasFixture = Boolean(fixture?.fixtureId);
+  const statusLabels = {
+    current: "Match in progress",
+    next: "Next match",
+    empty: "No match",
+    error: "Error",
+  };
+  els.liveMatchStatus.textContent = statusLabels[status] || "Match";
+  els.liveMatchStatus.className = `match-status ${escapeHtml(status || "empty")}`;
+  els.liveMatchTitle.textContent = hasFixture
+    ? `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`
+    : "No match available";
+  els.liveMatchMeta.textContent = hasFixture
+    ? [formatDate(fixture.startTimeIso || fixture.startTime), fixture.competition || "Unknown competition", `Fixture ${fixture.fixtureId}`]
+        .filter(Boolean)
+        .join(" - ")
+    : message || "Refresh when the next TXLine fixture is available.";
+  updateGameActions();
+}
+
+function paintSelectedFixture(fixture) {
   state.selected = fixture;
+  if (!fixture) {
+    els.manualFixtureId.value = "";
+    els.selectedTitle.textContent = state.role === "admin" ? "Select a replay fixture" : "Select a live fixture";
+    els.selectedMeta.textContent =
+      state.role === "admin" ? "Completed TXLine matches are used for pipeline tests." : "Upcoming TXLine matches open live colony rooms.";
+    updateScore(null);
+    return;
+  }
+
   els.manualFixtureId.value = fixture.fixtureId || "";
   els.selectedTitle.textContent = `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`;
   els.selectedMeta.textContent = `${fixture.competition || "Unknown competition"} - Fixture ${fixture.fixtureId}`;
   updateScore(fixture.score);
+}
+
+function clearSelection() {
+  state.selected = null;
+  paintSelectedFixture(null);
   renderFixtures();
   updateGameActions();
 }
 
 async function createGame() {
   if (!state.selected?.fixtureId) {
-    els.gameStatus.textContent = "Select a match before creating a room.";
-    return;
+    els.gameStatus.textContent = state.role === "admin" ? "Select a replay fixture before creating a room." : "Select a live fixture before creating a room.";
+    return null;
   }
 
   closeGameStream();
-  els.gameStatus.textContent = "Creating room...";
+  els.gameStatus.textContent = state.role === "admin" ? "Creating replay room..." : "Creating live room...";
   try {
     const game = await postJson("/api/games", {
       fixtureId: state.selected.fixtureId,
@@ -221,12 +350,53 @@ async function createGame() {
     state.game.id = game.gameId;
     state.game.events = [];
     state.game.colonyCount = 0;
+    state.game.players = [];
+    state.game.coloniesById = {};
+    state.game.strategyDrafts = {};
     state.game.status = game.status;
     state.game.activeOpportunities = [];
     state.game.agentUsage = null;
     els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
     renderGameState(game);
     openGameStream();
+    return game;
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+    return null;
+  }
+}
+
+async function participateInMatch() {
+  if (!state.selected?.fixtureId) {
+    els.gameStatus.textContent = "No match is available yet.";
+    return;
+  }
+  const name = els.playerName.value.trim();
+  if (!name) {
+    els.gameStatus.textContent = "Enter your player name before participating.";
+    els.playerName.focus();
+    return;
+  }
+  if (!state.game.id) {
+    const game = await createGame();
+    if (!game) return;
+  }
+  await joinRoom();
+}
+
+async function joinRoom() {
+  if (!state.game.id) return;
+  const name = els.playerName.value.trim();
+  if (!name) {
+    els.gameStatus.textContent = "Enter a player name before joining.";
+    return;
+  }
+  els.gameStatus.textContent = "Joining room...";
+  try {
+    const game = await postJson(`/api/games/${state.game.id}/players`, { name });
+    els.playerName.value = "";
+    renderGameState(game);
+    els.gameStatus.textContent = `${name} joined the room.`;
   } catch (error) {
     els.gameStatus.textContent = error.message;
   }
@@ -252,8 +422,30 @@ async function addColony() {
   }
 }
 
+async function updateColonyStrategy(colonyId) {
+  if (!state.game.id || !colonyId) return;
+  const { style, favoriteContext, infoNeed } = readStrategyControls(colonyId);
+  els.gameStatus.textContent = "Saving strategy...";
+  try {
+    const game = await patchJson(`/api/games/${state.game.id}/colonies/${encodeURIComponent(colonyId)}/strategy`, {
+      style,
+      favoriteContext,
+      infoNeed,
+    });
+    delete state.game.strategyDrafts[colonyId];
+    renderGameState(game);
+    els.gameStatus.textContent = "Strategy saved.";
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
 async function startGameReplay() {
   if (!state.game.id) return;
+  if (state.role !== "admin") {
+    els.gameStatus.textContent = "Replay runs are available in admin mode.";
+    return;
+  }
   if (state.game.colonyCount < 1) {
     els.gameStatus.textContent = "Add at least one colony before starting the match.";
     updateGameActions();
@@ -273,23 +465,26 @@ async function startGameReplay() {
   }
 }
 
-async function rerunGame() {
+async function startGameLive() {
   if (!state.game.id) return;
-  els.gameStatus.textContent = "Rerunning simulation...";
-  closeGameStream();
+  if (state.role !== "user") {
+    els.gameStatus.textContent = "Live games are available in user mode.";
+    return;
+  }
+  if (state.game.colonyCount < 1) {
+    els.gameStatus.textContent = "Add at least one colony before starting the live match.";
+    updateGameActions();
+    return;
+  }
+  els.gameStatus.textContent = "Connecting live TXLine stream...";
   try {
-    const game = await postJson(`/api/games/${state.game.id}/rerun`, {
-      mode: "replay",
-      source: "historical",
+    const game = await postJson(`/api/games/${state.game.id}/start`, {
+      mode: "live",
+      source: "updates",
     });
-    state.game.id = game.gameId;
-    state.game.events = [];
-    state.game.agentUsage = null;
-    els.gameFeed.innerHTML = "";
     renderGameState(game);
     openGameStream();
-    await loadGameReplay();
-    els.gameStatus.textContent = "New simulation started.";
+    els.gameStatus.textContent = "Live room connected. Colony decisions will appear with TXLine events.";
   } catch (error) {
     els.gameStatus.textContent = error.message;
   }
@@ -324,22 +519,32 @@ async function loadGameReplay() {
   const data = await getJson(`/api/games/${state.game.id}/replay`);
   renderGameState(data.game);
   state.game.events = [];
+  state.game.players = data.game?.players || state.game.players || [];
+  state.game.strategyDrafts = {};
   els.gameFeed.innerHTML = "";
   (data.events || []).forEach(appendGameEvent);
 }
 
-function resetGameUi() {
+function resetGameUi(message = null) {
   closeGameStream();
   state.game.id = null;
   state.game.events = [];
   state.game.colonyCount = 0;
+  state.game.players = [];
+  state.game.coloniesById = {};
+  state.game.strategyDrafts = {};
   state.game.status = null;
   state.game.activeOpportunities = [];
   state.game.agentUsage = null;
-  els.gameStatus.textContent = "Create a room from the selected match.";
+  els.gameStatus.textContent =
+    message ||
+    (state.role === "admin"
+      ? "Create a replay room from a completed match."
+      : "Create a live room from an upcoming match.");
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
   renderSimulationSummary(null);
+  renderRoomSetup(null);
   updateGameActions();
 }
 
@@ -348,11 +553,17 @@ function renderGameState(game) {
   const colonies = game.colonies || [];
   state.game.id = game.gameId || state.game.id;
   state.game.colonyCount = colonies.length;
+  state.game.players = game.players || state.game.players || [];
+  state.game.coloniesById = colonies.reduce((map, colony) => {
+    if (colony.colonyId) map[colony.colonyId] = colony.name;
+    return map;
+  }, {});
   state.game.status = game.status || null;
   state.game.activeOpportunities = game.activeOpportunities || [];
   state.game.agentUsage = game.agentUsage || state.game.agentUsage;
   updateScore(game.match?.score);
   updateGameActions();
+  renderRoomSetup(game);
   renderSimulationSummary(game);
   els.gameStatus.textContent = [
     game.gameId ? `Room ${game.gameId}` : null,
@@ -372,6 +583,11 @@ function renderGameState(game) {
       const card = document.createElement("article");
       card.className = "colony-card";
       const scoreTitle = formatScoreBreakdown(colony.scoreBreakdown);
+      const strategyLocked = state.game.status === "finished";
+      const strategyDraft = state.game.strategyDrafts[colony.colonyId] || {};
+      const selectedStyle = strategyDraft.style || colony.style;
+      const selectedFavorite = strategyDraft.favoriteContext || colony.favoriteContext;
+      const selectedInfoNeed = strategyDraft.infoNeed || colony.infoNeed;
       card.innerHTML = `
         <div class="colony-rank">#${index + 1}</div>
         <div>
@@ -379,11 +595,13 @@ function renderGameState(game) {
             <h4>${escapeHtml(colony.name)}</h4>
             <span>${colony.wins || 0}W / ${colony.losses || 0}L</span>
           </div>
-          <p>${escapeHtml(colony.style)} - ${escapeHtml(colony.favoriteContext)} - info ${escapeHtml(colony.infoNeed)}</p>
+          <p>${escapeHtml(strategyLabel(colony))}</p>
           <div class="colony-stats">
             <span><b>${colony.food}</b> food</span>
             <span><b>${colony.larvae}</b> larvae</span>
             <span><b>${colony.antsAlive}</b> alive</span>
+            <span><b>${colony.antsActive ?? colony.antsAlive}</b> can vote</span>
+            <span><b>${colony.antsEngaged || 0}</b> at risk</span>
             <span><b>${colony.antsBorn || 0}</b> born</span>
             <span><b>${colony.antsWounded}</b> wounded</span>
             <span><b>${colony.antsDead}</b> dead</span>
@@ -391,23 +609,113 @@ function renderGameState(game) {
             <span title="${escapeHtml(scoreTitle)}">score <b>${colony.score}</b></span>
           </div>
           <div class="colony-dna">${renderArchetypeSummary(colony.archetypes)}</div>
+          <div class="strategy-editor">
+            <label>
+              Style
+              <select data-strategy-style="${escapeHtml(colony.colonyId)}" ${strategyLocked ? "disabled" : ""}>
+                ${strategyOptions(["cautious", "balanced", "aggressive"], selectedStyle)}
+              </select>
+            </label>
+            <label>
+              Ground
+              <select data-strategy-favorite="${escapeHtml(colony.colonyId)}" ${strategyLocked ? "disabled" : ""}>
+                ${strategyOptions(["balanced", "penalties", "corners", "momentum", "chaos"], selectedFavorite)}
+              </select>
+            </label>
+            <label>
+              Info
+              <select data-strategy-info="${escapeHtml(colony.colonyId)}" ${strategyLocked ? "disabled" : ""}>
+                ${strategyOptions(["low", "medium", "high"], selectedInfoNeed)}
+              </select>
+            </label>
+            <button type="button" data-save-strategy="${escapeHtml(colony.colonyId)}" ${strategyLocked ? "disabled" : ""}>Save</button>
+          </div>
         </div>
       `;
+      card.querySelectorAll("[data-strategy-style], [data-strategy-favorite], [data-strategy-info]").forEach((control) => {
+        control.addEventListener("change", () => updateStrategyDraft(colony.colonyId));
+      });
+      card.querySelector("[data-save-strategy]")?.addEventListener("click", (event) => {
+        updateColonyStrategy(event.currentTarget.dataset.saveStrategy);
+      });
       return card;
     }),
   );
 }
 
+function updateStrategyDraft(colonyId) {
+  if (!colonyId) return;
+  state.game.strategyDrafts[colonyId] = readStrategyControls(colonyId);
+}
+
+function readStrategyControls(colonyId) {
+  const escapedId = cssEscape(colonyId);
+  return {
+    style: document.querySelector(`[data-strategy-style="${escapedId}"]`)?.value,
+    favoriteContext: document.querySelector(`[data-strategy-favorite="${escapedId}"]`)?.value,
+    infoNeed: document.querySelector(`[data-strategy-info="${escapedId}"]`)?.value,
+  };
+}
+
+function renderRoomSetup(game = null) {
+  const players = game?.players || state.game.players || [];
+  const status = game?.status || state.game.status || "created";
+  const hasRoom = Boolean(state.game.id);
+  const hasPlayers = players.length > 0;
+  const hasColonies = state.game.colonyCount > 0;
+  const liveReady = hasRoom && hasColonies && !["running_replay", "running_live", "finished"].includes(status);
+  els.roomCode.textContent = hasRoom ? state.game.id : "No room yet";
+  els.joinRoom.disabled = !hasRoom || status === "finished";
+  els.playerName.disabled = state.role === "admin" ? !hasRoom || status === "finished" : status === "finished";
+  els.playerList.replaceChildren(
+    ...(hasPlayers
+      ? players.map((player) => {
+          const item = document.createElement("span");
+          item.className = "player-pill";
+          item.textContent = player.name || "Player";
+          return item;
+        })
+      : [
+          emptyInline(
+            hasRoom
+              ? "No player has joined yet."
+              : state.role === "admin"
+                ? "Create a room, then players can join."
+                : "Enter your name, then participate in the match.",
+          ),
+        ]),
+  );
+  const steps = [
+    ["Room", hasRoom],
+    ["Players", hasPlayers],
+    ["Colonies", hasColonies],
+    [state.role === "admin" ? "Replay" : "Live", liveReady || ["running_replay", "running_live", "finished"].includes(status)],
+  ];
+  els.setupSteps.replaceChildren(
+    ...steps.map(([label, done], index) => {
+      const item = document.createElement("span");
+      item.className = `setup-step ${done ? "done" : "pending"}`;
+      item.textContent = `${index + 1} ${label}`;
+      return item;
+    }),
+  );
+}
+
 function updateGameActions() {
+  const isAdmin = state.role === "admin";
   const hasRoom = Boolean(state.game.id);
   const status = state.game.status || "created";
   const running = ["running_replay", "running_live"].includes(status);
   const locked = running || status === "finished";
   const hasColony = state.game.colonyCount > 0;
   els.createGame.disabled = hasRoom && !["finished", "error", "stopped"].includes(status);
+  els.participateMatch.disabled = !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
+  els.participateMatch.textContent =
+    hasRoom && !["finished", "error", "stopped"].includes(status) ? "Room ready" : "Participate in match";
   els.addColony.disabled = !hasRoom || locked;
-  els.startGameReplay.disabled = !hasRoom || locked || !hasColony;
-  els.rerunGame.disabled = !hasRoom || !hasColony || !["finished", "error", "stopped"].includes(status);
+  els.joinRoom.disabled = !hasRoom || status === "finished";
+  els.startGameLive.disabled = isAdmin || !hasRoom || locked || !hasColony;
+  els.startGameReplay.disabled = !isAdmin || !hasRoom || locked || !hasColony;
 }
 
 function appendGameEvent(event) {
@@ -422,21 +730,246 @@ function appendGameEvent(event) {
     updateGameActions();
   }
 
-  if (els.gameFeed.querySelector(".empty")) els.gameFeed.innerHTML = "";
+  renderGameJournal();
+  els.gameFeed.scrollTop = els.gameFeed.scrollHeight;
+  renderSimulationSummary();
+}
+
+function renderGameJournal() {
+  const events = state.game.events || [];
+  if (!events.length) {
+    els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+    return;
+  }
+  els.gameFeed.replaceChildren(...buildJournalNodes(events));
+}
+
+function buildJournalNodes(events) {
+  const groups = [];
+  const markets = new Map();
+  let lastMarket = null;
+
+  events.forEach((event) => {
+    if (event.kind === "opportunity") {
+      const opportunity = event.data?.opportunity || {};
+      const marketId = opportunity.opportunityId;
+      const group = { type: "market", event, opportunity, events: [] };
+      groups.push(group);
+      if (marketId) markets.set(marketId, group);
+      lastMarket = group;
+      return;
+    }
+
+    const marketId = eventMarketId(event);
+    const market = marketId ? markets.get(marketId) : null;
+    if (market && isMarketEvent(event)) {
+      market.events.push(event);
+      return;
+    }
+    if (event.kind === "game_error" && lastMarket) {
+      lastMarket.events.push(event);
+      return;
+    }
+
+    groups.push({ type: "event", event });
+  });
+
+  return groups.map((group) => (group.type === "market" ? renderMarketGroup(group) : renderPlainJournalEvent(group.event)));
+}
+
+function renderPlainJournalEvent(event) {
   const item = document.createElement("li");
   item.className = `game-log-${event.kind || "event"}`;
+  const details = formatEventDetails(event);
   item.innerHTML = `
     <div class="event-main">
       <span class="event-label ${escapeHtml(event.kind || "update")}">${escapeHtml(gameKindLabel(event.kind))}</span>
       <span class="event-desc">${escapeHtml(event.message || "Game update")}</span>
     </div>
+    ${details ? `<div class="event-details">${details}</div>` : ""}
   `;
-  els.gameFeed.append(item);
-  while (els.gameFeed.children.length > 160) {
-    els.gameFeed.firstElementChild.remove();
+  return item;
+}
+
+function renderMarketGroup(group) {
+  const item = document.createElement("li");
+  item.className = "journal-market";
+  const lanes = marketColonyLanes(group.events);
+  const endings = group.events.filter((event) => ["settlement", "void", "markets_closed"].includes(event.kind));
+  const errors = group.events.filter((event) => event.kind === "game_error");
+  item.innerHTML = `
+    <div class="market-head">
+      <span class="event-label opportunity">Market</span>
+      <strong>${escapeHtml(group.event.message || group.opportunity.label || "Market")}</strong>
+    </div>
+    <div class="market-lanes">
+      ${
+        lanes.length
+          ? lanes.map(renderMarketLane).join("")
+          : `<div class="market-lane waiting"><span class="colony-chip">-</span><div><strong>Waiting for colonies</strong></div></div>`
+      }
+    </div>
+    ${
+      endings.length
+        ? `<div class="market-end"><span>End market</span>${endings.map((event) => `<p>${escapeHtml(event.message || "")}</p>`).join("")}</div>`
+        : ""
+    }
+    ${errors.map((event) => `<div class="market-error">${escapeHtml(event.message || "")}${formatEventDetails(event) ? `<div>${formatEventDetails(event)}</div>` : ""}</div>`).join("")}
+  `;
+  return item;
+}
+
+function marketColonyLanes(events) {
+  const lanes = new Map();
+  events.forEach((event) => {
+    if (!["ant_agent_start", "ant_agent_vote", "vote", "prediction", "observe"].includes(event.kind)) return;
+    const name = eventColonyName(event);
+    if (!name) return;
+    const lane = lanes.get(name) || { name, status: "waiting", counts: null, vote: null, bet: null, availability: null };
+    if (event.kind === "ant_agent_start") {
+      lane.status = "calling";
+      lane.call = event.message;
+      lane.availability = laneAvailabilityFromData(event.data) || lane.availability;
+    } else if (event.kind === "ant_agent_vote") {
+      lane.status = "voted";
+      lane.ai = event.message;
+      lane.counts = event.data?.vote?.voteCounts || null;
+      lane.availability = laneAvailabilityFromData(event.data?.vote) || lane.availability;
+    } else if (event.kind === "vote") {
+      lane.status = "voted";
+      lane.vote = event.message;
+      lane.counts = event.data?.vote?.voteCounts || lane.counts;
+      lane.availability = laneAvailabilityFromData(event.data?.vote) || lane.availability;
+    } else if (event.kind === "prediction") {
+      lane.status = "bet";
+      lane.bet = event.message;
+    } else if (event.kind === "observe") {
+      lane.status = "observe";
+      lane.bet = event.message;
+    }
+    lanes.set(name, lane);
+  });
+  return Array.from(lanes.values());
+}
+
+function renderMarketLane(lane) {
+  const title = lane.status === "bet" ? `Colony ${lane.name} bets` : lane.status === "observe" ? `Colony ${lane.name} observes` : `Colony ${lane.name}`;
+  const main = lane.bet || lane.vote || (lane.ai ? "Vote complete." : null) || (lane.call ? "DeepSeek is voting." : null) || "Waiting";
+  const availability = lane.availability ? `<p class="lane-meta">${formatLaneAvailability(lane.availability)}</p>` : "";
+  const counts = lane.counts ? `<p class="lane-counts">votes: ${formatVoteCounts(lane.counts)}</p>` : "";
+  return `
+    <div class="market-lane ${escapeHtml(lane.status)}">
+      <span class="colony-chip">${escapeHtml(lane.name)}</span>
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        ${availability}
+        <p>${escapeHtml(stripColonyPrefix(main, lane.name))}</p>
+        ${counts}
+      </div>
+    </div>
+  `;
+}
+
+function isMarketEvent(event) {
+  return ["ant_agent_start", "ant_agent_vote", "vote", "prediction", "settlement", "void", "markets_closed", "observe"].includes(event.kind);
+}
+
+function eventMarketId(event) {
+  return (
+    event.data?.opportunityId ||
+    event.data?.opportunity?.opportunityId ||
+    event.data?.vote?.market?.marketId ||
+    event.data?.prediction?.opportunityId ||
+    null
+  );
+}
+
+function eventColonyName(event) {
+  const colonyId = event.data?.colonyId;
+  if (colonyId && state.game.coloniesById[colonyId]) {
+    return state.game.coloniesById[colonyId];
   }
-  els.gameFeed.scrollTop = els.gameFeed.scrollHeight;
-  renderSimulationSummary();
+  const message = event.message || "";
+  if (event.kind === "prediction") {
+    const match = message.match(/^(.+?) (?:commits|stakes) /);
+    return match ? match[1].trim() : "";
+  }
+  if (event.kind === "observe") {
+    const match = message.match(/^(.+?) watches /);
+    return match ? match[1].trim() : "";
+  }
+  if (event.kind === "ant_agent_vote") {
+    const match = message.match(/\bfrom\s+(.+?)(?:\s+\(|:)/i);
+    if (match) return match[1].trim();
+  }
+  const colon = message.match(/^([^:]+):/);
+  return colon ? colon[1].trim() : "";
+}
+
+function stripColonyPrefix(message, colonyName) {
+  return String(message || "").replace(new RegExp(`^${escapeRegExp(colonyName)}:\\s*`), "");
+}
+
+function formatVoteCounts(counts) {
+  const preferredOrder = ["yes", "no", "option_a", "option_b", "option_c", "option_d", "abstain"];
+  const keys = [
+    ...preferredOrder.filter((key) => counts[key] != null),
+    ...Object.keys(counts).filter((key) => !preferredOrder.includes(key)),
+  ];
+  return keys
+    .filter((key) => counts[key] != null)
+    .map((key) => `${key} ${counts[key]}`)
+    .join(" · ");
+}
+
+function laneAvailabilityFromData(data) {
+  if (!data || data.activeCount == null) return null;
+  return {
+    active: Number(data.activeCount) || 0,
+    alive: data.aliveCount == null ? null : Number(data.aliveCount) || 0,
+    engaged: data.engagedCount == null ? null : Number(data.engagedCount) || 0,
+    wounded: data.woundedCount == null ? null : Number(data.woundedCount) || 0,
+  };
+}
+
+function formatLaneAvailability(availability) {
+  const parts = [];
+  if (availability.alive != null) {
+    parts.push(`can vote ${availability.active}/${availability.alive}`);
+  } else {
+    parts.push(`can vote ${availability.active}`);
+  }
+  if (availability.engaged) parts.push(`at risk ${availability.engaged}`);
+  if (availability.wounded) parts.push(`wounded ${availability.wounded}`);
+  return parts.join(" · ");
+}
+
+function formatEventDetails(event) {
+  if (event.kind !== "game_error" || !Array.isArray(event.data?.details) || !event.data.details.length) {
+    return "";
+  }
+  return event.data.details.slice(0, 3).map(formatErrorDetail).filter(Boolean).join("<br>");
+}
+
+function formatErrorDetail(detail) {
+  const nested = Array.isArray(detail.details) && detail.details.length ? detail.details[0] : {};
+  const pickDetail = (key) => detail[key] ?? nested[key];
+  const parts = [
+    pickDetail("antId") ? `ant ${pickDetail("antId")}` : null,
+    pickDetail("category") || pickDetail("type") || null,
+    pickDetail("parsedType") ? `json ${pickDetail("parsedType")}` : null,
+    pickDetail("rejectionReason") ? `reason ${pickDetail("rejectionReason")}` : null,
+    pickDetail("finishReason") ? `finish ${pickDetail("finishReason")}` : null,
+  ].filter(Boolean);
+
+  const expected = pickDetail("expectedAntIds");
+  const candidates = pickDetail("candidateAntIds");
+  if (Array.isArray(expected) && expected.length) parts.push(`expected ${expected.join(", ")}`);
+  if (Array.isArray(candidates) && candidates.length) parts.push(`got ${candidates.join(", ")}`);
+
+  const snippet = pickDetail("parsedSnippet") || pickDetail("contentSnippet") || pickDetail("responseBody");
+  if (snippet) parts.push(`response ${snippet}`);
+  return escapeHtml(parts.join(" · "));
 }
 
 function renderSimulationSummary(game = null) {
@@ -573,6 +1106,40 @@ async function postJson(url, payload) {
   return body;
 }
 
+async function patchJson(url, payload) {
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body.detail || response.statusText;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return body;
+}
+
+function emptyInline(message) {
+  const item = document.createElement("span");
+  item.className = "empty";
+  item.textContent = message;
+  return item;
+}
+
+function strategyLabel(colony) {
+  return `${colony.style || "balanced"} - ${colony.favoriteContext || "balanced"} - info ${colony.infoNeed || "medium"}`;
+}
+
+function strategyOptions(options, selected) {
+  return options
+    .map((option) => {
+      const isSelected = option === selected ? "selected" : "";
+      return `<option value="${escapeHtml(option)}" ${isSelected}>${escapeHtml(option)}</option>`;
+    })
+    .join("");
+}
+
 function formatInteger(value) {
   return Math.round(value).toLocaleString("en-US");
 }
@@ -599,7 +1166,9 @@ function gameKindLabel(kind) {
   return (
     {
       game_created: "Room",
+      player_joined: "Player",
       colony_created: "Colony",
+      strategy_updated: "Strategy",
       game_started: "Start",
       opportunity: "Window",
       vote: "Vote",
@@ -628,6 +1197,14 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function cssEscape(value) {
+  return globalThis.CSS?.escape ? globalThis.CSS.escape(String(value)) : String(value).replaceAll('"', '\\"');
 }
 
 function debounce(fn, delay) {

@@ -51,7 +51,9 @@ RISK_RULES: dict[str, dict[str, float]] = {
 FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
-NEXT_5_CUTOFF_MINUTE = 88
+GOAL_NEXT_10_SECONDS = 10 * 60
+NEXT_FOUL_WINDOW_SECONDS = 10 * 60
+NEXT_GOAL_TEAM_SECONDS = 10 * 60
 
 
 def normalize_choice(value: str | None) -> str:
@@ -123,11 +125,11 @@ class AntState:
     influence: float = 1.0
     alive: bool = True
     wounded_until_event: int = 0
-    engaged_prediction_id: str | None = None
+    engaged_prediction_ids: set[str] = field(default_factory=set)
     memory: AntMemory = field(default_factory=AntMemory)
 
     def is_active(self, event_index: int) -> bool:
-        return self.alive and self.wounded_until_event <= event_index and self.engaged_prediction_id is None
+        return self.alive and self.wounded_until_event <= event_index
 
 
 @dataclass
@@ -149,6 +151,18 @@ class ColonyMemory:
         if attempts == 0:
             return 0.5
         return self.context_wins.get(context, 0) / attempts
+
+
+@dataclass
+class PlayerState:
+    player_id: str
+    name: str
+
+    def public_state(self) -> dict[str, Any]:
+        return {
+            "playerId": self.player_id,
+            "name": self.name,
+        }
 
 
 @dataclass
@@ -175,8 +189,9 @@ class ColonyState:
         return [ant for ant in self.ants if ant.is_active(event_index)]
 
     def public_state(self, event_index: int) -> dict[str, Any]:
-        alive = len(self.alive_ants)
-        wounded = len([ant for ant in self.ants if ant.alive and ant.wounded_until_event > event_index])
+        ant_counts = colony_ant_counts(self, event_index)
+        alive = ant_counts["aliveCount"]
+        wounded = ant_counts["woundedCount"]
         dead = len([ant for ant in self.ants if not ant.alive])
         born = max(0, len(self.ants) - self.size)
         larvae = len(self.larvae_ready_events) if self.larvae_ready_events else self.larvae
@@ -201,7 +216,8 @@ class ColonyState:
             "favoriteContext": self.favorite_context,
             "infoNeed": self.info_need,
             "antsAlive": alive,
-            "antsActive": len(self.active_ants(event_index)),
+            "antsActive": ant_counts["activeCount"],
+            "antsEngaged": ant_counts["engagedCount"],
             "antsWounded": wounded,
             "antsDead": dead,
             "antsBorn": born,
@@ -351,6 +367,7 @@ class GameRoom:
     status: str = "created"
     mode: str | None = None
     event_index: int = 0
+    players: list[PlayerState] = field(default_factory=list)
     colonies: dict[str, ColonyState] = field(default_factory=dict)
     match_state: MatchState | None = None
     opportunities: dict[str, Opportunity] = field(default_factory=dict)
@@ -376,6 +393,7 @@ class GameRoom:
             "status": self.status,
             "mode": self.mode,
             "eventIndex": self.event_index,
+            "players": [player.public_state() for player in self.players],
             "match": {
                 "score": self.match_state.score if self.match_state else None,
                 "possessionLabel": self.match_state.possession_label if self.match_state else None,
@@ -426,6 +444,53 @@ class GameHarness:
         )
         return colony
 
+    def join_player(self, name: str) -> PlayerState:
+        clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
+        player = PlayerState(player_id=f"player_{uuid.uuid4().hex[:8]}", name=clean_name)
+        self.room.players.append(player)
+        self.room.add_log("player_joined", f"{player.name} joined the room.", {"playerId": player.player_id, "name": player.name})
+        return player
+
+    def update_colony_strategy(
+        self,
+        colony_id: str,
+        *,
+        style: str | None = None,
+        favorite_context: str | None = None,
+        info_need: str | None = None,
+    ) -> ColonyState:
+        colony = self.room.colonies.get(colony_id)
+        if not colony:
+            raise ValueError("colony not found")
+
+        if style is not None:
+            style = normalize_style(style)
+            if style not in VALID_STYLES:
+                raise ValueError("style must be cautious, balanced or aggressive")
+            colony.style = style
+        if favorite_context is not None:
+            favorite_context = normalize_context(favorite_context)
+            if favorite_context not in VALID_CONTEXTS:
+                raise ValueError("favorite_context must be penalties, corners, momentum, chaos or balanced")
+            colony.favorite_context = favorite_context
+        if info_need is not None:
+            info_need = normalize_info_need(info_need)
+            if info_need not in VALID_INFO_NEEDS:
+                raise ValueError("info_need must be low, medium or high")
+            colony.info_need = info_need
+
+        self.room.add_log(
+            "strategy_updated",
+            f"{colony.name} strategy updated: {colony.style}, {colony.favorite_context}, info {colony.info_need}.",
+            {
+                "colonyId": colony.colony_id,
+                "style": colony.style,
+                "favoriteContext": colony.favorite_context,
+                "infoNeed": colony.info_need,
+            },
+        )
+        return colony
+
     def process_events(self, events: Iterable[dict[str, Any]]) -> None:
         self.room.status = "running_replay"
         for event in events:
@@ -452,8 +517,10 @@ class GameHarness:
         for colony in self.room.colonies.values():
             self._apply_colony_upkeep(colony)
 
-        opportunity = build_opportunity(event, self.room.event_index, self.room.match_state)
-        if opportunity and self._claim_opportunity_slot(opportunity):
+        opportunities = build_opportunities(event, self.room.event_index, self.room.match_state)
+        for opportunity in opportunities:
+            if not self._claim_opportunity_slot(opportunity):
+                continue
             self.room.opportunities[opportunity.opportunity_id] = opportunity
             self.room.add_log("opportunity", opportunity.label, {"opportunity": opportunity.public_state()})
             for colony in self.room.colonies.values():
@@ -537,11 +604,11 @@ class GameHarness:
         for ant_id in prediction.ant_ids:
             ant = find_ant(colony, ant_id)
             if ant:
-                ant.engaged_prediction_id = prediction.prediction_id
+                ant.engaged_prediction_ids.add(prediction.prediction_id)
         self.room.predictions[prediction.prediction_id] = prediction
         self.room.add_log(
             "prediction",
-            f"{colony.name} commits {len(prediction.ant_ids)} ants to {prediction.option.label}.",
+            f"{colony.name} stakes {len(prediction.ant_ids)} ants on {prediction.option.label}.",
             {
                 "colonyId": colony.colony_id,
                 "opportunityId": opportunity.opportunity_id,
@@ -563,7 +630,8 @@ class GameHarness:
         if not callable(decide_ants):
             raise RuntimeError("DeepSeek agent required: no local policy is allowed.")
 
-        active_count = len(colony.active_ants(self.room.event_index))
+        ant_counts = colony_ant_counts(colony, self.room.event_index)
+        active_count = ant_counts["activeCount"]
         stage_label = "after info" if info_packet else "before info"
         self.room.add_log(
             "ant_agent_start",
@@ -572,6 +640,9 @@ class GameHarness:
                 "colonyId": colony.colony_id,
                 "opportunityId": opportunity.opportunity_id,
                 "activeCount": active_count,
+                "aliveCount": ant_counts["aliveCount"],
+                "engagedCount": ant_counts["engagedCount"],
+                "woundedCount": ant_counts["woundedCount"],
                 "stage": "post_info" if info_packet else "pre_info",
             },
         )
@@ -601,6 +672,7 @@ class GameHarness:
         if not active_ants:
             return None
 
+        ant_counts = colony_ant_counts(colony, self.room.event_index)
         stage = "post_info" if info_packet else "pre_info"
         context = {
             "match": {
@@ -615,15 +687,18 @@ class GameHarness:
                 "name": colony.name,
                 "style": colony.style,
                 "favoriteContext": colony.favorite_context,
+                "infoNeed": colony.info_need,
                 "food": colony.food,
-                "antsAlive": len(colony.alive_ants),
-                "antsActive": len(active_ants),
+                "antsAlive": ant_counts["aliveCount"],
+                "antsActive": ant_counts["activeCount"],
+                "antsEngaged": ant_counts["engagedCount"],
+                "antsWounded": ant_counts["woundedCount"],
                 "accuracy": round(colony.memory.accuracy, 3),
                 "contextRate": round(colony.memory.context_rate(opportunity.context), 3),
             },
             "rules": {
                 "stage": stage,
-                "decisionFormat": "Each ant must answer only vote=yes, vote=no or vote=abstain.",
+                "decisionFormat": "Each ant must answer with one vote from market.availableVotes.",
                 "confidenceDisabled": True,
                 "infoFeatureEnabled": False,
                 "infoFeatureReason": "Paid info is disabled for now and will return later with concrete info types.",
@@ -641,7 +716,7 @@ class GameHarness:
             raise RuntimeError("DeepSeek did not produce any usable vote.")
         if vote.get("agentDecisionCount") != vote.get("activeCount"):
             raise RuntimeError(
-                f"DeepSeek controlled {vote.get('agentDecisionCount', 0)}/{vote.get('activeCount', 0)} active ants."
+                f"DeepSeek controlled {vote.get('agentDecisionCount', 0)}/{vote.get('activeCount', 0)} voting ants."
             )
         return vote
 
@@ -674,7 +749,7 @@ class GameHarness:
         deaths = min(deficit, len(colony.alive_ants))
         for ant in colony.alive_ants[:deaths]:
             ant.alive = False
-            ant.engaged_prediction_id = None
+            ant.engaged_prediction_ids.clear()
         if deaths:
             self.room.add_log(
                 "starvation",
@@ -752,10 +827,16 @@ class GameHarness:
     def _claim_opportunity_slot(self, opportunity: Opportunity) -> bool:
         cooldown_by_context = {
             "penalties": 2,
-            "next_5": 24,
+            "goal_next_10": 24,
+            "next_goal_team": 24,
+            "next_foul": 18,
         }
         team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
-        key = f"{opportunity.context}:{team_key}" if opportunity.context == "penalties" else opportunity.context
+        key = (
+            f"{opportunity.context}:{team_key}"
+            if opportunity.context in {"penalties"}
+            else opportunity.context
+        )
         last_event_index = self.room.last_opportunity_event_index_by_key.get(key, -10_000)
         if self.room.event_index - last_event_index < cooldown_by_context[opportunity.context]:
             return False
@@ -782,9 +863,13 @@ class GameHarness:
             expired_by_events = self.room.event_index >= prediction.deadline_event_index
             if not (expired_by_clock or expired_by_events):
                 continue
-            win = prediction.option.target in {"nothing", "no_goal"}
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
-            if opportunity:
+            if not opportunity:
+                continue
+            if opportunity.context == "next_foul":
+                self._void_prediction(prediction, opportunity, reason="expired_no_foul")
+            else:
+                win = prediction.option.target in {"nothing", "no_goal"}
                 self._apply_settlement(prediction, opportunity, win=win, reason="expired")
 
     def _apply_settlement(self, prediction: Prediction, opportunity: Opportunity, *, win: bool, reason: str) -> None:
@@ -798,7 +883,7 @@ class GameHarness:
         for ant_id in prediction.ant_ids:
             ant = find_ant(colony, ant_id)
             if ant:
-                ant.engaged_prediction_id = None
+                ant.engaged_prediction_ids.discard(prediction.prediction_id)
                 ant.memory.attempts_by_context[opportunity.context] = ant.memory.attempts_by_context.get(opportunity.context, 0) + 1
 
         stake = len(prediction.ant_ids)
@@ -831,10 +916,10 @@ class GameHarness:
             selected = [ant for ant in selected if ant is not None]
             for ant in selected[:dead_count]:
                 ant.alive = False
-                ant.engaged_prediction_id = None
+                ant.engaged_prediction_ids.clear()
             for ant in selected[dead_count : dead_count + wound_count]:
                 ant.wounded_until_event = self.room.event_index + 3
-                ant.engaged_prediction_id = None
+                ant.engaged_prediction_ids.discard(prediction.prediction_id)
             for ant in selected:
                 ant.influence = clamp(ant.influence * 0.94, 0.35, 2.25)
                 ant.memory.losses_by_context[opportunity.context] = ant.memory.losses_by_context.get(opportunity.context, 0) + 1
@@ -856,21 +941,24 @@ class GameHarness:
         )
 
     def _finish_open_markets(self) -> None:
-        voided = 0
+        closed = 0
         for prediction in list(self.room.predictions.values()):
             if prediction.resolved:
                 continue
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
             if not opportunity:
                 continue
-            self._void_prediction(prediction, opportunity, reason="full_time")
-            voided += 1
+            if opportunity.context in {"goal_next_10", "next_goal_team"}:
+                self._apply_settlement(prediction, opportunity, win=prediction.option.target == "no_goal", reason="full_time")
+            else:
+                self._void_prediction(prediction, opportunity, reason="full_time")
+            closed += 1
         self.room.opportunities.clear()
-        if voided:
+        if closed:
             self.room.add_log(
                 "markets_closed",
-                f"Full time: {voided} open prediction(s) are voided.",
-                {"voided": voided, "reason": "full_time"},
+                f"Full time: {closed} open prediction(s) are closed.",
+                {"closed": closed, "reason": "full_time"},
             )
 
     def _void_prediction(self, prediction: Prediction, opportunity: Opportunity, *, reason: str) -> None:
@@ -881,7 +969,7 @@ class GameHarness:
         for ant_id in prediction.ant_ids:
             ant = find_ant(colony, ant_id)
             if ant:
-                ant.engaged_prediction_id = None
+                ant.engaged_prediction_ids.discard(prediction.prediction_id)
         self.room.add_log(
             "void",
             f"{colony.name}: prediction voided on {prediction.option.label}.",
@@ -945,6 +1033,16 @@ def generate_ants(colony: ColonyState) -> list[AntState]:
     return [spawn_ant(colony, index, rng) for index in range(colony.size)]
 
 
+def colony_ant_counts(colony: ColonyState, event_index: int) -> dict[str, int]:
+    alive_ants = colony.alive_ants
+    return {
+        "aliveCount": len(alive_ants),
+        "activeCount": len(colony.active_ants(event_index)),
+        "engagedCount": len([ant for ant in alive_ants if ant.engaged_prediction_ids]),
+        "woundedCount": len([ant for ant in alive_ants if ant.wounded_until_event > event_index]),
+    }
+
+
 def spawn_ant(colony: ColonyState, index: int, rng: random.Random) -> AntState:
     weights = archetype_weights(colony)
     archetypes = list(weights)
@@ -958,7 +1056,7 @@ def spawn_ant(colony: ColonyState, index: int, rng: random.Random) -> AntState:
             archetype = candidate
             break
     traits = traits_for_archetype(archetype, colony, rng)
-    return AntState(ant_id=f"{colony.colony_id}_ant_{index:04d}", archetype=archetype, **traits)
+    return AntState(ant_id=f"ant_{index:04d}", archetype=archetype, **traits)
 
 
 def archetype_weights(colony: ColonyState) -> dict[str, float]:
@@ -1032,11 +1130,14 @@ def traits_for_archetype(archetype: str, colony: ColonyState, rng: random.Random
 
 
 def build_opportunity(event: dict[str, Any], event_index: int, match_state: MatchState | None = None) -> Opportunity | None:
-    context = event_context(event)
-    if not context:
-        return None
-    if context == "next_5" and is_too_late_for_next_5(event):
-        return None
+    opportunities = build_opportunities(event, event_index, match_state)
+    return opportunities[0] if opportunities else None
+
+
+def build_opportunities(event: dict[str, Any], event_index: int, match_state: MatchState | None = None) -> list[Opportunity]:
+    contexts = event_contexts(event)
+    if not contexts:
+        return []
     fixture_id = event.get("fixtureId")
     team = event.get("participant") or event.get("possession")
     team_label = event.get("participantLabel") or event.get("possessionLabel")
@@ -1044,74 +1145,107 @@ def build_opportunity(event: dict[str, Any], event_index: int, match_state: Matc
     clock = event.get("clockSeconds")
     participant1 = match_state.participant1 if match_state and match_state.participant1 else "A"
     participant2 = match_state.participant2 if match_state and match_state.participant2 else "B"
-    options = opportunity_options(context, participant1, participant2, team_label)
-    label = opportunity_label(context, event, team_label)
-    deadline_seconds = {"penalties": 120, "next_5": 300}[context]
     source_event = dict(event)
     source_event["_participant1Label"] = participant1
     source_event["_participant2Label"] = participant2
-    return Opportunity(
-        opportunity_id=f"opp_{fixture_id}_{event_index}_{context}",
-        fixture_id=fixture_id,
-        context=context,
-        label=label,
-        team=team,
-        team_label=team_label,
-        minute=minute,
-        created_event_index=event_index,
-        deadline_clock=clock + deadline_seconds if clock is not None else None,
-        deadline_event_index=event_index + (8 if context == "penalties" else 28),
-        options=options,
-        source_event=source_event,
-    )
+    opportunities = []
+    for context in contexts:
+        options = opportunity_options(context, participant1, participant2, team_label)
+        deadline_seconds = opportunity_deadline_seconds(context)
+        opportunities.append(
+            Opportunity(
+                opportunity_id=f"opp_{fixture_id}_{event_index}_{context}",
+                fixture_id=fixture_id,
+                context=context,
+                label=opportunity_label(context, event, team_label),
+                team=team,
+                team_label=team_label,
+                minute=minute,
+                created_event_index=event_index,
+                deadline_clock=clock + deadline_seconds if clock is not None and deadline_seconds is not None else None,
+                deadline_event_index=event_index + opportunity_deadline_events(context),
+                options=options,
+                source_event=source_event,
+            )
+        )
+    return opportunities
 
 
 def event_context(event: dict[str, Any]) -> str | None:
+    contexts = event_contexts(event)
+    return contexts[0] if contexts else None
+
+
+def event_contexts(event: dict[str, Any]) -> list[str]:
     flags = set(event.get("highlights") or [])
     if "penalty" in flags or _event_has_text(event, "penalty"):
         targets = event_targets(event)
         if targets.intersection({"goal", "miss", "saved", "cancel"}):
-            return None
-        return "penalties"
+            return []
+        return ["penalties"]
     targets = event_targets(event)
-    if targets.intersection({"goal", "yellow_card", "red_card", "cancel"}):
-        return None
+    if targets.intersection({"goal", "yellow_card", "red_card", "foul", "cancel"}):
+        return []
     if (
         "corner" in flags
         or "free_kick" in flags
         or _event_has_text(event, "high_danger", "danger_possession", "attack_possession", "corner", "free_kick", "free kick", "coup franc", "shot", "tir")
     ):
-        return "next_5"
-    return None
+        return ["goal_next_10", "next_goal_team", "next_foul"]
+    return []
 
 
-def is_too_late_for_next_5(event: dict[str, Any]) -> bool:
-    minute = parse_int(event.get("minute"))
-    if minute is not None:
-        return minute >= NEXT_5_CUTOFF_MINUTE
-    clock = parse_int(event.get("clockSeconds"))
-    return clock is not None and clock >= NEXT_5_CUTOFF_MINUTE * 60
+def opportunity_deadline_seconds(context: str) -> int | None:
+    return {
+        "penalties": 120,
+        "goal_next_10": GOAL_NEXT_10_SECONDS,
+        "next_goal_team": NEXT_GOAL_TEAM_SECONDS,
+        "next_foul": NEXT_FOUL_WINDOW_SECONDS,
+    }[context]
+
+
+def opportunity_deadline_events(context: str) -> int:
+    return {
+        "penalties": 8,
+        "goal_next_10": 56,
+        "next_goal_team": 56,
+        "next_foul": 56,
+    }[context]
 
 
 def opportunity_options(context: str, participant1: str = "A", participant2: str = "B", team_label: str | None = None) -> list[OpportunityOption]:
     if context == "penalties":
         return [
             OpportunityOption("penalty_goal", "yes, penalty scored", "safe", 1.35, "goal"),
-            OpportunityOption("penalty_no_goal", "no, no goal", "risky", 4.0, "no_goal", "any"),
+            OpportunityOption("penalty_no_goal", "no, missed or saved", "wild", 5.5, "no_goal", "any"),
         ]
-    team = team_label or "the involved team"
-    return [
-        OpportunityOption("goal_next_5_yes", f"yes, {team} goal in the next 5 min", "risky", 3.0, "goal", "same_team"),
-        OpportunityOption("goal_next_5_no", f"no, no {team} goal in the next 5 min", "safe", 1.25, "no_goal", "same_team"),
-    ]
+    if context == "goal_next_10":
+        return [
+            OpportunityOption("goal_next_10_yes", "yes, goal in the next 10 min", "risky", 2.4, "goal", "any"),
+            OpportunityOption("goal_next_10_no", "no goal in the next 10 min", "safe", 1.35, "no_goal", "any"),
+        ]
+    if context == "next_goal_team":
+        return [
+            OpportunityOption("next_goal_p1", f"{participant1} scores the next goal", "wild", 4.4, "goal", "participant1"),
+            OpportunityOption("next_goal_p2", f"{participant2} scores the next goal", "wild", 4.4, "goal", "participant2"),
+            OpportunityOption("next_goal_none", "no goal before the deadline", "safe", 1.35, "no_goal", "any"),
+        ]
+    if context == "next_foul":
+        return [
+            OpportunityOption("next_foul_p1", f"yes, {participant1} commits the next foul", "risky", 2.2, "foul", "participant1"),
+            OpportunityOption("next_foul_p2", f"no, {participant2} commits the next foul", "risky", 2.2, "foul", "participant2"),
+        ]
+    return []
 
 
 def opportunity_label(context: str, event: dict[str, Any], team_label: str | None) -> str:
     minute = f"{event.get('minute')}' - " if event.get("minute") is not None else ""
-    team = f" for {team_label}" if team_label else ""
+    team = f" for {team_label}" if context == "penalties" and team_label else ""
     labels = {
         "penalties": "Penalty: goal or no goal?",
-        "next_5": "Market: goal in the next 5 minutes?",
+        "goal_next_10": "Market: goal in the next 10 minutes?",
+        "next_goal_team": "Market: who scores the next goal?",
+        "next_foul": "Market: who commits the next foul?",
     }
     return f"{minute}{labels[context]}{team}"
 
@@ -1190,45 +1324,57 @@ def ant_agent_context(ant: AntState, opportunity: Opportunity) -> dict[str, Any]
 
 
 def agent_market_context(opportunity: Opportunity) -> dict[str, Any]:
-    yes_option = opportunity.options[0] if opportunity.options else None
-    no_option = opportunity.options[1] if len(opportunity.options) > 1 else None
     if opportunity.context == "penalties":
         proposition = "Is the penalty scored?"
+    elif opportunity.context == "goal_next_10":
+        proposition = "Will there be a goal in the next 10 minutes, including stoppage time?"
+    elif opportunity.context == "next_goal_team":
+        participant1 = opportunity.source_event.get("_participant1Label") or "team A"
+        participant2 = opportunity.source_event.get("_participant2Label") or "team B"
+        proposition = f"Who scores the next goal before the deadline: {participant1}, {participant2}, or no goal?"
+    elif opportunity.context == "next_foul":
+        participant1 = opportunity.source_event.get("_participant1Label") or "team A"
+        participant2 = opportunity.source_event.get("_participant2Label") or "team B"
+        proposition = f"Who commits the next foul: {participant1} or {participant2}?"
     else:
-        team = opportunity.team_label or "the involved team"
-        proposition = f"Will {team} score in the next 5 minutes?"
+        proposition = opportunity.label
+    available_votes = market_available_votes(opportunity)
     return {
         "marketId": opportunity.opportunity_id,
         "context": opportunity.context,
         "proposition": proposition,
         "teamLabel": opportunity.team_label,
         "minute": opportunity.minute,
-        "availableVotes": [
-            {
-                "vote": "yes",
-                "meaning": yes_option.label if yes_option else "yes",
-                "optionId": yes_option.option_id if yes_option else None,
-                "risk": yes_option.risk if yes_option else None,
-                "multiplier": yes_option.multiplier if yes_option else None,
-            },
-            {
-                "vote": "no",
-                "meaning": no_option.label if no_option else "no",
-                "optionId": no_option.option_id if no_option else None,
-                "risk": no_option.risk if no_option else None,
-                "multiplier": no_option.multiplier if no_option else None,
-            },
-            {
-                "vote": "abstain",
-                "meaning": "do not commit this ant to this market",
-                "optionId": None,
-                "risk": "none",
-                "multiplier": 0,
-            },
-        ],
-        "yesOptionId": yes_option.option_id if yes_option else None,
-        "noOptionId": no_option.option_id if no_option else None,
+        "availableVotes": available_votes,
+        "yesOptionId": available_votes[0]["optionId"] if len(available_votes) >= 1 else None,
+        "noOptionId": available_votes[1]["optionId"] if len(available_votes) >= 2 else None,
     }
+
+
+def market_available_votes(opportunity: Opportunity) -> list[dict[str, Any]]:
+    vote_keys = ["yes", "no"] if len(opportunity.options) <= 2 else ["option_a", "option_b", "option_c", "option_d"]
+    items = []
+    for index, option in enumerate(opportunity.options):
+        vote_key = vote_keys[index] if index < len(vote_keys) else f"option_{index + 1}"
+        items.append(
+            {
+                "vote": vote_key,
+                "meaning": option.label,
+                "optionId": option.option_id,
+                "risk": option.risk,
+                "multiplier": option.multiplier,
+            }
+        )
+    items.append(
+        {
+            "vote": "abstain",
+            "meaning": "do not commit this ant to this market",
+            "optionId": None,
+            "risk": "none",
+            "multiplier": 0,
+        }
+    )
+    return items
 
 
 def vote_from_ant_agent_decisions(
@@ -1243,6 +1389,7 @@ def vote_from_ant_agent_decisions(
     if not active_ants or not decisions:
         return None
 
+    ant_counts = colony_ant_counts(colony, event_index)
     decision_by_ant_id: dict[str, Any] = {}
     for decision in decisions:
         ant_id = str(_ant_decision_value(decision, "ant_id", "antId", ""))
@@ -1259,7 +1406,7 @@ def vote_from_ant_agent_decisions(
     market = agent_market_context(opportunity)
     vote_labels = {item["vote"]: item["meaning"] for item in market["availableVotes"]}
     vote_option_ids = {item["vote"]: item.get("optionId") for item in market["availableVotes"]}
-    vote_counts: dict[str, int] = {"yes": 0, "no": 0, "abstain": 0}
+    vote_counts: dict[str, int] = {item["vote"]: 0 for item in market["availableVotes"]}
 
     for ant in active_ants:
         decision = decision_by_ant_id.get(ant.ant_id)
@@ -1271,7 +1418,7 @@ def vote_from_ant_agent_decisions(
         vote = normalize_agent_vote(_ant_decision_value(decision, "vote", "vote", None))
         if not vote:
             vote = normalize_agent_vote(_ant_decision_value(decision, "choice", "choice", None))
-        if not vote:
+        if vote not in vote_counts:
             vote = "abstain"
         vote_counts[vote] += 1
         option_id = _ant_decision_value(decision, "option_id", "optionId", vote_option_ids.get(vote))
@@ -1310,6 +1457,9 @@ def vote_from_ant_agent_decisions(
         "infoRequests": info_requests,
         "neutralCount": neutral,
         "infoPacket": info_packet,
+        "aliveCount": ant_counts["aliveCount"],
+        "engagedCount": ant_counts["engagedCount"],
+        "woundedCount": ant_counts["woundedCount"],
         "source": "deepseek_ant_agents",
         "agentDecisionCount": len([ant_id for ant_id in decision_by_ant_id if ant_id in active_ids]),
         "agentCoverage": round(len([ant_id for ant_id in decision_by_ant_id if ant_id in active_ids]) / max(1, len(active_ants)), 3),
@@ -1328,6 +1478,12 @@ def normalize_agent_vote(value: Any) -> str | None:
         return "yes"
     if vote in {"no", "non", "n", "b"}:
         return "no"
+    if vote in {"option_a", "option a", "team_a", "team a"}:
+        return "option_a"
+    if vote in {"option_b", "option b", "team_b", "team b"}:
+        return "option_b"
+    if vote in {"option_c", "option c", "none", "no_goal", "no goal"}:
+        return "option_c"
     if vote in {"abstain", "abstention", "neutral", "neutre", "skip", "c"}:
         return "abstain"
     return None
@@ -1380,10 +1536,11 @@ def option_score(
 
     if prefers_market(ant.favorite_context, opportunity, option) or prefers_market(colony.favorite_context, opportunity, option):
         score += 0.15
-    if opportunity.context == "next_5":
+    if opportunity.context in {"goal_next_10", "next_goal_team"}:
         score += ant.momentum_bias * 0.12
-        if option.target == "yellow_card":
-            score += ant.chaos_bias * 0.10
+    if opportunity.context == "next_foul":
+        score += ant.chaos_bias * 0.12
+        score += ant.momentum_bias * 0.05
     if opportunity.context == "chaos":
         score += ant.chaos_bias * 0.13
     score += (ant.memory.success_rate(opportunity.context) - 0.5) * 0.22
@@ -1401,10 +1558,11 @@ def option_score(
 def prefers_market(favorite_context: str, opportunity: Opportunity, option: OpportunityOption | None) -> bool:
     if favorite_context == opportunity.context:
         return True
-    if opportunity.context == "next_5":
+    if opportunity.context in {"goal_next_10", "next_goal_team"}:
         if favorite_context in {"momentum", "corners"} and (option is None or option.target == "goal"):
             return True
-        if favorite_context == "chaos" and option is not None and option.target == "yellow_card":
+    if opportunity.context == "next_foul":
+        if favorite_context in {"chaos", "momentum"}:
             return True
     return False
 
@@ -1537,14 +1695,21 @@ def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, 
             return prediction.option.target == "no_goal"
         return None
 
-    if opportunity.context == "next_5":
+    if opportunity.context == "goal_next_10":
         if "goal" in targets:
-            same_market_team = event_matches_team_scope("same_team", event, opportunity)
-            if same_market_team:
-                return prediction.option.target == "goal"
-            return None
-        if prediction.option.target == "yellow_card" and "yellow_card" in targets:
-            return True
+            return prediction.option.target == "goal"
+        return None
+
+    if opportunity.context == "next_goal_team":
+        if "goal" in targets:
+            if prediction.option.target == "no_goal":
+                return False
+            return event_matches_team_scope(prediction.option.team_scope, event, opportunity)
+        return None
+
+    if opportunity.context == "next_foul":
+        if "foul" in targets:
+            return event_matches_team_scope(prediction.option.team_scope, event, opportunity)
         return None
 
     if prediction.option.target in targets:
@@ -1571,6 +1736,8 @@ def event_targets(event: dict[str, Any]) -> set[str]:
     if "red_card" in flags or _event_has_text(event, "red_card", "red card", "carton rouge"):
         targets.add("card")
         targets.add("red_card")
+    if "foul" in flags or _event_has_text(event, "foul", "faute"):
+        targets.add("foul")
     if event.get("confirmed") is not None and truthy(event.get("confirmed")):
         targets.add("confirmed")
     if "corner" in flags or "free_kick" in flags or _event_has_text(event, "corner", "free_kick", "free kick"):
@@ -1620,6 +1787,9 @@ def public_vote(vote: dict[str, Any]) -> dict[str, Any]:
     if vote.get("agentDecisionCount") is not None:
         public["agentDecisionCount"] = vote.get("agentDecisionCount")
         public["agentCoverage"] = vote.get("agentCoverage")
+        public["aliveCount"] = vote.get("aliveCount")
+        public["engagedCount"] = vote.get("engagedCount")
+        public["woundedCount"] = vote.get("woundedCount")
         public["market"] = vote.get("market", {})
         public["voteCounts"] = vote.get("voteCounts", {})
         public["voteLabels"] = vote.get("voteLabels", {})
@@ -1694,19 +1864,31 @@ def describe_vote(colony: ColonyState, vote: dict[str, Any], *, after_info: bool
 def describe_ant_agent_vote(colony: ColonyState, vote: dict[str, Any]) -> str:
     coverage = round(float(vote.get("agentCoverage", 0.0)) * 100)
     proposition = (vote.get("market") or {}).get("proposition") or "market"
-    return (
-        f"DeepSeek controls {vote.get('agentDecisionCount', 0)}/{vote['activeCount']} ants from {colony.name} "
-        f"({coverage}%) on {proposition}: {format_market_vote_summary(vote)}."
+    answered_count = int(vote.get("agentDecisionCount", 0) or 0)
+    active_count = int(vote.get("activeCount", 0) or 0)
+    alive_count = vote.get("aliveCount")
+    engaged_count = int(vote.get("engagedCount", 0) or 0)
+    wounded_count = int(vote.get("woundedCount", 0) or 0)
+    answer_label = (
+        f"{answered_count} voting ants answered"
+        if answered_count == active_count
+        else f"{answered_count}/{active_count} voting ants answered"
     )
+    status_parts = [f"{coverage}%"]
+    if alive_count is not None:
+        status_parts.append(f"{alive_count} alive")
+    if engaged_count:
+        status_parts.append(f"{engaged_count} at risk")
+    if wounded_count:
+        status_parts.append(f"{wounded_count} wounded")
+    return f"DeepSeek vote from {colony.name}: {answer_label} ({'; '.join(status_parts)}) on {proposition}: {format_market_vote_summary(vote)}."
 
 
 def format_market_vote_summary(vote: dict[str, Any]) -> str:
     counts = vote.get("voteCounts") or {}
-    return (
-        f"yes={counts.get('yes', 0)}, "
-        f"no={counts.get('no', 0)}, "
-        f"abstain={counts.get('abstain', 0)}"
-    )
+    order = ["yes", "no", "option_a", "option_b", "option_c", "option_d", "abstain"]
+    keys = [key for key in order if key in counts] + [key for key in counts if key not in order]
+    return ", ".join(f"{key}={counts.get(key, 0)}" for key in keys)
 
 
 def top_voted_option_label(vote: dict[str, Any]) -> str:

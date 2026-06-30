@@ -40,7 +40,7 @@ export COLONY_AGENT_MAX_PARALLEL_ANT_CALLS="12"
 export COLONY_AGENT_ANT_BATCH_SIZE="50"
 ```
 
-`OPENROUTER_API_KEY` is required to start a game. In `per_ant` mode, each AI ant makes its own OpenRouter call with its personality, objective, and memory. The active agent output is intentionally discrete: each ant only votes `yes`, `no`, or `abstain` on the open market, without confidence scores. Concrete paid info types are reserved for a later iteration.
+`OPENROUTER_API_KEY` is required to start a game. In `per_ant` mode, each AI ant makes its own OpenRouter call with its personality, objective, and memory. The active agent output is intentionally discrete: each ant only votes one of the market's exposed choices, without confidence scores. Concrete paid info types are reserved for a later iteration.
 
 `COLONY_AGENT_MAX_PARALLEL_ANT_CALLS` controls how many ant calls can run at the same time. `OPENROUTER_MAX_RETRIES` retries transient DeepSeek/OpenRouter failures and malformed ant JSON, but it never replaces a vote with a local policy. `COLONY_AGENT_ANT_BATCH_SIZE` is only used when `COLONY_AGENT_CALL_MODE=batch` is selected for faster replay debugging. At the end of a run, the journal shows AI cost calculated from OpenRouter `usage` tokens and `OPENROUTER_INPUT_PRICE_PER_MILLION_USD` / `OPENROUTER_OUTPUT_PRICE_PER_MILLION_USD`.
 
@@ -92,8 +92,8 @@ The V0 decision loop:
 ```text
 TXLine event
 -> V0 opportunity
--> clear yes/no market
--> individual yes/no/abstain ant votes via DeepSeek/OpenRouter
+-> clear market
+-> individual ant votes via DeepSeek/OpenRouter
 -> explicit error if DeepSeek/OpenRouter is unavailable
 -> ant commitment
 -> settlement + food/larvae/losses/memory
@@ -101,9 +101,11 @@ TXLine event
 
 V0 markets exposed to agents:
 
-- pressure event: `{involved team} scores in the next 5 minutes?`
-- penalty: `is the penalty scored?`
-- each ant votes `yes`, `no`, or `abstain`
+- safe bet: `will there be a goal in the next 10 minutes?`, including stoppage time
+- precision bet: `who scores the next goal?` with team A, team B, or no goal before deadline
+- chaos bet: `who commits the next foul?`; no foul before the deadline voids the market
+- hero bet: `is the penalty scored?`; goal is safer, missed/saved is rarer and pays more
+- each ant votes one of the market's exposed choices, such as `yes/no/abstain` or `option_a/option_b/option_c/abstain`
 - concrete paid info is disabled for now
 
 V0 colony resources:
@@ -122,9 +124,8 @@ Starting configuration:
 
 In the interface:
 
-- the match list opens on recent completed fixtures from the last 3 days by default, with filters for upcoming matches or a specific UTC date
-- **Create room** creates a private room from the selected fixture
-- **Run match** starts the active room simulation in replay mode; the journal fills while ants vote and settlements resolve
-- **Rerun sim** creates a new room with the same colonies and restarts the replay
+- **User live** opens on upcoming fixtures; **Create room** plus **Start live** connects colonies to the TXLine live stream for that fixture
+- **Admin replay** opens as a scrollable list of recent completed fixtures from the last 14 days for replay testing
+- **Run replay** starts the active admin room in replay mode; the journal fills while ants vote and settlements resolve
 
 The raw TXLine explorer endpoints remain available for debugging, but the main page now focuses on the playable colony loop.

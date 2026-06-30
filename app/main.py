@@ -58,6 +58,16 @@ class CreateColonyRequest(BaseModel):
     infoNeed: str
 
 
+class JoinRoomRequest(BaseModel):
+    name: str
+
+
+class UpdateColonyStrategyRequest(BaseModel):
+    style: str | None = None
+    favoriteContext: str | None = None
+    infoNeed: str | None = None
+
+
 class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
@@ -157,6 +167,28 @@ async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str,
     return room.public_state()
 
 
+@app.post("/api/games/{game_id}/players")
+async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    game_manager.harness(game_id).join_player(payload.name)
+    return room.public_state()
+
+
+@app.patch("/api/games/{game_id}/colonies/{colony_id}/strategy")
+async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateColonyStrategyRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    try:
+        game_manager.harness(game_id).update_colony_strategy(
+            colony_id,
+            style=payload.style,
+            favorite_context=payload.favoriteContext,
+            info_need=payload.infoNeed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return room.public_state()
+
+
 @app.post("/api/games/{game_id}/start")
 async def start_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
@@ -198,6 +230,8 @@ async def rerun_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
         seed=old_room.seed,
     )
     harness = game_manager.harness(room.game_id)
+    for player in old_room.players:
+        harness.join_player(player.name)
     for colony in old_room.colonies.values():
         harness.add_colony(
             colony.name,
@@ -410,6 +444,26 @@ async def upcoming_fixtures(
         "limit": limit,
         "count": len(upcoming),
         "fixtures": upcoming,
+    }
+
+
+@app.get("/api/fixtures/live-target")
+async def live_target_fixture(
+    days: int = Query(default=14, ge=1, le=90),
+    competition_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+) -> dict[str, Any]:
+    client = TxLineClient()
+    now = datetime.now(timezone.utc)
+    fixtures = await _live_target_candidates(client, now=now, days=days, competition_id=competition_id, search=search)
+    target, target_kind = _pick_live_target_fixture(fixtures, now=now)
+    return {
+        "mode": "live_target",
+        "status": target_kind or "empty",
+        "count": 1 if target else 0,
+        "candidateCount": len(fixtures),
+        "fixture": target,
+        "fixtures": [target] if target else [],
     }
 
 
@@ -662,6 +716,68 @@ async def _recent_past_fixtures(
 
     fixtures.sort(key=lambda item: (_fixture_start_timestamp(item) or 0, str(item.get("fixtureId") or "")), reverse=True)
     return fixtures[:limit]
+
+
+async def _live_target_candidates(
+    client: TxLineClient,
+    *,
+    now: datetime,
+    days: int,
+    competition_id: int | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    fixtures: list[dict[str, Any]] = []
+    seen: set[Any] = set()
+    start_day = now.date() - timedelta(days=1)
+
+    for offset in range(days + 1):
+        day = start_day + timedelta(days=offset)
+        raw = await client.fixture_snapshot(
+            start_epoch_day=epoch_day_from_date(day),
+            competition_id=competition_id,
+        )
+        normalized = normalize_fixtures(raw, search=search)
+        for fixture in normalized:
+            fixture_id = fixture.get("fixtureId")
+            key = fixture_id if fixture_id is not None else (fixture.get("participant1"), fixture.get("participant2"), fixture.get("startTime"))
+            if key in seen:
+                continue
+            seen.add(key)
+            if _fixture_start_timestamp(fixture) is None:
+                continue
+            fixtures.append(fixture)
+
+    fixtures.sort(key=lambda item: (_fixture_start_timestamp(item) or float("inf"), str(item.get("fixtureId") or "")))
+    return fixtures
+
+
+def _pick_live_target_fixture(
+    fixtures: list[dict[str, Any]],
+    *,
+    now: datetime,
+    live_window: timedelta = timedelta(minutes=150),
+) -> tuple[dict[str, Any] | None, str | None]:
+    now_ts = now.timestamp()
+    live_window_seconds = live_window.total_seconds()
+    current: list[dict[str, Any]] = []
+    upcoming: list[dict[str, Any]] = []
+
+    for fixture in fixtures:
+        start_ts = _fixture_start_timestamp(fixture)
+        if start_ts is None:
+            continue
+        if start_ts <= now_ts <= start_ts + live_window_seconds:
+            current.append(fixture)
+        elif start_ts > now_ts:
+            upcoming.append(fixture)
+
+    if current:
+        current.sort(key=lambda item: (_fixture_start_timestamp(item) or 0, str(item.get("fixtureId") or "")), reverse=True)
+        return current[0], "current"
+    if upcoming:
+        upcoming.sort(key=lambda item: (_fixture_start_timestamp(item) or float("inf"), str(item.get("fixtureId") or "")))
+        return upcoming[0], "next"
+    return None, None
 
 
 def _fixture_start_timestamp(fixture: dict[str, Any]) -> float | None:

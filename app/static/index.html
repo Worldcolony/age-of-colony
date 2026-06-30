@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-11" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-26" />
   </head>
   <body>
     <header class="topbar">
@@ -12,7 +12,13 @@
         <p class="eyebrow">TXLine World Cup</p>
         <h1>Age of Colony</h1>
       </div>
-      <div id="healthBadge" class="badge badge-muted">Connecting...</div>
+      <div class="top-actions">
+        <nav class="role-switch" aria-label="Workspace">
+          <button id="modeUser" class="role-button active" type="button" aria-pressed="true">User live</button>
+          <button id="modeAdmin" class="role-button" type="button" aria-pressed="false">Admin replay</button>
+        </nav>
+        <div id="healthBadge" class="badge badge-muted">Connecting...</div>
+      </div>
     </header>
 
     <main class="layout">
@@ -51,6 +57,15 @@
             <input id="fixtureSearch" type="search" placeholder="Team, competition..." />
           </label>
         </form>
+
+        <section id="liveMatchTarget" class="live-match-card" aria-label="Live match target">
+          <div>
+            <span id="liveMatchStatus" class="match-status">Searching</span>
+            <h3 id="liveMatchTitle">Looking for the match</h3>
+            <p id="liveMatchMeta">The app will use the current match, or the first upcoming match.</p>
+          </div>
+          <button id="participateMatch" type="button" disabled>Participate in match</button>
+        </section>
 
         <div class="table-wrap">
           <table>
@@ -91,15 +106,40 @@
       <section class="panel panel-game">
         <div class="panel-heading">
           <div>
-            <h2>Colony room</h2>
+            <h2>Match room</h2>
             <p id="gameStatus">Create a room from the selected match.</p>
           </div>
           <div class="button-row">
             <button id="createGame" type="button">Create room</button>
-            <button id="startGameReplay" type="button" disabled>Run match</button>
-            <button id="rerunGame" type="button" disabled>Rerun sim</button>
+            <button id="startGameLive" type="button" disabled>Start live</button>
+            <button id="startGameReplay" type="button" disabled hidden>Run replay</button>
           </div>
         </div>
+
+        <section class="room-setup" aria-label="Room setup">
+          <div id="setupSteps" class="setup-steps">
+            <span class="setup-step pending">1 Room</span>
+            <span class="setup-step pending">2 Players</span>
+            <span class="setup-step pending">3 Colonies</span>
+            <span class="setup-step pending">4 Live</span>
+          </div>
+          <div class="room-strip">
+            <div>
+              <span class="setup-label">Room</span>
+              <strong id="roomCode">No room yet</strong>
+            </div>
+            <form id="joinRoomForm" class="join-form">
+              <label>
+                Your name
+                <input id="playerName" type="text" maxlength="32" placeholder="Tanguy" />
+              </label>
+              <button id="joinRoom" type="submit" disabled>Add player</button>
+            </form>
+          </div>
+          <div id="playerList" class="player-list">
+            <span class="empty">Create a room, then players can join.</span>
+          </div>
+        </section>
 
         <form id="colonyForm" class="filters colony-form">
           <label>
@@ -171,6 +211,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-11" type="module"></script>
+    <script src="/static/app.js?v=colony-26" type="module"></script>
   </body>
 </html>
