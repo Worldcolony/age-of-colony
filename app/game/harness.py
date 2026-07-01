@@ -368,6 +368,9 @@ class GameRoom:
     fixture_id: Any
     participant1: str | None = None
     participant2: str | None = None
+    competition: str | None = None
+    start_time: Any = None
+    start_time_iso: str | None = None
     owner_anonymous_id: str | None = None
     owner_name: str | None = None
     seed: int = 7
@@ -398,6 +401,9 @@ class GameRoom:
             "fixtureId": self.fixture_id,
             "participant1": self.participant1,
             "participant2": self.participant2,
+            "competition": self.competition,
+            "startTime": self.start_time,
+            "startTimeIso": self.start_time_iso,
             "owner": {
                 "anonymousId": self.owner_anonymous_id,
                 "name": self.owner_name,
@@ -1041,6 +1047,9 @@ class GameManager:
         owner_anonymous_id: str | None = None,
         owner_name: str | None = None,
         room_code: str | None = None,
+        competition: str | None = None,
+        start_time: Any = None,
+        start_time_iso: str | None = None,
     ) -> GameRoom:
         game_id = f"game_{uuid.uuid4().hex[:10]}"
         clean_room_code = self._reserve_room_code(room_code)
@@ -1050,6 +1059,9 @@ class GameManager:
             fixture_id=fixture_id,
             participant1=participant1,
             participant2=participant2,
+            competition=(competition or "").strip()[:120] or None,
+            start_time=start_time,
+            start_time_iso=(start_time_iso or "").strip()[:80] or None,
             owner_anonymous_id=(owner_anonymous_id or "").strip()[:80] or None,
             owner_name=(owner_name or "").strip()[:32] or None,
             seed=seed if seed is not None else stable_seed(game_id, fixture_id) % 1_000_000,

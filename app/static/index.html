@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-33" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-34" />
   </head>
   <body>
     <header class="topbar">
@@ -140,6 +140,16 @@
               <button id="joinRoom" type="submit" disabled>Join</button>
             </form>
           </div>
+          <div id="roomLobby" class="room-lobby">
+            <div class="lobby-stat">
+              <span>Match starts in</span>
+              <strong id="matchCountdown">Create a room</strong>
+            </div>
+            <div class="lobby-stat">
+              <span>Players</span>
+              <strong id="playerCount">0 joined</strong>
+            </div>
+          </div>
           <div id="playerList" class="player-list">
             <span class="empty">Create a room, then players can join.</span>
           </div>
@@ -215,6 +225,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-33" type="module"></script>
+    <script src="/static/app.js?v=colony-34" type="module"></script>
   </body>
 </html>

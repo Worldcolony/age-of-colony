@@ -27,6 +27,7 @@ const USER_LIVE_DAYS = "14";
 const USER_LIVE_LIMIT = "100";
 const ANON_ID_STORAGE_KEY = "aocAnonymousId";
 const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
+let countdownTimer = null;
 
 const els = {
   healthBadge: document.querySelector("#healthBadge"),
@@ -58,6 +59,9 @@ const els = {
   setupSteps: document.querySelector("#setupSteps"),
   roomCode: document.querySelector("#roomCode"),
   roomCodeInput: document.querySelector("#roomCodeInput"),
+  roomLobby: document.querySelector("#roomLobby"),
+  matchCountdown: document.querySelector("#matchCountdown"),
+  playerCount: document.querySelector("#playerCount"),
   joinRoomForm: document.querySelector("#joinRoomForm"),
   playerName: document.querySelector("#playerName"),
   joinRoom: document.querySelector("#joinRoom"),
@@ -84,8 +88,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   initAnonymousIdentity();
   bindEvents();
   applyWorkspaceRole(initialWorkspaceRole(), { load: false });
+  const initialCode = initialRoomCode();
+  if (initialCode) els.roomCodeInput.value = initialCode;
   await checkHealth();
   await loadFixtures();
+  if (initialCode) await loadRoomByCode(initialCode);
 });
 
 function bindEvents() {
@@ -156,6 +163,11 @@ function applyWorkspaceRole(role, options = {}) {
 function initialWorkspaceRole() {
   const params = new URLSearchParams(window.location.search);
   return params.get("admin") === "1" || params.get("mode") === "admin" ? "admin" : "user";
+}
+
+function initialRoomCode() {
+  const params = new URLSearchParams(window.location.search);
+  return cleanRoomCode(params.get("room") || params.get("code"));
 }
 
 function updateFixtureFilterState() {
@@ -369,6 +381,9 @@ async function createGame() {
       fixtureId: state.selected.fixtureId,
       participant1: state.selected.participant1,
       participant2: state.selected.participant2,
+      competition: state.selected.competition,
+      startTime: state.selected.startTime,
+      startTimeIso: state.selected.startTimeIso,
       anonymousId: state.identity.anonymousId,
       creatorName: currentPlayerName() || null,
     });
@@ -385,6 +400,7 @@ async function createGame() {
     els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
     renderGameState(game);
     if (game.roomCode) els.roomCodeInput.value = game.roomCode;
+    setRoomUrl(game.roomCode);
     openGameStream();
     return game;
   } catch (error) {
@@ -401,6 +417,24 @@ async function participateInMatch() {
   }
   setSelectedFixture(target, { reset: !state.game.id && state.selected?.fixtureId !== target.fixtureId });
   els.gameStatus.textContent = "Upcoming match selected. Create a room, then join with your name.";
+}
+
+async function loadRoomByCode(roomCode) {
+  const cleanCode = cleanRoomCode(roomCode);
+  if (cleanCode.length !== 6) return null;
+  try {
+    const game = await getJson(`/api/rooms/${cleanCode}`);
+    setSelectedFixture(fixtureFromGame(game), { reset: false });
+    els.roomCodeInput.value = game.roomCode || cleanCode;
+    renderGameState(game);
+    setRoomUrl(game.roomCode || cleanCode);
+    openGameStream();
+    return game;
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+    updateGameActions();
+    return null;
+  }
 }
 
 async function joinRoom() {
@@ -422,7 +456,10 @@ async function joinRoom() {
       anonymousId: state.identity.anonymousId,
     });
     els.roomCodeInput.value = game.roomCode || roomCode;
+    setSelectedFixture(fixtureFromGame(game), { reset: false });
     renderGameState(game);
+    setRoomUrl(game.roomCode || roomCode);
+    openGameStream();
     els.gameStatus.textContent = `${name} joined the room.`;
   } catch (error) {
     els.gameStatus.textContent = error.message;
@@ -711,6 +748,26 @@ function cleanRoomCode(value) {
   return String(value || "").replace(/\D/g, "").slice(0, 6);
 }
 
+function fixtureFromGame(game) {
+  return {
+    fixtureId: game?.fixtureId,
+    participant1: game?.participant1,
+    participant2: game?.participant2,
+    competition: game?.competition,
+    startTime: game?.startTime,
+    startTimeIso: game?.startTimeIso,
+  };
+}
+
+function setRoomUrl(roomCode) {
+  const cleanCode = cleanRoomCode(roomCode);
+  if (!cleanCode || !history.replaceState) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", cleanCode);
+  url.searchParams.delete("code");
+  history.replaceState({}, "", url);
+}
+
 function persistPlayerName(name) {
   const cleanName = String(name || "").trim().slice(0, 32);
   state.identity.playerName = cleanName;
@@ -748,7 +805,10 @@ function renderRoomSetup(game = null) {
   if (roomCode && cleanRoomCode(els.roomCodeInput.value) !== roomCode) {
     els.roomCodeInput.value = roomCode;
   }
-  els.joinRoom.disabled = state.role === "user" ? status === "finished" : !hasRoom || status === "finished";
+  renderRoomCountdown(game);
+  els.playerCount.textContent = `${players.length} joined`;
+  const hasJoinCode = cleanRoomCode(els.roomCodeInput.value || roomCode).length === 6;
+  els.joinRoom.disabled = state.role === "user" ? !hasJoinCode || status === "finished" : !hasRoom || status === "finished";
   els.playerName.disabled = state.role === "admin" ? !hasRoom || status === "finished" : status === "finished";
   els.playerList.replaceChildren(
     ...(hasPlayers
@@ -791,6 +851,44 @@ function renderRoomSetup(game = null) {
   );
 }
 
+function renderRoomCountdown(game = null) {
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+  const startValue = matchStartValue(game);
+  if (!startValue) {
+    els.matchCountdown.textContent = state.game.id ? "Time unavailable" : "Create a room";
+    return;
+  }
+  const tick = () => {
+    els.matchCountdown.textContent = formatCountdown(startValue);
+  };
+  tick();
+  countdownTimer = setInterval(tick, 1000);
+}
+
+function matchStartValue(game = null) {
+  return game?.startTimeIso || game?.startTime || state.selected?.startTimeIso || state.selected?.startTime || null;
+}
+
+function formatCountdown(value) {
+  const normalizedValue = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+  const start = new Date(normalizedValue);
+  if (Number.isNaN(start.getTime())) return "Time unavailable";
+  const diffMs = start.getTime() - Date.now();
+  if (diffMs <= 0) return "Match started";
+  const totalSeconds = Math.ceil(diffMs / 1000);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function updateGameActions() {
   const isAdmin = state.role === "admin";
   const hasRoom = Boolean(state.game.id);
@@ -798,6 +896,7 @@ function updateGameActions() {
   const running = ["running_replay", "running_live"].includes(status);
   const locked = running || status === "finished";
   const hasColony = state.game.colonyCount > 0;
+  const hasJoinCode = cleanRoomCode(els.roomCodeInput.value || state.game.roomCode || "").length === 6;
   els.createGame.disabled =
     state.role === "user"
       ? !state.selected?.fixtureId || status === "finished"
@@ -807,7 +906,7 @@ function updateGameActions() {
   els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));
   els.participateMatch.textContent = firstSelected ? "Match selected" : "Select match";
   els.addColony.disabled = !hasRoom || locked;
-  els.joinRoom.disabled = state.role === "user" ? status === "finished" : !hasRoom || status === "finished";
+  els.joinRoom.disabled = state.role === "user" ? !hasJoinCode || status === "finished" : !hasRoom || status === "finished";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !hasColony;
   els.startGameReplay.disabled = !isAdmin || !hasRoom || locked || !hasColony;
 }

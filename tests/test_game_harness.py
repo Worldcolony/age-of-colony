@@ -1365,16 +1365,27 @@ class DemoRunApiTest(unittest.TestCase):
         client = TestClient(app)
         created = client.post(
             "/api/games",
-            json={"fixtureId": 818181, "participant1": "USA", "participant2": "Japan", "seed": 3},
+            json={
+                "fixtureId": 818181,
+                "participant1": "USA",
+                "participant2": "Japan",
+                "competition": "World Cup",
+                "startTime": 1782950400000,
+                "startTimeIso": "2026-07-02T00:00:00+00:00",
+                "seed": 3,
+            },
         ).json()
         room_code = created["roomCode"]
 
         self.assertEqual(len(room_code), 6)
         self.assertTrue(room_code.isdigit())
+        self.assertEqual(created["competition"], "World Cup")
+        self.assertEqual(created["startTimeIso"], "2026-07-02T00:00:00+00:00")
 
         found = client.get(f"/api/rooms/{room_code}")
         self.assertEqual(found.status_code, 200)
         self.assertEqual(found.json()["gameId"], created["gameId"])
+        self.assertEqual(found.json()["startTime"], 1782950400000)
 
         joined = client.post(f"/api/rooms/{room_code}/players", json={"name": "Alice", "anonymousId": "anon_alice"})
         self.assertEqual(joined.status_code, 200)

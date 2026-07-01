@@ -67,6 +67,9 @@ class CreateGameRequest(BaseModel):
     fixtureId: int | str
     participant1: str | None = None
     participant2: str | None = None
+    competition: str | None = None
+    startTime: int | float | str | None = None
+    startTimeIso: str | None = None
     seed: int | None = None
     anonymousId: str | None = None
     creatorName: str | None = None
@@ -181,6 +184,9 @@ async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
         fixture_id=payload.fixtureId,
         participant1=payload.participant1,
         participant2=payload.participant2,
+        competition=payload.competition,
+        start_time=payload.startTime,
+        start_time_iso=payload.startTimeIso,
         seed=payload.seed,
         owner_anonymous_id=payload.anonymousId,
         owner_name=payload.creatorName,
@@ -935,6 +941,9 @@ def _restore_room_from_stored_row(row: dict[str, Any]):
         fixture_id=public_state.get("fixtureId") or row.get("fixture_id"),
         participant1=public_state.get("participant1") or row.get("participant1"),
         participant2=public_state.get("participant2") or row.get("participant2"),
+        competition=public_state.get("competition") or row.get("competition"),
+        start_time=public_state.get("startTime") or row.get("start_time"),
+        start_time_iso=public_state.get("startTimeIso") or row.get("start_time_iso"),
         owner_anonymous_id=owner.get("anonymousId") if isinstance(owner, dict) else None,
         owner_name=owner.get("name") if isinstance(owner, dict) else None,
         seed=clean_seed,
