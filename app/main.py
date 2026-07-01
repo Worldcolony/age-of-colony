@@ -4,8 +4,11 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+import os
+
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,6 +36,19 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Age of Colony TXLine Monitor", version="0.1.0")
+
+# CORS — allow the standalone Next.js frontend (separate origin) to call the API.
+# Set WEB_ORIGINS to a comma-separated allowlist in production; defaults to "*" for dev.
+_web_origins = os.getenv("WEB_ORIGINS", "*")
+_allow_origins = ["*"] if _web_origins.strip() == "*" else [o.strip() for o in _web_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allow_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 game_manager = GameManager(decision_agent=OpenRouterColonyAgent.from_env())
 

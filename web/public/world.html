@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorldColony — Living AI Ant Civilization</title>
+<link rel="icon" href="/favicon.ico" sizes="any" />
+<link rel="icon" type="image/svg+xml" href="/worldcup/soccerball.svg" />
+<!-- WORLD CUP TEMP — predictions overlay content styles (remove after the tournament) -->
+<link rel="stylesheet" href="/worldcup/worldcup.css?v=20260620-1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Press+Start+2P&family=Pixelify+Sans:wght@400;500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/dinasty/styles.css?v=20260621-results-visible">
+<style id="wc-embed">html,body{background:#04060d !important;overflow:hidden !important} body{pointer-events:none !important} body > *:not(#scene):not(#atmos):not(script):not(style){display:none !important} #scene{position:fixed;inset:0}</style></head>
+<body>
+<canvas id="scene"></canvas>
+<div id="atmos"></div>
+<div id="crosshair"></div>
+
+<div id="hud">
+  <!-- brand -->
+  <div id="brand">
+    <div class="mark"><span class="hex"></span></div>
+    <div class="brand-txt">
+      <h1>WorldColony</h1>
+      <p>Living Colony Engine</p>
+    </div>
+  </div>
+
+  <!-- region selector -->
+  <div id="regions" class="panel"></div>
+
+  <!-- top stats (filled by hud) -->
+  <div id="stats" class="panel"></div>
+
+  <!-- backend interaction smoke test -->
+  <div id="backend" class="panel"></div>
+
+  <!-- inspector (right) -->
+  <div id="inspector" class="panel"></div>
+
+  <!-- exit (underground) -->
+  <div id="exitbtn" class="panel"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Back to surface</div>
+
+  <!-- thoughts ticker -->
+  <div id="thoughts" class="panel">
+    <div class="think-orb"></div>
+    <div id="think-stream"></div>
+  </div>
+
+  <!-- transport -->
+  <div id="transport" class="panel">
+    <div class="play-btn" id="play-btn"><span id="play-icon"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></span></div>
+    <div class="timeline">
+      <div class="tl-top"><span class="gen" id="tl-gen">Generation 1</span><span class="clock" id="tl-clock">Sol 1 · 00:00</span></div>
+      <div class="tl-track" id="tl-track"><div class="tl-fill" id="tl-fill"></div><div class="tl-knob" id="tl-knob"></div></div>
+    </div>
+    <div class="speeds" id="speeds">
+      <div class="speed" data-s="0.5">.5&times;</div>
+      <div class="speed active" data-s="1">1&times;</div>
+      <div class="speed" data-s="2">2&times;</div>
+      <div class="speed" data-s="4">4&times;</div>
+    </div>
+  </div>
+
+  <!-- bottom hotbar (filled by hud) -->
+  <div id="hotbar" class="panel"></div>
+
+  <!-- left tool rail -->
+  <div id="tools" class="panel">
+    <div class="tool active" data-tool="inspect">
+      <svg viewBox="0 0 24 24"><path d="M4 4l7 16 2-7 7-2z"/></svg>
+      <span class="tip">Inspect &amp; select</span>
+    </div>
+    <div class="tool" data-tool="food">
+      <svg viewBox="0 0 24 24"><path d="M12 3c3 4 5 6 5 9a5 5 0 0 1-10 0c0-3 2-5 5-9z"/></svg>
+      <span class="tip">Drop forage cache &nbsp;<b>F</b></span>
+    </div>
+    <div class="tool" data-tool="found">
+      <svg viewBox="0 0 24 24"><path d="M3 20h18M5 20c1-6 4-9 7-9s6 3 7 9"/><path d="M12 3v3M10.5 4.5h3"/></svg>
+      <span class="tip">Found your colony</span>
+    </div>
+    <div class="tool" id="tool-map">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="3"/><path d="M6 21c0-4 3-6 6-6s6 2 6 6"/><path d="M3 6l4-2v14l-4 2zM21 6l-4-2v14l4 2z"/></svg>
+      <span class="tip">Toggle Ant view &nbsp;<b>V</b></span>
+    </div>
+    <div class="tool" id="tool-recenter">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+      <span class="tip">World overview</span>
+    </div>
+  </div>
+
+  <!-- camera mode -->
+  <div id="cammode" class="panel">
+    <div class="cm active" data-mode="cinematic"><svg viewBox="0 0 24 24"><path d="M3 8l4-3 14 5-4 3z"/><path d="M3 8v9l14 2V13"/></svg>Cinematic</div>
+    <div class="cm" data-mode="explore"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M6 21c0-4 3-6 6-6s6 2 6 6"/></svg>Explore</div>
+  </div>
+
+  <!-- explore controls hint -->
+  <div id="keys" class="panel"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>ctrl</kbd> sprint · <kbd>mouse</kbd> look · <kbd>esc</kbd> exit ant view</div>
+
+  <!-- enter colony banner -->
+  <div id="enterbanner" class="panel"></div>
+
+  <!-- floating tooltip -->
+  <div id="tooltip" class="panel"></div>
+</div>
+
+<!-- phantom wallet — body-level so it stays above every overlay (intro, loading, etc.) -->
+<div id="wallet" class="panel"></div>
+
+<!-- ============ WORLD CUP TEMP — remove this whole block after the tournament ============ -->
+<!-- body-level (sibling of #hud/#intro) so z-index sits in front of EVERYTHING -->
+
+<!-- entry button (top-left). Opens the full-screen overlay. -->
+<a id="wc-cta" href="#worldcup" role="button" aria-label="Open World Cup Predictions">
+  <span class="wc-ball" aria-hidden="true">
+    <img src="/worldcup/soccerball.svg" alt="" width="30" height="30" />
+  </span>
+  <span class="wc-txt">
+    <span class="wc-kicker">Ant Colony · Live</span>
+    <span class="wc-title">World Cup Predictions</span>
+  </span>
+  <span class="wc-arrow" aria-hidden="true">&rarr;</span>
+</a>
+
+<!-- full-screen layer that covers the whole app while open -->
+<div id="wc-overlay" aria-hidden="true">
+  <!-- back button — sits in the SAME spot as #wc-cta, above the overlay -->
+  <button id="wc-back" type="button" aria-label="Back to the colony">
+    <span class="wc-ball wc-ball-back" aria-hidden="true">&larr;</span>
+    <span class="wc-txt">
+      <span class="wc-kicker">World Cup Predictions</span>
+      <span class="wc-title">Back to the Colony</span>
+    </span>
+  </button>
+
+  <!-- content goes here (built next) -->
+  <div id="wc-content"></div>
+</div>
+
+<script src="/worldcup/worldcup.js?v=20260620-1"></script>
+<!-- ============ /WORLD CUP TEMP ============ -->
+
+<!-- dive fade -->
+<div id="fade"></div>
+
+<!-- intro -->
+<div id="intro">
+  <div class="iwrap">
+    <div class="iorb"></div>
+    <h1>WorldColony</h1>
+    <p>Awakening the colonies&hellip;</p>
+  </div>
+</div>
+
+<script src="/vendor/three.min.js"></script>
+<script src="/vendor/OrbitControls.js"></script>
+<script src="/dinasty/noise.js"></script>
+<script src="/dinasty/core.js"></script>
+<script src="/dinasty/biomes.js"></script>
+<script src="/dinasty/world.js"></script>
+<script src="/dinasty/flora.js"></script>
+<script src="/dinasty/resources.js"></script>
+<script src="/dinasty/colony.js?v=20260621-no-create-swarm"></script>
+<script src="/dinasty/ants.js?v=20260621-no-create-swarm"></script>
+<script src="/dinasty/trails.js"></script>
+<script src="/dinasty/underground.js"></script>
+<script src="/dinasty/camera.js"></script>
+<script src="/dinasty/kgview.js"></script>
+<script src="/dinasty/hud.js?v=20260623-manifest-previous-tests"></script>
+<script src="/dinasty/logTerm.js"></script>
+<script src="/dinasty/txTable.js"></script>
+<script src="/dinasty/commsViz.js?v=20260621-run-results"></script>
+<script src="/dinasty/crystal.js"></script>
+<script src="/dinasty/lifecycle.js?v=20260614-discussion-pacing"></script>
+<script src="/dinasty/interactions.js"></script>
+<script src="/dinasty/wallet.js"></script>
+<script src="/dinasty/onboarding.js"></script>
+<script src="/dinasty/minimap.js"></script>
+<script src="/dinasty/queen.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/config.js?v=20260620-kg-plugins"></script>
+<script src="/dinasty/supa.js"></script>
+<script src="/dinasty/main.js"></script>
+<script src="/dinasty/databridge.js?v=20260623-lazy-previous-tests"></script>
+</body>
+</html>

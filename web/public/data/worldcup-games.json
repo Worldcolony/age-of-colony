@@ -1,0 +1,2119 @@
+{
+  "source": "colony/data/world_cup_kg.json via _forecast_games_from_kg",
+  "count": 104,
+  "games": [
+    {
+      "match_id": "match:world_cup_2026:001:2026_06_11_mexico_south_africa",
+      "name": "Mexico vs South Africa",
+      "home_team": "Mexico",
+      "away_team": "South Africa",
+      "market_type": "three_way",
+      "date": "2026-06-11",
+      "time": "13:00 UTC-6",
+      "stage": "Matchday 1",
+      "group": "Group A",
+      "venue": "Mexico City",
+      "score": {
+        "ft": [
+          2,
+          0
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:002:2026_06_11_south_korea_czech_republic",
+      "name": "South Korea vs Czech Republic",
+      "home_team": "South Korea",
+      "away_team": "Czech Republic",
+      "market_type": "three_way",
+      "date": "2026-06-11",
+      "time": "20:00 UTC-6",
+      "stage": "Matchday 1",
+      "group": "Group A",
+      "venue": "Guadalajara (Zapopan)",
+      "score": {
+        "ft": [
+          2,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:007:2026_06_12_canada_bosnia_herzegovina",
+      "name": "Canada vs Bosnia & Herzegovina",
+      "home_team": "Canada",
+      "away_team": "Bosnia & Herzegovina",
+      "market_type": "three_way",
+      "date": "2026-06-12",
+      "time": "15:00 UTC-4",
+      "stage": "Matchday 2",
+      "group": "Group B",
+      "venue": "Toronto",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:019:2026_06_12_usa_paraguay",
+      "name": "USA vs Paraguay",
+      "home_team": "USA",
+      "away_team": "Paraguay",
+      "market_type": "three_way",
+      "date": "2026-06-12",
+      "time": "18:00 UTC-7",
+      "stage": "Matchday 2",
+      "group": "Group D",
+      "venue": "Los Angeles (Inglewood)",
+      "score": {
+        "ft": [
+          4,
+          1
+        ],
+        "ht": [
+          3,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:008:2026_06_13_qatar_switzerland",
+      "name": "Qatar vs Switzerland",
+      "home_team": "Qatar",
+      "away_team": "Switzerland",
+      "market_type": "three_way",
+      "date": "2026-06-13",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 3",
+      "group": "Group B",
+      "venue": "San Francisco Bay Area (Santa Clara)",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:013:2026_06_13_brazil_morocco",
+      "name": "Brazil vs Morocco",
+      "home_team": "Brazil",
+      "away_team": "Morocco",
+      "market_type": "three_way",
+      "date": "2026-06-13",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 3",
+      "group": "Group C",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          1,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:014:2026_06_13_haiti_scotland",
+      "name": "Haiti vs Scotland",
+      "home_team": "Haiti",
+      "away_team": "Scotland",
+      "market_type": "three_way",
+      "date": "2026-06-13",
+      "time": "21:00 UTC-4",
+      "stage": "Matchday 3",
+      "group": "Group C",
+      "venue": "Boston (Foxborough)",
+      "score": {
+        "ft": [
+          0,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:020:2026_06_13_australia_turkey",
+      "name": "Australia vs Turkey",
+      "home_team": "Australia",
+      "away_team": "Turkey",
+      "market_type": "three_way",
+      "date": "2026-06-13",
+      "time": "21:00 UTC-7",
+      "stage": "Matchday 3",
+      "group": "Group D",
+      "venue": "Vancouver",
+      "score": {
+        "ft": [
+          2,
+          0
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:025:2026_06_14_germany_cura_ao",
+      "name": "Germany vs Curaçao",
+      "home_team": "Germany",
+      "away_team": "Curaçao",
+      "market_type": "three_way",
+      "date": "2026-06-14",
+      "time": "12:00 UTC-5",
+      "stage": "Matchday 4",
+      "group": "Group E",
+      "venue": "Houston",
+      "score": {
+        "ft": [
+          7,
+          1
+        ],
+        "ht": [
+          3,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:031:2026_06_14_netherlands_japan",
+      "name": "Netherlands vs Japan",
+      "home_team": "Netherlands",
+      "away_team": "Japan",
+      "market_type": "three_way",
+      "date": "2026-06-14",
+      "time": "15:00 UTC-5",
+      "stage": "Matchday 4",
+      "group": "Group F",
+      "venue": "Dallas (Arlington)",
+      "score": {
+        "ft": [
+          2,
+          2
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:026:2026_06_14_ivory_coast_ecuador",
+      "name": "Ivory Coast vs Ecuador",
+      "home_team": "Ivory Coast",
+      "away_team": "Ecuador",
+      "market_type": "three_way",
+      "date": "2026-06-14",
+      "time": "19:00 UTC-4",
+      "stage": "Matchday 4",
+      "group": "Group E",
+      "venue": "Philadelphia",
+      "score": {
+        "ft": [
+          1,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:032:2026_06_14_sweden_tunisia",
+      "name": "Sweden vs Tunisia",
+      "home_team": "Sweden",
+      "away_team": "Tunisia",
+      "market_type": "three_way",
+      "date": "2026-06-14",
+      "time": "20:00 UTC-6",
+      "stage": "Matchday 4",
+      "group": "Group F",
+      "venue": "Monterrey (Guadalupe)",
+      "score": {
+        "ft": [
+          5,
+          1
+        ],
+        "ht": [
+          2,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:043:2026_06_15_spain_cape_verde",
+      "name": "Spain vs Cape Verde",
+      "home_team": "Spain",
+      "away_team": "Cape Verde",
+      "market_type": "three_way",
+      "date": "2026-06-15",
+      "time": "12:00 UTC-4",
+      "stage": "Matchday 5",
+      "group": "Group H",
+      "venue": "Atlanta",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:037:2026_06_15_belgium_egypt",
+      "name": "Belgium vs Egypt",
+      "home_team": "Belgium",
+      "away_team": "Egypt",
+      "market_type": "three_way",
+      "date": "2026-06-15",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 5",
+      "group": "Group G",
+      "venue": "Seattle",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:044:2026_06_15_saudi_arabia_uruguay",
+      "name": "Saudi Arabia vs Uruguay",
+      "home_team": "Saudi Arabia",
+      "away_team": "Uruguay",
+      "market_type": "three_way",
+      "date": "2026-06-15",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 5",
+      "group": "Group H",
+      "venue": "Miami (Miami Gardens)",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:038:2026_06_15_iran_new_zealand",
+      "name": "Iran vs New Zealand",
+      "home_team": "Iran",
+      "away_team": "New Zealand",
+      "market_type": "three_way",
+      "date": "2026-06-15",
+      "time": "18:00 UTC-7",
+      "stage": "Matchday 5",
+      "group": "Group G",
+      "venue": "Los Angeles (Inglewood)",
+      "score": {
+        "ft": [
+          2,
+          2
+        ],
+        "ht": [
+          1,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:049:2026_06_16_france_senegal",
+      "name": "France vs Senegal",
+      "home_team": "France",
+      "away_team": "Senegal",
+      "market_type": "three_way",
+      "date": "2026-06-16",
+      "time": "15:00 UTC-4",
+      "stage": "Matchday 6",
+      "group": "Group I",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": {
+        "ft": [
+          3,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:050:2026_06_16_iraq_norway",
+      "name": "Iraq vs Norway",
+      "home_team": "Iraq",
+      "away_team": "Norway",
+      "market_type": "three_way",
+      "date": "2026-06-16",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 6",
+      "group": "Group I",
+      "venue": "Boston (Foxborough)",
+      "score": {
+        "ft": [
+          1,
+          4
+        ],
+        "ht": [
+          1,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:055:2026_06_16_argentina_algeria",
+      "name": "Argentina vs Algeria",
+      "home_team": "Argentina",
+      "away_team": "Algeria",
+      "market_type": "three_way",
+      "date": "2026-06-16",
+      "time": "20:00 UTC-5",
+      "stage": "Matchday 6",
+      "group": "Group J",
+      "venue": "Kansas City",
+      "score": {
+        "ft": [
+          3,
+          0
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:056:2026_06_16_austria_jordan",
+      "name": "Austria vs Jordan",
+      "home_team": "Austria",
+      "away_team": "Jordan",
+      "market_type": "three_way",
+      "date": "2026-06-16",
+      "time": "21:00 UTC-7",
+      "stage": "Matchday 6",
+      "group": "Group J",
+      "venue": "San Francisco Bay Area (Santa Clara)",
+      "score": {
+        "ft": [
+          3,
+          1
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:061:2026_06_17_portugal_dr_congo",
+      "name": "Portugal vs DR Congo",
+      "home_team": "Portugal",
+      "away_team": "DR Congo",
+      "market_type": "three_way",
+      "date": "2026-06-17",
+      "time": "12:00 UTC-5",
+      "stage": "Matchday 7",
+      "group": "Group K",
+      "venue": "Houston",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          1,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:067:2026_06_17_england_croatia",
+      "name": "England vs Croatia",
+      "home_team": "England",
+      "away_team": "Croatia",
+      "market_type": "three_way",
+      "date": "2026-06-17",
+      "time": "15:00 UTC-5",
+      "stage": "Matchday 7",
+      "group": "Group L",
+      "venue": "Dallas (Arlington)",
+      "score": {
+        "ft": [
+          4,
+          2
+        ],
+        "ht": [
+          2,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:068:2026_06_17_ghana_panama",
+      "name": "Ghana vs Panama",
+      "home_team": "Ghana",
+      "away_team": "Panama",
+      "market_type": "three_way",
+      "date": "2026-06-17",
+      "time": "19:00 UTC-4",
+      "stage": "Matchday 7",
+      "group": "Group L",
+      "venue": "Toronto",
+      "score": {
+        "ft": [
+          1,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:062:2026_06_17_uzbekistan_colombia",
+      "name": "Uzbekistan vs Colombia",
+      "home_team": "Uzbekistan",
+      "away_team": "Colombia",
+      "market_type": "three_way",
+      "date": "2026-06-17",
+      "time": "20:00 UTC-6",
+      "stage": "Matchday 7",
+      "group": "Group K",
+      "venue": "Mexico City",
+      "score": {
+        "ft": [
+          1,
+          3
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:003:2026_06_18_czech_republic_south_africa",
+      "name": "Czech Republic vs South Africa",
+      "home_team": "Czech Republic",
+      "away_team": "South Africa",
+      "market_type": "three_way",
+      "date": "2026-06-18",
+      "time": "12:00 UTC-4",
+      "stage": "Matchday 8",
+      "group": "Group A",
+      "venue": "Atlanta",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:009:2026_06_18_switzerland_bosnia_herzegovina",
+      "name": "Switzerland vs Bosnia & Herzegovina",
+      "home_team": "Switzerland",
+      "away_team": "Bosnia & Herzegovina",
+      "market_type": "three_way",
+      "date": "2026-06-18",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 8",
+      "group": "Group B",
+      "venue": "Los Angeles (Inglewood)",
+      "score": {
+        "ft": [
+          4,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:010:2026_06_18_canada_qatar",
+      "name": "Canada vs Qatar",
+      "home_team": "Canada",
+      "away_team": "Qatar",
+      "market_type": "three_way",
+      "date": "2026-06-18",
+      "time": "15:00 UTC-7",
+      "stage": "Matchday 8",
+      "group": "Group B",
+      "venue": "Vancouver",
+      "score": {
+        "ft": [
+          6,
+          0
+        ],
+        "ht": [
+          3,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:004:2026_06_18_mexico_south_korea",
+      "name": "Mexico vs South Korea",
+      "home_team": "Mexico",
+      "away_team": "South Korea",
+      "market_type": "three_way",
+      "date": "2026-06-18",
+      "time": "19:00 UTC-6",
+      "stage": "Matchday 8",
+      "group": "Group A",
+      "venue": "Guadalajara (Zapopan)",
+      "score": {
+        "ft": [
+          1,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:021:2026_06_19_usa_australia",
+      "name": "USA vs Australia",
+      "home_team": "USA",
+      "away_team": "Australia",
+      "market_type": "three_way",
+      "date": "2026-06-19",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 9",
+      "group": "Group D",
+      "venue": "Seattle",
+      "score": {
+        "ft": [
+          2,
+          0
+        ],
+        "ht": [
+          2,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:015:2026_06_19_scotland_morocco",
+      "name": "Scotland vs Morocco",
+      "home_team": "Scotland",
+      "away_team": "Morocco",
+      "market_type": "three_way",
+      "date": "2026-06-19",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 9",
+      "group": "Group C",
+      "venue": "Boston (Foxborough)",
+      "score": {
+        "ft": [
+          0,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:022:2026_06_19_turkey_paraguay",
+      "name": "Turkey vs Paraguay",
+      "home_team": "Turkey",
+      "away_team": "Paraguay",
+      "market_type": "three_way",
+      "date": "2026-06-19",
+      "time": "20:00 UTC-7",
+      "stage": "Matchday 9",
+      "group": "Group D",
+      "venue": "San Francisco Bay Area (Santa Clara)",
+      "score": {
+        "ft": [
+          0,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:016:2026_06_19_brazil_haiti",
+      "name": "Brazil vs Haiti",
+      "home_team": "Brazil",
+      "away_team": "Haiti",
+      "market_type": "three_way",
+      "date": "2026-06-19",
+      "time": "20:30 UTC-4",
+      "stage": "Matchday 9",
+      "group": "Group C",
+      "venue": "Philadelphia",
+      "score": {
+        "ft": [
+          3,
+          0
+        ],
+        "ht": [
+          3,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:033:2026_06_20_netherlands_sweden",
+      "name": "Netherlands vs Sweden",
+      "home_team": "Netherlands",
+      "away_team": "Sweden",
+      "market_type": "three_way",
+      "date": "2026-06-20",
+      "time": "12:00 UTC-5",
+      "stage": "Matchday 10",
+      "group": "Group F",
+      "venue": "Houston",
+      "score": {
+        "ft": [
+          5,
+          1
+        ],
+        "ht": [
+          2,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:027:2026_06_20_germany_ivory_coast",
+      "name": "Germany vs Ivory Coast",
+      "home_team": "Germany",
+      "away_team": "Ivory Coast",
+      "market_type": "three_way",
+      "date": "2026-06-20",
+      "time": "16:00 UTC-4",
+      "stage": "Matchday 10",
+      "group": "Group E",
+      "venue": "Toronto",
+      "score": {
+        "ft": [
+          2,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:028:2026_06_20_ecuador_cura_ao",
+      "name": "Ecuador vs Curaçao",
+      "home_team": "Ecuador",
+      "away_team": "Curaçao",
+      "market_type": "three_way",
+      "date": "2026-06-20",
+      "time": "19:00 UTC-5",
+      "stage": "Matchday 10",
+      "group": "Group E",
+      "venue": "Kansas City",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:034:2026_06_20_tunisia_japan",
+      "name": "Tunisia vs Japan",
+      "home_team": "Tunisia",
+      "away_team": "Japan",
+      "market_type": "three_way",
+      "date": "2026-06-20",
+      "time": "22:00 UTC-6",
+      "stage": "Matchday 10",
+      "group": "Group F",
+      "venue": "Monterrey (Guadalupe)",
+      "score": {
+        "ft": [
+          0,
+          4
+        ],
+        "ht": [
+          0,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:045:2026_06_21_spain_saudi_arabia",
+      "name": "Spain vs Saudi Arabia",
+      "home_team": "Spain",
+      "away_team": "Saudi Arabia",
+      "market_type": "three_way",
+      "date": "2026-06-21",
+      "time": "12:00 UTC-4",
+      "stage": "Matchday 11",
+      "group": "Group H",
+      "venue": "Atlanta",
+      "score": {
+        "ft": [
+          4,
+          0
+        ],
+        "ht": [
+          3,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:039:2026_06_21_belgium_iran",
+      "name": "Belgium vs Iran",
+      "home_team": "Belgium",
+      "away_team": "Iran",
+      "market_type": "three_way",
+      "date": "2026-06-21",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 11",
+      "group": "Group G",
+      "venue": "Los Angeles (Inglewood)",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:046:2026_06_21_uruguay_cape_verde",
+      "name": "Uruguay vs Cape Verde",
+      "home_team": "Uruguay",
+      "away_team": "Cape Verde",
+      "market_type": "three_way",
+      "date": "2026-06-21",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 11",
+      "group": "Group H",
+      "venue": "Miami (Miami Gardens)",
+      "score": {
+        "ft": [
+          2,
+          2
+        ],
+        "ht": [
+          2,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:040:2026_06_21_new_zealand_egypt",
+      "name": "New Zealand vs Egypt",
+      "home_team": "New Zealand",
+      "away_team": "Egypt",
+      "market_type": "three_way",
+      "date": "2026-06-21",
+      "time": "18:00 UTC-7",
+      "stage": "Matchday 11",
+      "group": "Group G",
+      "venue": "Vancouver",
+      "score": {
+        "ft": [
+          1,
+          3
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:057:2026_06_22_argentina_austria",
+      "name": "Argentina vs Austria",
+      "home_team": "Argentina",
+      "away_team": "Austria",
+      "market_type": "three_way",
+      "date": "2026-06-22",
+      "time": "12:00 UTC-5",
+      "stage": "Matchday 12",
+      "group": "Group J",
+      "venue": "Dallas (Arlington)",
+      "score": {
+        "ft": [
+          2,
+          0
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:051:2026_06_22_france_iraq",
+      "name": "France vs Iraq",
+      "home_team": "France",
+      "away_team": "Iraq",
+      "market_type": "three_way",
+      "date": "2026-06-22",
+      "time": "17:00 UTC-4",
+      "stage": "Matchday 12",
+      "group": "Group I",
+      "venue": "Philadelphia",
+      "score": {
+        "ft": [
+          3,
+          0
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:052:2026_06_22_norway_senegal",
+      "name": "Norway vs Senegal",
+      "home_team": "Norway",
+      "away_team": "Senegal",
+      "market_type": "three_way",
+      "date": "2026-06-22",
+      "time": "20:00 UTC-4",
+      "stage": "Matchday 12",
+      "group": "Group I",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": {
+        "ft": [
+          3,
+          2
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:058:2026_06_22_jordan_algeria",
+      "name": "Jordan vs Algeria",
+      "home_team": "Jordan",
+      "away_team": "Algeria",
+      "market_type": "three_way",
+      "date": "2026-06-22",
+      "time": "20:00 UTC-7",
+      "stage": "Matchday 12",
+      "group": "Group J",
+      "venue": "San Francisco Bay Area (Santa Clara)",
+      "score": {
+        "ft": [
+          1,
+          2
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:063:2026_06_23_portugal_uzbekistan",
+      "name": "Portugal vs Uzbekistan",
+      "home_team": "Portugal",
+      "away_team": "Uzbekistan",
+      "market_type": "three_way",
+      "date": "2026-06-23",
+      "time": "12:00 UTC-5",
+      "stage": "Matchday 13",
+      "group": "Group K",
+      "venue": "Houston",
+      "score": {
+        "ft": [
+          5,
+          0
+        ],
+        "ht": [
+          3,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:069:2026_06_23_england_ghana",
+      "name": "England vs Ghana",
+      "home_team": "England",
+      "away_team": "Ghana",
+      "market_type": "three_way",
+      "date": "2026-06-23",
+      "time": "16:00 UTC-4",
+      "stage": "Matchday 13",
+      "group": "Group L",
+      "venue": "Boston (Foxborough)",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:070:2026_06_23_panama_croatia",
+      "name": "Panama vs Croatia",
+      "home_team": "Panama",
+      "away_team": "Croatia",
+      "market_type": "three_way",
+      "date": "2026-06-23",
+      "time": "19:00 UTC-4",
+      "stage": "Matchday 13",
+      "group": "Group L",
+      "venue": "Toronto",
+      "score": {
+        "ft": [
+          0,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:064:2026_06_23_colombia_dr_congo",
+      "name": "Colombia vs DR Congo",
+      "home_team": "Colombia",
+      "away_team": "DR Congo",
+      "market_type": "three_way",
+      "date": "2026-06-23",
+      "time": "20:00 UTC-6",
+      "stage": "Matchday 13",
+      "group": "Group K",
+      "venue": "Guadalajara (Zapopan)",
+      "score": {
+        "ft": [
+          1,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:012:2026_06_24_bosnia_herzegovina_qatar",
+      "name": "Bosnia & Herzegovina vs Qatar",
+      "home_team": "Bosnia & Herzegovina",
+      "away_team": "Qatar",
+      "market_type": "three_way",
+      "date": "2026-06-24",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 14",
+      "group": "Group B",
+      "venue": "Seattle",
+      "score": {
+        "ft": [
+          3,
+          1
+        ],
+        "ht": [
+          2,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:011:2026_06_24_switzerland_canada",
+      "name": "Switzerland vs Canada",
+      "home_team": "Switzerland",
+      "away_team": "Canada",
+      "market_type": "three_way",
+      "date": "2026-06-24",
+      "time": "12:00 UTC-7",
+      "stage": "Matchday 14",
+      "group": "Group B",
+      "venue": "Vancouver",
+      "score": {
+        "ft": [
+          2,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:018:2026_06_24_morocco_haiti",
+      "name": "Morocco vs Haiti",
+      "home_team": "Morocco",
+      "away_team": "Haiti",
+      "market_type": "three_way",
+      "date": "2026-06-24",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 14",
+      "group": "Group C",
+      "venue": "Atlanta",
+      "score": {
+        "ft": [
+          4,
+          2
+        ],
+        "ht": [
+          2,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:017:2026_06_24_scotland_brazil",
+      "name": "Scotland vs Brazil",
+      "home_team": "Scotland",
+      "away_team": "Brazil",
+      "market_type": "three_way",
+      "date": "2026-06-24",
+      "time": "18:00 UTC-4",
+      "stage": "Matchday 14",
+      "group": "Group C",
+      "venue": "Miami (Miami Gardens)",
+      "score": {
+        "ft": [
+          0,
+          3
+        ],
+        "ht": [
+          0,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:005:2026_06_24_czech_republic_mexico",
+      "name": "Czech Republic vs Mexico",
+      "home_team": "Czech Republic",
+      "away_team": "Mexico",
+      "market_type": "three_way",
+      "date": "2026-06-24",
+      "time": "19:00 UTC-6",
+      "stage": "Matchday 14",
+      "group": "Group A",
+      "venue": "Mexico City",
+      "score": {
+        "ft": [
+          0,
+          3
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:006:2026_06_24_south_africa_south_korea",
+      "name": "South Africa vs South Korea",
+      "home_team": "South Africa",
+      "away_team": "South Korea",
+      "market_type": "three_way",
+      "date": "2026-06-24",
+      "time": "19:00 UTC-6",
+      "stage": "Matchday 14",
+      "group": "Group A",
+      "venue": "Monterrey (Guadalupe)",
+      "score": {
+        "ft": [
+          1,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:029:2026_06_25_cura_ao_ivory_coast",
+      "name": "Curaçao vs Ivory Coast",
+      "home_team": "Curaçao",
+      "away_team": "Ivory Coast",
+      "market_type": "three_way",
+      "date": "2026-06-25",
+      "time": "16:00 UTC-4",
+      "stage": "Matchday 15",
+      "group": "Group E",
+      "venue": "Philadelphia",
+      "score": {
+        "ft": [
+          0,
+          2
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:030:2026_06_25_ecuador_germany",
+      "name": "Ecuador vs Germany",
+      "home_team": "Ecuador",
+      "away_team": "Germany",
+      "market_type": "three_way",
+      "date": "2026-06-25",
+      "time": "16:00 UTC-4",
+      "stage": "Matchday 15",
+      "group": "Group E",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": {
+        "ft": [
+          2,
+          1
+        ],
+        "ht": [
+          1,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:035:2026_06_25_japan_sweden",
+      "name": "Japan vs Sweden",
+      "home_team": "Japan",
+      "away_team": "Sweden",
+      "market_type": "three_way",
+      "date": "2026-06-25",
+      "time": "18:00 UTC-5",
+      "stage": "Matchday 15",
+      "group": "Group F",
+      "venue": "Dallas (Arlington)",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:036:2026_06_25_tunisia_netherlands",
+      "name": "Tunisia vs Netherlands",
+      "home_team": "Tunisia",
+      "away_team": "Netherlands",
+      "market_type": "three_way",
+      "date": "2026-06-25",
+      "time": "18:00 UTC-5",
+      "stage": "Matchday 15",
+      "group": "Group F",
+      "venue": "Kansas City",
+      "score": {
+        "ft": [
+          1,
+          3
+        ],
+        "ht": [
+          0,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:024:2026_06_25_paraguay_australia",
+      "name": "Paraguay vs Australia",
+      "home_team": "Paraguay",
+      "away_team": "Australia",
+      "market_type": "three_way",
+      "date": "2026-06-25",
+      "time": "19:00 UTC-7",
+      "stage": "Matchday 15",
+      "group": "Group D",
+      "venue": "San Francisco Bay Area (Santa Clara)",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:023:2026_06_25_turkey_usa",
+      "name": "Turkey vs USA",
+      "home_team": "Turkey",
+      "away_team": "USA",
+      "market_type": "three_way",
+      "date": "2026-06-25",
+      "time": "19:00 UTC-7",
+      "stage": "Matchday 15",
+      "group": "Group D",
+      "venue": "Los Angeles (Inglewood)",
+      "score": {
+        "ft": [
+          3,
+          2
+        ],
+        "ht": [
+          2,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:053:2026_06_26_norway_france",
+      "name": "Norway vs France",
+      "home_team": "Norway",
+      "away_team": "France",
+      "market_type": "three_way",
+      "date": "2026-06-26",
+      "time": "15:00 UTC-4",
+      "stage": "Matchday 16",
+      "group": "Group I",
+      "venue": "Boston (Foxborough)",
+      "score": {
+        "ft": [
+          1,
+          4
+        ],
+        "ht": [
+          1,
+          3
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:054:2026_06_26_senegal_iraq",
+      "name": "Senegal vs Iraq",
+      "home_team": "Senegal",
+      "away_team": "Iraq",
+      "market_type": "three_way",
+      "date": "2026-06-26",
+      "time": "15:00 UTC-4",
+      "stage": "Matchday 16",
+      "group": "Group I",
+      "venue": "Toronto",
+      "score": {
+        "ft": [
+          5,
+          0
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:048:2026_06_26_uruguay_spain",
+      "name": "Uruguay vs Spain",
+      "home_team": "Uruguay",
+      "away_team": "Spain",
+      "market_type": "three_way",
+      "date": "2026-06-26",
+      "time": "18:00 UTC-6",
+      "stage": "Matchday 16",
+      "group": "Group H",
+      "venue": "Guadalajara (Zapopan)",
+      "score": {
+        "ft": [
+          0,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:047:2026_06_26_cape_verde_saudi_arabia",
+      "name": "Cape Verde vs Saudi Arabia",
+      "home_team": "Cape Verde",
+      "away_team": "Saudi Arabia",
+      "market_type": "three_way",
+      "date": "2026-06-26",
+      "time": "19:00 UTC-5",
+      "stage": "Matchday 16",
+      "group": "Group H",
+      "venue": "Houston",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:041:2026_06_26_egypt_iran",
+      "name": "Egypt vs Iran",
+      "home_team": "Egypt",
+      "away_team": "Iran",
+      "market_type": "three_way",
+      "date": "2026-06-26",
+      "time": "20:00 UTC-7",
+      "stage": "Matchday 16",
+      "group": "Group G",
+      "venue": "Seattle",
+      "score": {
+        "ft": [
+          1,
+          1
+        ],
+        "ht": [
+          1,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:042:2026_06_26_new_zealand_belgium",
+      "name": "New Zealand vs Belgium",
+      "home_team": "New Zealand",
+      "away_team": "Belgium",
+      "market_type": "three_way",
+      "date": "2026-06-26",
+      "time": "20:00 UTC-7",
+      "stage": "Matchday 16",
+      "group": "Group G",
+      "venue": "Vancouver",
+      "score": {
+        "ft": [
+          1,
+          5
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:072:2026_06_27_croatia_ghana",
+      "name": "Croatia vs Ghana",
+      "home_team": "Croatia",
+      "away_team": "Ghana",
+      "market_type": "three_way",
+      "date": "2026-06-27",
+      "time": "17:00 UTC-4",
+      "stage": "Matchday 17",
+      "group": "Group L",
+      "venue": "Philadelphia",
+      "score": {
+        "ft": [
+          2,
+          1
+        ],
+        "ht": [
+          1,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:071:2026_06_27_panama_england",
+      "name": "Panama vs England",
+      "home_team": "Panama",
+      "away_team": "England",
+      "market_type": "three_way",
+      "date": "2026-06-27",
+      "time": "17:00 UTC-4",
+      "stage": "Matchday 17",
+      "group": "Group L",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": {
+        "ft": [
+          0,
+          2
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:065:2026_06_27_colombia_portugal",
+      "name": "Colombia vs Portugal",
+      "home_team": "Colombia",
+      "away_team": "Portugal",
+      "market_type": "three_way",
+      "date": "2026-06-27",
+      "time": "19:30 UTC-4",
+      "stage": "Matchday 17",
+      "group": "Group K",
+      "venue": "Miami (Miami Gardens)",
+      "score": {
+        "ft": [
+          0,
+          0
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:066:2026_06_27_dr_congo_uzbekistan",
+      "name": "DR Congo vs Uzbekistan",
+      "home_team": "DR Congo",
+      "away_team": "Uzbekistan",
+      "market_type": "three_way",
+      "date": "2026-06-27",
+      "time": "19:30 UTC-4",
+      "stage": "Matchday 17",
+      "group": "Group K",
+      "venue": "Atlanta",
+      "score": {
+        "ft": [
+          3,
+          1
+        ],
+        "ht": [
+          0,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:059:2026_06_27_algeria_austria",
+      "name": "Algeria vs Austria",
+      "home_team": "Algeria",
+      "away_team": "Austria",
+      "market_type": "three_way",
+      "date": "2026-06-27",
+      "time": "21:00 UTC-5",
+      "stage": "Matchday 17",
+      "group": "Group J",
+      "venue": "Kansas City",
+      "score": {
+        "ft": [
+          3,
+          3
+        ],
+        "ht": [
+          1,
+          1
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:060:2026_06_27_jordan_argentina",
+      "name": "Jordan vs Argentina",
+      "home_team": "Jordan",
+      "away_team": "Argentina",
+      "market_type": "three_way",
+      "date": "2026-06-27",
+      "time": "21:00 UTC-5",
+      "stage": "Matchday 17",
+      "group": "Group J",
+      "venue": "Dallas (Arlington)",
+      "score": {
+        "ft": [
+          1,
+          3
+        ],
+        "ht": [
+          0,
+          2
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:073",
+      "name": "South Africa vs Canada",
+      "home_team": "South Africa",
+      "away_team": "Canada",
+      "market_type": "binary",
+      "date": "2026-06-28",
+      "time": "12:00 UTC-7",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Los Angeles (Inglewood)",
+      "score": {
+        "ft": [
+          0,
+          1
+        ],
+        "ht": [
+          0,
+          0
+        ]
+      },
+      "played": true
+    },
+    {
+      "match_id": "match:world_cup_2026:076",
+      "name": "Brazil vs Japan",
+      "home_team": "Brazil",
+      "away_team": "Japan",
+      "market_type": "binary",
+      "date": "2026-06-29",
+      "time": "12:00 UTC-5",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Houston",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:074",
+      "name": "Germany vs Paraguay",
+      "home_team": "Germany",
+      "away_team": "Paraguay",
+      "market_type": "binary",
+      "date": "2026-06-29",
+      "time": "16:30 UTC-4",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Boston (Foxborough)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:075",
+      "name": "Netherlands vs Morocco",
+      "home_team": "Netherlands",
+      "away_team": "Morocco",
+      "market_type": "binary",
+      "date": "2026-06-29",
+      "time": "19:00 UTC-6",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Monterrey (Guadalupe)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:078",
+      "name": "Ivory Coast vs Norway",
+      "home_team": "Ivory Coast",
+      "away_team": "Norway",
+      "market_type": "binary",
+      "date": "2026-06-30",
+      "time": "12:00 UTC-5",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Dallas (Arlington)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:077",
+      "name": "France vs Sweden",
+      "home_team": "France",
+      "away_team": "Sweden",
+      "market_type": "binary",
+      "date": "2026-06-30",
+      "time": "17:00 UTC-4",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:079",
+      "name": "Mexico vs Ecuador",
+      "home_team": "Mexico",
+      "away_team": "Ecuador",
+      "market_type": "binary",
+      "date": "2026-06-30",
+      "time": "19:00 UTC-6",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Mexico City",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:080",
+      "name": "England vs DR Congo",
+      "home_team": "England",
+      "away_team": "DR Congo",
+      "market_type": "binary",
+      "date": "2026-07-01",
+      "time": "12:00 UTC-4",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Atlanta",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:082",
+      "name": "Belgium vs Senegal",
+      "home_team": "Belgium",
+      "away_team": "Senegal",
+      "market_type": "binary",
+      "date": "2026-07-01",
+      "time": "13:00 UTC-7",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Seattle",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:081",
+      "name": "USA vs Bosnia & Herzegovina",
+      "home_team": "USA",
+      "away_team": "Bosnia & Herzegovina",
+      "market_type": "binary",
+      "date": "2026-07-01",
+      "time": "17:00 UTC-7",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "San Francisco Bay Area (Santa Clara)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:084",
+      "name": "Spain vs Austria",
+      "home_team": "Spain",
+      "away_team": "Austria",
+      "market_type": "binary",
+      "date": "2026-07-02",
+      "time": "12:00 UTC-7",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Los Angeles (Inglewood)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:083",
+      "name": "Portugal vs Croatia",
+      "home_team": "Portugal",
+      "away_team": "Croatia",
+      "market_type": "binary",
+      "date": "2026-07-02",
+      "time": "19:00 UTC-4",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Toronto",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:085",
+      "name": "Switzerland vs Algeria",
+      "home_team": "Switzerland",
+      "away_team": "Algeria",
+      "market_type": "binary",
+      "date": "2026-07-02",
+      "time": "20:00 UTC-7",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Vancouver",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:088",
+      "name": "Australia vs Egypt",
+      "home_team": "Australia",
+      "away_team": "Egypt",
+      "market_type": "binary",
+      "date": "2026-07-03",
+      "time": "13:00 UTC-5",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Dallas (Arlington)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:086",
+      "name": "Argentina vs Cape Verde",
+      "home_team": "Argentina",
+      "away_team": "Cape Verde",
+      "market_type": "binary",
+      "date": "2026-07-03",
+      "time": "18:00 UTC-4",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Miami (Miami Gardens)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:087",
+      "name": "Colombia vs Ghana",
+      "home_team": "Colombia",
+      "away_team": "Ghana",
+      "market_type": "binary",
+      "date": "2026-07-03",
+      "time": "20:30 UTC-5",
+      "stage": "Round of 32",
+      "group": "",
+      "venue": "Kansas City",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:090",
+      "name": "W73 vs W75",
+      "home_team": "W73",
+      "away_team": "W75",
+      "market_type": "binary",
+      "date": "2026-07-04",
+      "time": "12:00 UTC-5",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Houston",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:089",
+      "name": "W74 vs W77",
+      "home_team": "W74",
+      "away_team": "W77",
+      "market_type": "binary",
+      "date": "2026-07-04",
+      "time": "17:00 UTC-4",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Philadelphia",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:091",
+      "name": "W76 vs W78",
+      "home_team": "W76",
+      "away_team": "W78",
+      "market_type": "binary",
+      "date": "2026-07-05",
+      "time": "16:00 UTC-4",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:092",
+      "name": "W79 vs W80",
+      "home_team": "W79",
+      "away_team": "W80",
+      "market_type": "binary",
+      "date": "2026-07-05",
+      "time": "18:00 UTC-6",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Mexico City",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:093",
+      "name": "W83 vs W84",
+      "home_team": "W83",
+      "away_team": "W84",
+      "market_type": "binary",
+      "date": "2026-07-06",
+      "time": "14:00 UTC-5",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Dallas (Arlington)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:094",
+      "name": "W81 vs W82",
+      "home_team": "W81",
+      "away_team": "W82",
+      "market_type": "binary",
+      "date": "2026-07-06",
+      "time": "17:00 UTC-7",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Seattle",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:095",
+      "name": "W86 vs W88",
+      "home_team": "W86",
+      "away_team": "W88",
+      "market_type": "binary",
+      "date": "2026-07-07",
+      "time": "12:00 UTC-4",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Atlanta",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:096",
+      "name": "W85 vs W87",
+      "home_team": "W85",
+      "away_team": "W87",
+      "market_type": "binary",
+      "date": "2026-07-07",
+      "time": "13:00 UTC-7",
+      "stage": "Round of 16",
+      "group": "",
+      "venue": "Vancouver",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:097",
+      "name": "W89 vs W90",
+      "home_team": "W89",
+      "away_team": "W90",
+      "market_type": "binary",
+      "date": "2026-07-09",
+      "time": "16:00 UTC-4",
+      "stage": "Quarter-final",
+      "group": "",
+      "venue": "Boston (Foxborough)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:098",
+      "name": "W93 vs W94",
+      "home_team": "W93",
+      "away_team": "W94",
+      "market_type": "binary",
+      "date": "2026-07-10",
+      "time": "12:00 UTC-7",
+      "stage": "Quarter-final",
+      "group": "",
+      "venue": "Los Angeles (Inglewood)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:099",
+      "name": "W91 vs W92",
+      "home_team": "W91",
+      "away_team": "W92",
+      "market_type": "binary",
+      "date": "2026-07-11",
+      "time": "17:00 UTC-4",
+      "stage": "Quarter-final",
+      "group": "",
+      "venue": "Miami (Miami Gardens)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:100",
+      "name": "W95 vs W96",
+      "home_team": "W95",
+      "away_team": "W96",
+      "market_type": "binary",
+      "date": "2026-07-11",
+      "time": "20:00 UTC-5",
+      "stage": "Quarter-final",
+      "group": "",
+      "venue": "Kansas City",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:101",
+      "name": "W97 vs W98",
+      "home_team": "W97",
+      "away_team": "W98",
+      "market_type": "binary",
+      "date": "2026-07-14",
+      "time": "14:00 UTC-5",
+      "stage": "Semi-final",
+      "group": "",
+      "venue": "Dallas (Arlington)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:102",
+      "name": "W99 vs W100",
+      "home_team": "W99",
+      "away_team": "W100",
+      "market_type": "binary",
+      "date": "2026-07-15",
+      "time": "15:00 UTC-4",
+      "stage": "Semi-final",
+      "group": "",
+      "venue": "Atlanta",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:103",
+      "name": "L101 vs L102",
+      "home_team": "L101",
+      "away_team": "L102",
+      "market_type": "binary",
+      "date": "2026-07-18",
+      "time": "17:00 UTC-4",
+      "stage": "Match for third place",
+      "group": "",
+      "venue": "Miami (Miami Gardens)",
+      "score": null,
+      "played": false
+    },
+    {
+      "match_id": "match:world_cup_2026:104",
+      "name": "W101 vs W102",
+      "home_team": "W101",
+      "away_team": "W102",
+      "market_type": "binary",
+      "date": "2026-07-19",
+      "time": "15:00 UTC-4",
+      "stage": "Final",
+      "group": "",
+      "venue": "New York/New Jersey (East Rutherford)",
+      "score": null,
+      "played": false
+    }
+  ]
+}

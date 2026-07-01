@@ -1,0 +1,79 @@
+// Age of Colony — typed API client for the FastAPI engine (separate origin).
+import type {
+  CreateColonyBody,
+  Fixture,
+  GameState,
+  StrategyPatch,
+} from "./types";
+
+export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function req<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  const opts: RequestInit = { method, headers: {} };
+  if (body !== undefined) {
+    (opts.headers as Record<string, string>)["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body ?? {});
+  }
+  const res = await fetch(`${API_BASE}${path}`, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = (data as { detail?: unknown })?.detail ?? res.statusText;
+    throw new ApiError(typeof detail === "string" ? detail : JSON.stringify(detail), res.status, detail);
+  }
+  return data as T;
+}
+
+function qs(params: Record<string, string | number | undefined | null> = {}): string {
+  const s = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== "") s.set(k, String(v));
+  }
+  const str = s.toString();
+  return str ? `?${str}` : "";
+}
+
+export interface FixtureList {
+  count?: number;
+  mode?: string;
+  status?: string;
+  fixture?: Fixture;
+  fixtures?: Fixture[];
+}
+
+export const api = {
+  health: () => req<Record<string, unknown>>("/health"),
+
+  upcomingFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
+    req<FixtureList>(`/api/fixtures/upcoming${qs(p)}`),
+  recentFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
+    req<FixtureList>(`/api/fixtures/recent${qs(p)}`),
+  liveTarget: (p?: { days?: number }) => req<FixtureList>(`/api/fixtures/live-target${qs(p)}`),
+
+  createGame: (body: { fixtureId: number | string; participant1?: string | null; participant2?: string | null; seed?: number }) =>
+    req<GameState>("/api/games", "POST", body),
+  getGame: (id: string) => req<GameState>(`/api/games/${id}`),
+  getReplay: (id: string) => req<{ game: GameState; events: import("./types").GameEvent[] }>(`/api/games/${id}/replay`),
+  joinPlayer: (id: string, name: string) => req<GameState>(`/api/games/${id}/players`, "POST", { name }),
+  addColony: (id: string, body: CreateColonyBody) => req<GameState>(`/api/games/${id}/colonies`, "POST", body),
+  updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
+    req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),
+  startGame: (id: string, mode: "replay" | "live" = "live") =>
+    req<GameState>(`/api/games/${id}/start`, "POST", { mode, source: mode === "replay" ? "historical" : "updates" }),
+  rerun: (id: string) => req<GameState>(`/api/games/${id}/rerun`, "POST", { mode: "replay", source: "historical" }),
+
+  demoMatches: () => req<FixtureList>("/api/demo/matches"),
+  demoRun: (body?: Record<string, unknown>) => req<GameState>("/api/demo/run", "POST", body ?? {}),
+  runPrevious: (body?: Record<string, unknown>) => req<GameState>("/api/games/run-previous", "POST", body ?? {}),
+};
+
+export const sseUrl = (gameId: string) => `${API_BASE}/api/games/${gameId}/events`;

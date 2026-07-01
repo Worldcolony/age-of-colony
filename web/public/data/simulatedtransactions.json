@@ -1,0 +1,86 @@
+{
+  "description": "SIMULATED / hypothetical trades — NOT executed on-chain. A counterfactual record of bets the colony identified but did NOT place in time, to study what our edge would have produced if execution speed matched our information. This file is intentionally separate from predictions.json (which holds ONLY real, on-chain-verified trades). Nothing here moved real funds.",
+  "simulated": true,
+  "executed": false,
+  "context": {
+    "event": "Qatar vs. Switzerland (World Cup, Group B)",
+    "date": "2026-06-13",
+    "reported_final_score": "1-1 (draw) — per live score (Google) + Polymarket draw market trading at 100c; pending official UMA settlement",
+    "venue_if_executed": "PolyGun (Telegram)",
+    "thesis": "Bet-3 'privileged info / speed' edge: with a faster live-score read we could have bought the draw (or under 2.5) before the market repriced. Our bottleneck was score-latency + execution speed, not the trade path (which is proven — see predictions.json)."
+  },
+  "simulated_trades": [
+    {
+      "id": 1,
+      "simulated": true,
+      "status": "NOT_EXECUTED",
+      "action": "buy",
+      "market_question": "Will Qatar vs. Switzerland end in a draw?",
+      "polygun_market_id": 1897047,
+      "outcome": "Yes (Draw)",
+      "side": "yes",
+      "stake_usd": 2.00,
+      "assumed_entry_price": 0.035,
+      "entry_price_basis": "ClickHouse draw price ~21:07 UTC while the market still implied Switzerland leading ~1-0 (draw was cheap). 'If our speed was right' = bet the draw in this window, on the early read that it was heading to 1-1, before Qatar's equalizer repriced it.",
+      "hypothetical_shares": 57.14,
+      "resolves_to": "draw (1-1)",
+      "hypothetical_gross_payout_usd": 57.14,
+      "hypothetical_net_pnl_usd": 55.14,
+      "fee_note": "ignores PolyGun's 1% fee (~$0.02) and slippage on a thin late book",
+      "why_not_executed": "By the time we opened the draw market to trade, it had already repriced to Yes 100c / No 0.1c — no edge left. Too slow / no live-score feed to act before the reprice.",
+      "alt_entry_scenarios": [
+        {"entry_price": 0.13, "basis": "pre-game draw price (kickoff)", "shares": 15.38, "net_pnl_usd": 13.38},
+        {"entry_price": 1.00, "basis": "price when we actually looked (post-reprice)", "shares": 2.0, "net_pnl_usd": -0.07, "note": "the real trade we declined — no upside, guaranteed fee loss"}
+      ]
+    },
+    {
+      "id": 2,
+      "simulated": true,
+      "status": "NOT_EXECUTED",
+      "action": "buy",
+      "market_question": "Qatar vs. Switzerland: O/U 2.5 (total goals)",
+      "outcome": "Under 2.5",
+      "side": "under",
+      "polymarket_condition_id": "0x22bc30327ba8ca5a6c7a15808b63c2a8c5e00ebfd7536b74d2689992f4ba8a67",
+      "under_token_id": "806961490044622937807145878629353199231499772082061646712921630323183428570",
+      "stake_usd": 2.00,
+      "assumed_entry_price": 0.335,
+      "entry_price_basis": "Pre-game O/U 2.5 UNDER price — the colony's actual mid-game pick. 1-1 final = 2 goals = UNDER 2.5 wins.",
+      "hypothetical_shares": 5.97,
+      "resolves_to": "under 2.5 (2 goals)",
+      "hypothetical_gross_payout_usd": 5.97,
+      "hypothetical_net_pnl_usd": 3.97,
+      "why_not_executed": "O/U markets are NOT on PolyGun and Polymarket CLOB is US-geoblocked. We could DISCOVER the market + token id via ClickHouse but had no executable venue from here.",
+      "note": "Confirms the colony's read was correct; the gap was a venue that lets a US user trade the O/U, not the prediction."
+    },
+    {
+      "id": 3,
+      "simulated": true,
+      "status": "ATTEMPTED_UNFILLABLE",
+      "action": "buy",
+      "event": "Australia vs. Türkiye (Jun 14)",
+      "market_question": "Will Australia win on 2026-06-14?",
+      "outcome": "Yes (Australia)",
+      "side": "yes",
+      "polygun_market_id": 1897055,
+      "polymarket_condition_id": "0xaaee502e7f2378521ba15c183e2762cecab013dd42f7600f7b35e99e0882f08c",
+      "token_id": "45307929350007847491024268648960623527752242214197163455465935647967776740420",
+      "stake_usd": 5.00,
+      "attempted": true,
+      "attempts": "Multiple real PolyGun market buys (70-min wake @52c, 6-min wake @57c) — all returned 'Buy Failed: no match'. CLOB-direct not attempted (US-geoblocked).",
+      "entry_price_when_tried": "0.52 - 0.57 (then surged to 0.999 as Australia won)",
+      "resolves_to": "Australia win (game decided in Australia's favor)",
+      "hypothetical_if_filled_at_0.57": {"shares": 8.77, "gross_payout_usd": 8.77, "net_pnl_usd": 3.77},
+      "why_not_executed": "On this attempt the ask side was thin: the CLOB book showed ~0 asks / ~81 bids @ 0.999 in the window we tried (05:58-06:03 UTC), so the market buy had little to fill against ('no match'). Just what the book looked like in that moment for this market — not a tooling bug.",
+      "lesson": "Entering a near-certain winner late can be hard once asks thin out toward the close — earlier holders may capture more of the move. An edge we're still exploring: getting onto the soon-to-be winner sooner, while asks still exist."
+    }
+  ],
+  "lessons": [
+    "Edge was real on both legs (draw + under 2.5); we lost it to SPEED and VENUE, not to a wrong call.",
+    "Draw arb needs a live-score feed faster than the market reprice + instant execution.",
+    "Under 2.5 needs an executable venue for O/U (PolyGun doesn't index it; CLOB geoblocks US).",
+    "Late-close liquidity can thin out on a near-certain winner: on the Australia leg the winning side showed almost no asks (mostly bids), so a late market buy found 'no match'. Small sample so far — we're exploring whether to get onto the soon-to-be winner earlier, while two-sided liquidity still exists.",
+    "Implication we're testing for the colony's edge: enter on the colony's PRE/IN-GAME read while two-sided liquidity exists — potentially sniping the soon-to-be winner before the book thins.",
+    "Real, executed trades live in predictions.json; this file is hypothetical only."
+  ]
+}
