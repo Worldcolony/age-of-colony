@@ -81,7 +81,7 @@ els.fixtureDate.value = today;
 document.addEventListener("DOMContentLoaded", async () => {
   initAnonymousIdentity();
   bindEvents();
-  applyWorkspaceRole("user", { load: false });
+  applyWorkspaceRole(initialWorkspaceRole(), { load: false });
   await checkHealth();
   await loadFixtures();
 });
@@ -136,7 +136,8 @@ function applyWorkspaceRole(role, options = {}) {
   els.fixtureMode.value = isAdmin ? "recent" : "upcoming";
   els.fixtureDays.value = isAdmin ? ADMIN_REPLAY_DAYS : USER_LIVE_DAYS;
   if (!isAdmin && !els.fixtureDate.value) els.fixtureDate.value = today;
-  els.createGame.textContent = "Create room";
+  els.createGame.textContent = isAdmin ? "Create replay room" : "Create room";
+  els.joinRoom.textContent = isAdmin ? "Add player" : "Join";
   els.startGameLive.hidden = isAdmin;
   els.startGameReplay.hidden = !isAdmin;
 
@@ -144,6 +145,11 @@ function applyWorkspaceRole(role, options = {}) {
   resetGameUi();
   updateFixtureFilterState();
   if (load) loadFixtures();
+}
+
+function initialWorkspaceRole() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("admin") === "1" || params.get("mode") === "admin" ? "admin" : "user";
 }
 
 function updateFixtureFilterState() {
@@ -573,13 +579,18 @@ function renderGameState(game) {
   updateGameActions();
   renderRoomSetup(game);
   renderSimulationSummary(game);
-  els.gameStatus.textContent = [
-    game.gameId ? `Room ${game.gameId}` : null,
-    game.status ? `status ${game.status}` : null,
-    game.eventIndex != null ? `${game.eventIndex} events` : null,
-  ]
-    .filter(Boolean)
-    .join(" - ");
+  els.gameStatus.textContent =
+    state.role === "user"
+      ? game.gameId
+        ? "Room ready. Enter your name and join."
+        : "Create a room for this match."
+      : [
+          game.gameId ? `Room ${game.gameId}` : null,
+          game.status ? `status ${game.status}` : null,
+          game.eventIndex != null ? `${game.eventIndex} events` : null,
+        ]
+          .filter(Boolean)
+          .join(" - ");
 
   if (!colonies.length) {
     els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;

@@ -41,20 +41,86 @@ body[data-workspace-role="admin"] #liveMatchTarget {
   display: none;
 }
 
+body[data-workspace-role="user"] .role-switch,
 body[data-workspace-role="user"] #fixtureFilters,
+body[data-workspace-role="user"] #refreshFixtures,
 body[data-workspace-role="user"] .table-wrap,
 body[data-workspace-role="user"] #manualFixture,
 body[data-workspace-role="user"] .panel-detail,
+body[data-workspace-role="user"] .panel-fixtures > .panel-heading,
 body[data-workspace-role="user"] #participateMatch,
 body[data-workspace-role="user"] #startGameLive,
+body[data-workspace-role="user"] #startGameReplay,
+body[data-workspace-role="user"] #setupSteps,
+body[data-workspace-role="user"] #playerList,
 body[data-workspace-role="user"] #colonyForm,
 body[data-workspace-role="user"] .simulation-panel,
 body[data-workspace-role="user"] .game-grid {
   display: none;
 }
 
+body[data-workspace-role="user"] .layout {
+  max-width: 780px;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+  margin: 0 auto;
+  padding-top: clamp(1rem, 4vw, 2.25rem);
+}
+
 body[data-workspace-role="user"] .panel-fixtures {
-  grid-column: 1 / -1;
+  grid-column: 1;
+}
+
+body[data-workspace-role="user"] .panel-game {
+  grid-column: 1;
+}
+
+body[data-workspace-role="user"] .live-match-card {
+  min-height: auto;
+  grid-template-columns: 1fr;
+  border-top: 0;
+  padding-top: 0;
+}
+
+body[data-workspace-role="user"] .live-match-card h3 {
+  max-width: 14ch;
+  font-size: clamp(1.9rem, 6vw, 3.3rem);
+  line-height: 1.02;
+}
+
+body[data-workspace-role="user"] .live-match-card p {
+  max-width: 44rem;
+}
+
+body[data-workspace-role="user"] .panel-game .panel-heading {
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+
+body[data-workspace-role="user"] .button-row {
+  justify-content: flex-end;
+}
+
+body[data-workspace-role="user"] #createGame,
+body[data-workspace-role="user"] #joinRoom {
+  min-height: 2.7rem;
+  padding-inline: 1rem;
+  font-weight: 850;
+}
+
+body[data-workspace-role="user"] .room-setup {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body[data-workspace-role="user"] .room-strip {
+  grid-template-columns: minmax(150px, 0.8fr) minmax(280px, 1.2fr);
+}
+
+body[data-workspace-role="user"] .join-form {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 button,
