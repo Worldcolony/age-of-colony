@@ -802,7 +802,10 @@ function updateGameActions() {
   const running = ["running_replay", "running_live"].includes(status);
   const locked = running || status === "finished";
   const hasColony = state.game.colonyCount > 0;
-  els.createGame.disabled = !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
+  els.createGame.disabled =
+    state.role === "user"
+      ? !state.selected?.fixtureId || status === "finished"
+      : !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
   const firstUpcoming = state.fixtures[0] || null;
   const firstSelected = firstUpcoming?.fixtureId && state.selected?.fixtureId === firstUpcoming.fixtureId;
   els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));
