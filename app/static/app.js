@@ -184,9 +184,9 @@ async function loadFixtures() {
     params.set("days", ADMIN_REPLAY_DAYS);
     params.set("limit", ADMIN_REPLAY_LIMIT);
   } else if (mode === "upcoming") {
-    endpoint = "/api/fixtures/upcoming";
+    endpoint = state.role === "admin" ? "/api/fixtures/upcoming" : "/api/fixtures/live-target";
     params.set("days", els.fixtureDays.value || USER_LIVE_DAYS);
-    params.set("limit", USER_LIVE_LIMIT);
+    if (state.role === "admin") params.set("limit", USER_LIVE_LIMIT);
     if (state.role === "admin" && els.fixtureDate.value) params.set("date", els.fixtureDate.value);
   } else {
     endpoint = "/api/fixtures";
@@ -197,7 +197,10 @@ async function loadFixtures() {
     const data = await getJson(`${endpoint}?${params.toString()}`);
     state.fixtures = data.fixtures || [];
     els.fixtureCount.textContent = fixtureCountLabel(mode, data);
-    if (state.role !== "admin") applyUpcomingFixtures(data);
+    if (state.role !== "admin") {
+      applyNextFixture(data);
+      return;
+    }
     renderFixtures();
   } catch (error) {
     state.fixtures = [];
@@ -210,13 +213,19 @@ async function loadFixtures() {
 function fixtureCountLabel(mode, data) {
   const count = data.count || 0;
   if (mode === "recent") return `${count} replay fixture(s)`;
+  if (data.mode === "live_target") {
+    if (data.status === "current") return "Current match selected";
+    if (data.status === "next") return "Next match selected";
+    return "No upcoming match";
+  }
   if (mode === "upcoming") return `${count} live fixture(s)`;
   return `${count} match(es)`;
 }
 
-function applyUpcomingFixtures(data) {
-  const target = state.fixtures[0] || null;
-  renderLiveMatchTarget(target, target ? "next" : "empty");
+function applyNextFixture(data) {
+  const target = data.fixture || state.fixtures[0] || null;
+  state.fixtures = target ? [target] : [];
+  renderLiveMatchTarget(target, data.status || (target ? "next" : "empty"));
   if (!target) {
     if (!state.game.id) {
       state.selected = null;
@@ -227,7 +236,7 @@ function applyUpcomingFixtures(data) {
     return;
   }
 
-  if (!state.selected?.fixtureId && !state.game.id) {
+  if (!state.game.id && state.selected?.fixtureId !== target.fixtureId) {
     setSelectedFixture(target, { reset: false });
   } else {
     updateGameActions();
@@ -720,16 +729,23 @@ function renderRoomSetup(game = null) {
               ? "No player has joined yet."
               : state.role === "admin"
                 ? "Create a room, then players can join."
-                : "Enter your name, then participate in the match.",
+                : "Create a room, then join with your name.",
           ),
         ]),
   );
-  const steps = [
-    ["Room", hasRoom],
-    ["Players", hasPlayers],
-    ["Colonies", hasColonies],
-    [state.role === "admin" ? "Replay" : "Live", liveReady || ["running_replay", "running_live", "finished"].includes(status)],
-  ];
+  const steps =
+    state.role === "admin"
+      ? [
+          ["Room", hasRoom],
+          ["Players", hasPlayers],
+          ["Colonies", hasColonies],
+          ["Replay", liveReady || ["running_replay", "running_live", "finished"].includes(status)],
+        ]
+      : [
+          ["Upcoming", Boolean(state.selected?.fixtureId)],
+          ["Room", hasRoom],
+          ["Join", hasPlayers],
+        ];
   els.setupSteps.replaceChildren(
     ...steps.map(([label, done], index) => {
       const item = document.createElement("span");

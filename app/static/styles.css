@@ -41,8 +41,20 @@ body[data-workspace-role="admin"] #liveMatchTarget {
   display: none;
 }
 
-body[data-workspace-role="user"] #manualFixture {
+body[data-workspace-role="user"] #fixtureFilters,
+body[data-workspace-role="user"] .table-wrap,
+body[data-workspace-role="user"] #manualFixture,
+body[data-workspace-role="user"] .panel-detail,
+body[data-workspace-role="user"] #participateMatch,
+body[data-workspace-role="user"] #startGameLive,
+body[data-workspace-role="user"] #colonyForm,
+body[data-workspace-role="user"] .simulation-panel,
+body[data-workspace-role="user"] .game-grid {
   display: none;
+}
+
+body[data-workspace-role="user"] .panel-fixtures {
+  grid-column: 1 / -1;
 }
 
 button,
