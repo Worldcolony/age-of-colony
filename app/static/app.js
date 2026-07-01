@@ -1,5 +1,9 @@
 const state = {
   role: "user",
+  identity: {
+    anonymousId: null,
+    playerName: "",
+  },
   fixtures: [],
   selected: null,
   game: {
@@ -20,6 +24,8 @@ const ADMIN_REPLAY_DAYS = "14";
 const ADMIN_REPLAY_LIMIT = "150";
 const USER_LIVE_DAYS = "14";
 const USER_LIVE_LIMIT = "100";
+const ANON_ID_STORAGE_KEY = "aocAnonymousId";
+const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
 
 const els = {
   healthBadge: document.querySelector("#healthBadge"),
@@ -73,6 +79,7 @@ const today = new Date().toISOString().slice(0, 10);
 els.fixtureDate.value = today;
 
 document.addEventListener("DOMContentLoaded", async () => {
+  initAnonymousIdentity();
   bindEvents();
   applyWorkspaceRole("user", { load: false });
   await checkHealth();
@@ -346,6 +353,8 @@ async function createGame() {
       fixtureId: state.selected.fixtureId,
       participant1: state.selected.participant1,
       participant2: state.selected.participant2,
+      anonymousId: state.identity.anonymousId,
+      creatorName: currentPlayerName() || null,
     });
     state.game.id = game.gameId;
     state.game.events = [];
@@ -393,8 +402,11 @@ async function joinRoom() {
   }
   els.gameStatus.textContent = "Joining room...";
   try {
-    const game = await postJson(`/api/games/${state.game.id}/players`, { name });
-    els.playerName.value = "";
+    persistPlayerName(name);
+    const game = await postJson(`/api/games/${state.game.id}/players`, {
+      name,
+      anonymousId: state.identity.anonymousId,
+    });
     renderGameState(game);
     els.gameStatus.textContent = `${name} joined the room.`;
   } catch (error) {
@@ -641,6 +653,46 @@ function renderGameState(game) {
       return card;
     }),
   );
+}
+
+function initAnonymousIdentity() {
+  let anonymousId = "";
+  try {
+    anonymousId = localStorage.getItem(ANON_ID_STORAGE_KEY) || "";
+    if (!anonymousId) {
+      anonymousId = makeAnonymousId();
+      localStorage.setItem(ANON_ID_STORAGE_KEY, anonymousId);
+    }
+    state.identity.playerName = localStorage.getItem(PLAYER_NAME_STORAGE_KEY) || "";
+  } catch {
+    anonymousId = makeAnonymousId();
+  }
+  state.identity.anonymousId = anonymousId;
+  if (state.identity.playerName && !els.playerName.value) {
+    els.playerName.value = state.identity.playerName;
+  }
+}
+
+function makeAnonymousId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `anon_${crypto.randomUUID()}`;
+  }
+  return `anon_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function currentPlayerName() {
+  return els.playerName.value.trim() || state.identity.playerName || "";
+}
+
+function persistPlayerName(name) {
+  const cleanName = String(name || "").trim().slice(0, 32);
+  state.identity.playerName = cleanName;
+  if (!cleanName) return;
+  try {
+    localStorage.setItem(PLAYER_NAME_STORAGE_KEY, cleanName);
+  } catch {
+    // Browsers can disable storage; anonymous play still works for the session.
+  }
 }
 
 function updateStrategyDraft(colonyId) {

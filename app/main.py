@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
+from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .txline import (
     TxLineClient,
     TxLineConfigError,
@@ -51,6 +52,7 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 game_manager = GameManager(decision_agent=OpenRouterColonyAgent.from_env())
+supabase_store = SupabaseGameStore()
 
 AUTORUN_COLONIES = (
     ("Red Nest", 10, "cautious", "penalties", "high"),
@@ -64,6 +66,8 @@ class CreateGameRequest(BaseModel):
     participant1: str | None = None
     participant2: str | None = None
     seed: int | None = None
+    anonymousId: str | None = None
+    creatorName: str | None = None
 
 
 class CreateColonyRequest(BaseModel):
@@ -76,6 +80,7 @@ class CreateColonyRequest(BaseModel):
 
 class JoinRoomRequest(BaseModel):
     name: str
+    anonymousId: str | None = None
 
 
 class UpdateColonyStrategyRequest(BaseModel):
@@ -126,6 +131,17 @@ async def txline_status_error_handler(_: Request, exc: httpx.HTTPStatusError) ->
     )
 
 
+@app.exception_handler(SupabasePersistenceError)
+async def supabase_persistence_error_handler(_: Request, exc: SupabasePersistenceError) -> JSONResponse:
+    return JSONResponse(
+        status_code=502,
+        content={
+            "detail": str(exc),
+            "hint": "Run supabase/aoc_bootstrap.sql and configure SUPABASE_URL plus SUPABASE_SERVICE_ROLE_KEY.",
+        },
+    )
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -153,6 +169,7 @@ async def health() -> dict[str, Any]:
             "inputPerMillionUsd": agent_settings.input_price_per_million_usd,
             "outputPerMillionUsd": agent_settings.output_price_per_million_usd,
         },
+        "supabase": supabase_store.public_status(),
     }
 
 
@@ -163,7 +180,10 @@ async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
         participant1=payload.participant1,
         participant2=payload.participant2,
         seed=payload.seed,
+        owner_anonymous_id=payload.anonymousId,
+        owner_name=payload.creatorName,
     )
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
@@ -180,13 +200,15 @@ async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
 @app.post("/api/games/{game_id}/players")
 async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
-    game_manager.harness(game_id).join_player(payload.name)
+    game_manager.harness(game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
@@ -202,6 +224,7 @@ async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateCo
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
@@ -225,6 +248,7 @@ async def start_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
         game_manager.live_tasks[game_id] = asyncio.create_task(_run_live_game(game_id))
     room.status = "running_live"
     room.add_log("game_started", "Live game connected to the TXLine stream.", {"mode": "live"})
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
@@ -244,10 +268,12 @@ async def rerun_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
         participant1=old_room.participant1,
         participant2=old_room.participant2,
         seed=old_room.seed,
+        owner_anonymous_id=old_room.owner_anonymous_id,
+        owner_name=old_room.owner_name,
     )
     harness = game_manager.harness(room.game_id)
     for player in old_room.players:
-        harness.join_player(player.name)
+        harness.join_player(player.name, anonymous_id=player.anonymous_id)
     for colony in old_room.colonies.values():
         harness.add_colony(
             colony.name,
@@ -337,6 +363,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest) -> dict[str, Any]:
             },
         )
         harness.process_events(timeline["events"])
+        await _sync_room_to_supabase_async(room)
         return room.public_state()
 
     raise HTTPException(
@@ -374,17 +401,44 @@ async def demo_run(payload: DemoRunRequest) -> dict[str, Any]:
         {"mode": "replay", "source": "demo", "rawCount": len(events)},
     )
     harness.process_events(events)
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
+
+
+@app.get("/api/admin/games")
+async def admin_games(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+    if not supabase_store.configured:
+        games = [room.public_state() for room in game_manager.rooms.values()]
+        games.sort(key=lambda item: item.get("eventIndex", 0), reverse=True)
+        return {
+            "source": "memory",
+            "configured": False,
+            "count": len(games[:limit]),
+            "games": games[:limit],
+            "hint": "Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to persist admin games.",
+        }
+    return await asyncio.to_thread(supabase_store.list_games, limit=limit)
 
 
 @app.get("/api/games/{game_id}")
 async def game_state(game_id: str) -> dict[str, Any]:
-    return _get_game_or_404(game_id).public_state()
+    room = game_manager.get_room(game_id)
+    if room:
+        return room.public_state()
+    replay = await _stored_replay_or_none(game_id)
+    if replay:
+        return replay["game"]
+    raise HTTPException(status_code=404, detail="Game not found.")
 
 
 @app.get("/api/games/{game_id}/replay")
 async def game_replay(game_id: str) -> dict[str, Any]:
-    room = _get_game_or_404(game_id)
+    room = game_manager.get_room(game_id)
+    if not room:
+        replay = await _stored_replay_or_none(game_id)
+        if replay:
+            return replay
+        raise HTTPException(status_code=404, detail="Game not found.")
     return {
         "game": room.public_state(),
         "events": [event.public_state() for event in room.log],
@@ -841,6 +895,7 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
         )
         room.status = "running_replay"
         game_manager.replay_tasks[room.game_id] = asyncio.create_task(_run_replay_game(room.game_id, events))
+        await _sync_room_to_supabase_async(room)
         return room.public_state()
 
     try:
@@ -875,6 +930,7 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
     )
     room.status = "running_replay"
     game_manager.replay_tasks[room.game_id] = asyncio.create_task(_run_replay_game(room.game_id, timeline["events"]))
+    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
@@ -892,6 +948,7 @@ async def _run_replay_game(game_id: str, events: list[dict[str, Any]]) -> None:
         room.status = "error"
         room.add_log("game_error", f"Replay interrupted: {exc}", _error_log_data(exc))
     finally:
+        await _sync_room_to_supabase_async(room)
         game_manager.replay_tasks.pop(game_id, None)
 
 
@@ -924,6 +981,7 @@ async def _run_live_game(game_id: str) -> None:
         room.status = "error"
         room.add_log("game_error", f"Live stream interrupted: {exc}", _error_log_data(exc))
     finally:
+        await _sync_room_to_supabase_async(room)
         game_manager.live_tasks.pop(game_id, None)
 
 
@@ -932,6 +990,23 @@ def _sync_room_agent_usage(game_id: str) -> None:
         game_manager.harness(game_id)._sync_agent_usage()
     except Exception:
         return
+
+
+async def _sync_room_to_supabase_async(room: Any) -> dict[str, Any]:
+    return await asyncio.to_thread(_sync_room_to_supabase, room)
+
+
+def _sync_room_to_supabase(room: Any) -> dict[str, Any]:
+    try:
+        return supabase_store.sync_room(room)
+    except SupabasePersistenceError as exc:
+        return {"stored": False, "reason": "supabase_error", "detail": str(exc)}
+
+
+async def _stored_replay_or_none(game_id: str) -> dict[str, Any] | None:
+    if not supabase_store.configured:
+        return None
+    return await asyncio.to_thread(supabase_store.game_replay, game_id)
 
 
 def _error_log_data(exc: Exception) -> dict[str, Any]:

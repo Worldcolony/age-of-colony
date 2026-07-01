@@ -157,12 +157,16 @@ class ColonyMemory:
 class PlayerState:
     player_id: str
     name: str
+    anonymous_id: str | None = None
 
     def public_state(self) -> dict[str, Any]:
-        return {
+        state = {
             "playerId": self.player_id,
             "name": self.name,
         }
+        if self.anonymous_id:
+            state["anonymousId"] = self.anonymous_id
+        return state
 
 
 @dataclass
@@ -363,6 +367,8 @@ class GameRoom:
     fixture_id: Any
     participant1: str | None = None
     participant2: str | None = None
+    owner_anonymous_id: str | None = None
+    owner_name: str | None = None
     seed: int = 7
     status: str = "created"
     mode: str | None = None
@@ -390,6 +396,12 @@ class GameRoom:
             "fixtureId": self.fixture_id,
             "participant1": self.participant1,
             "participant2": self.participant2,
+            "owner": {
+                "anonymousId": self.owner_anonymous_id,
+                "name": self.owner_name,
+            }
+            if self.owner_anonymous_id or self.owner_name
+            else None,
             "status": self.status,
             "mode": self.mode,
             "eventIndex": self.event_index,
@@ -444,11 +456,16 @@ class GameHarness:
         )
         return colony
 
-    def join_player(self, name: str) -> PlayerState:
+    def join_player(self, name: str, anonymous_id: str | None = None) -> PlayerState:
         clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
-        player = PlayerState(player_id=f"player_{uuid.uuid4().hex[:8]}", name=clean_name)
+        clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
+        player = PlayerState(player_id=f"player_{uuid.uuid4().hex[:8]}", name=clean_name, anonymous_id=clean_anonymous_id)
         self.room.players.append(player)
-        self.room.add_log("player_joined", f"{player.name} joined the room.", {"playerId": player.player_id, "name": player.name})
+        self.room.add_log(
+            "player_joined",
+            f"{player.name} joined the room.",
+            {"playerId": player.player_id, "name": player.name, "anonymousId": player.anonymous_id},
+        )
         return player
 
     def update_colony_strategy(
@@ -1007,6 +1024,8 @@ class GameManager:
         participant1: str | None = None,
         participant2: str | None = None,
         seed: int | None = None,
+        owner_anonymous_id: str | None = None,
+        owner_name: str | None = None,
     ) -> GameRoom:
         game_id = f"game_{uuid.uuid4().hex[:10]}"
         room = GameRoom(
@@ -1014,9 +1033,20 @@ class GameManager:
             fixture_id=fixture_id,
             participant1=participant1,
             participant2=participant2,
+            owner_anonymous_id=(owner_anonymous_id or "").strip()[:80] or None,
+            owner_name=(owner_name or "").strip()[:32] or None,
             seed=seed if seed is not None else stable_seed(game_id, fixture_id) % 1_000_000,
         )
-        room.add_log("game_created", f"Room created for fixture {fixture_id}.", {"gameId": game_id, "fixtureId": fixture_id})
+        room.add_log(
+            "game_created",
+            f"Room created for fixture {fixture_id}.",
+            {
+                "gameId": game_id,
+                "fixtureId": fixture_id,
+                "ownerAnonymousId": room.owner_anonymous_id,
+                "ownerName": room.owner_name,
+            },
+        )
         self.rooms[game_id] = room
         return room
 

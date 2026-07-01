@@ -60,6 +60,53 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 Then open http://127.0.0.1:8000.
 
+## First Railway Deploy
+
+This repo is ready to deploy as a separate Railway service while keeping the
+existing WorldColony/Supabase setup untouched.
+
+Create a second service in the same Railway project, point it at this repo, and
+let Railway use the committed `Dockerfile` and `railway.toml`.
+
+Required Railway variables:
+
+```bash
+TXLINE_JWT=...
+TXLINE_API_TOKEN=...
+OPENROUTER_API_KEY=...
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+Recommended V0 limits for a cheap first playable deploy:
+
+```bash
+TXLINE_BASE_URL=https://txline.txodds.com
+OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_TIMEOUT_SECONDS=30
+OPENROUTER_MAX_TOKENS=1200
+COLONY_AGENT_CALL_MODE=per_ant
+COLONY_AGENT_MAX_CALLS_PER_GAME=500
+COLONY_AGENT_MAX_PARALLEL_ANT_CALLS=6
+COLONY_AGENT_ANT_BATCH_SIZE=20
+```
+
+Before adding the Supabase variables, run `supabase/aoc_bootstrap.sql` in the
+existing WorldColony Supabase SQL editor. The first persistence pass writes:
+
+- `aoc_games`: one public state snapshot per room
+- `aoc_game_events`: the replay/admin journal for each room
+
+The app still works in memory if Supabase is missing, but admin history is reset
+when Railway restarts or redeploys the service. Check `/health` for
+`supabase.configured: true`.
+
+Admin persistence endpoints:
+
+- `GET /api/admin/games`: recent stored rooms, or in-memory rooms if Supabase is not configured
+- `GET /api/games/{game_id}`: current in-memory state, with Supabase fallback
+- `GET /api/games/{game_id}/replay`: current replay journal, with Supabase fallback
+
 ## Useful Endpoints
 
 - `GET /api/fixtures`: TXLine fixtures with `date`, `start_epoch_day`, `competition_id`, and `search` filters

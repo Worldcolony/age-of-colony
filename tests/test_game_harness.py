@@ -219,6 +219,23 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(any(event.kind == "player_joined" for event in room.log))
         self.assertTrue(any(event.kind == "strategy_updated" for event in room.log))
 
+    def test_anonymous_owner_and_player_identity_are_public(self):
+        manager = GameManager()
+        room = manager.create_room(
+            fixture_id=42,
+            participant1="France",
+            participant2="Belgium",
+            seed=123,
+            owner_anonymous_id="anon_browser_1",
+            owner_name="Tanguy",
+        )
+        player = manager.harness(room.game_id).join_player("Tanguy", anonymous_id="anon_browser_1")
+
+        public = room.public_state()
+
+        self.assertEqual(public["owner"], {"anonymousId": "anon_browser_1", "name": "Tanguy"})
+        self.assertEqual(public["players"], [{"playerId": player.player_id, "name": "Tanguy", "anonymousId": "anon_browser_1"}])
+
     def test_info_high_colony_buys_one_shared_info_packet(self):
         room, harness = self.make_room()
         colony = harness.add_colony(
