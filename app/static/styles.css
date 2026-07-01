@@ -41,16 +41,8 @@ body[data-workspace-role="admin"] #liveMatchTarget {
   display: none;
 }
 
-body[data-workspace-role="user"] #fixtureFilters,
-body[data-workspace-role="user"] .table-wrap,
-body[data-workspace-role="user"] #manualFixture,
-body[data-workspace-role="user"] .panel-detail,
-body[data-workspace-role="user"] #createGame {
+body[data-workspace-role="user"] #manualFixture {
   display: none;
-}
-
-body[data-workspace-role="user"] .panel-fixtures {
-  grid-column: 1 / -1;
 }
 
 button,

@@ -136,7 +136,7 @@ function applyWorkspaceRole(role, options = {}) {
   els.fixtureMode.value = isAdmin ? "recent" : "upcoming";
   els.fixtureDays.value = isAdmin ? ADMIN_REPLAY_DAYS : USER_LIVE_DAYS;
   if (!isAdmin && !els.fixtureDate.value) els.fixtureDate.value = today;
-  els.createGame.textContent = isAdmin ? "Create room" : "Participate";
+  els.createGame.textContent = "Create room";
   els.startGameLive.hidden = isAdmin;
   els.startGameReplay.hidden = !isAdmin;
 
@@ -184,9 +184,9 @@ async function loadFixtures() {
     params.set("days", ADMIN_REPLAY_DAYS);
     params.set("limit", ADMIN_REPLAY_LIMIT);
   } else if (mode === "upcoming") {
-    endpoint = state.role === "admin" ? "/api/fixtures/upcoming" : "/api/fixtures/live-target";
+    endpoint = "/api/fixtures/upcoming";
     params.set("days", els.fixtureDays.value || USER_LIVE_DAYS);
-    if (state.role === "admin") params.set("limit", USER_LIVE_LIMIT);
+    params.set("limit", USER_LIVE_LIMIT);
     if (state.role === "admin" && els.fixtureDate.value) params.set("date", els.fixtureDate.value);
   } else {
     endpoint = "/api/fixtures";
@@ -197,10 +197,7 @@ async function loadFixtures() {
     const data = await getJson(`${endpoint}?${params.toString()}`);
     state.fixtures = data.fixtures || [];
     els.fixtureCount.textContent = fixtureCountLabel(mode, data);
-    if (state.role !== "admin") {
-      applyLiveTarget(data);
-      return;
-    }
+    if (state.role !== "admin") applyUpcomingFixtures(data);
     renderFixtures();
   } catch (error) {
     state.fixtures = [];
@@ -213,18 +210,13 @@ async function loadFixtures() {
 function fixtureCountLabel(mode, data) {
   const count = data.count || 0;
   if (mode === "recent") return `${count} replay fixture(s)`;
-  if (data.mode === "live_target") {
-    if (data.status === "current") return "Current match";
-    if (data.status === "next") return "Next match";
-    return "No live match";
-  }
   if (mode === "upcoming") return `${count} live fixture(s)`;
   return `${count} match(es)`;
 }
 
-function applyLiveTarget(data) {
-  const target = data.fixture || state.fixtures[0] || null;
-  renderLiveMatchTarget(target, data.status);
+function applyUpcomingFixtures(data) {
+  const target = state.fixtures[0] || null;
+  renderLiveMatchTarget(target, target ? "next" : "empty");
   if (!target) {
     if (!state.game.id) {
       state.selected = null;
@@ -235,8 +227,11 @@ function applyLiveTarget(data) {
     return;
   }
 
-  state.fixtures = [target];
-  setSelectedFixture(target, { reset: !state.game.id && state.selected?.fixtureId !== target.fixtureId });
+  if (!state.selected?.fixtureId && !state.game.id) {
+    setSelectedFixture(target, { reset: false });
+  } else {
+    updateGameActions();
+  }
 }
 
 function renderFixtures() {
@@ -376,21 +371,13 @@ async function createGame() {
 }
 
 async function participateInMatch() {
-  if (!state.selected?.fixtureId) {
+  const target = state.fixtures[0] || null;
+  if (!target?.fixtureId) {
     els.gameStatus.textContent = "No match is available yet.";
     return;
   }
-  const name = els.playerName.value.trim();
-  if (!name) {
-    els.gameStatus.textContent = "Enter your player name before participating.";
-    els.playerName.focus();
-    return;
-  }
-  if (!state.game.id) {
-    const game = await createGame();
-    if (!game) return;
-  }
-  await joinRoom();
+  setSelectedFixture(target, { reset: !state.game.id && state.selected?.fixtureId !== target.fixtureId });
+  els.gameStatus.textContent = "Upcoming match selected. Create a room, then join with your name.";
 }
 
 async function joinRoom() {
@@ -760,10 +747,11 @@ function updateGameActions() {
   const running = ["running_replay", "running_live"].includes(status);
   const locked = running || status === "finished";
   const hasColony = state.game.colonyCount > 0;
-  els.createGame.disabled = hasRoom && !["finished", "error", "stopped"].includes(status);
-  els.participateMatch.disabled = !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
-  els.participateMatch.textContent =
-    hasRoom && !["finished", "error", "stopped"].includes(status) ? "Room ready" : "Participate in match";
+  els.createGame.disabled = !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
+  const firstUpcoming = state.fixtures[0] || null;
+  const firstSelected = firstUpcoming?.fixtureId && state.selected?.fixtureId === firstUpcoming.fixtureId;
+  els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));
+  els.participateMatch.textContent = firstSelected ? "Match selected" : "Select match";
   els.addColony.disabled = !hasRoom || locked;
   els.joinRoom.disabled = !hasRoom || status === "finished";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !hasColony;
