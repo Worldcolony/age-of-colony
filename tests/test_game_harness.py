@@ -233,8 +233,20 @@ class GameHarnessTest(unittest.TestCase):
 
         public = room.public_state()
 
+        self.assertEqual(len(public["roomCode"]), 6)
+        self.assertTrue(public["roomCode"].isdigit())
         self.assertEqual(public["owner"], {"anonymousId": "anon_browser_1", "name": "Tanguy"})
         self.assertEqual(public["players"], [{"playerId": player.player_id, "name": "Tanguy", "anonymousId": "anon_browser_1"}])
+
+    def test_rooms_get_private_six_digit_codes(self):
+        manager = GameManager()
+        first = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium")
+        second = manager.create_room(fixture_id=43, participant1="USA", participant2="Japan")
+
+        self.assertEqual(len(first.room_code), 6)
+        self.assertTrue(first.room_code.isdigit())
+        self.assertNotEqual(first.room_code, second.room_code)
+        self.assertIs(manager.get_room_by_code(first.room_code), first)
 
     def test_join_player_reuses_anonymous_identity(self):
         manager = GameManager()
@@ -1349,18 +1361,29 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["colonies"][0]["favoriteContext"], "penalties")
         self.assertEqual(game["colonies"][0]["infoNeed"], "high")
 
-    def test_active_game_endpoint_returns_latest_room_for_fixture(self):
+    def test_private_room_code_endpoint_supports_join(self):
         client = TestClient(app)
         created = client.post(
             "/api/games",
             json={"fixtureId": 818181, "participant1": "USA", "participant2": "Japan", "seed": 3},
         ).json()
+        room_code = created["roomCode"]
 
-        active = client.get("/api/games/active?fixture_id=818181")
+        self.assertEqual(len(room_code), 6)
+        self.assertTrue(room_code.isdigit())
 
-        self.assertEqual(active.status_code, 200)
-        self.assertEqual(active.json()["source"], "memory")
-        self.assertEqual(active.json()["game"]["gameId"], created["gameId"])
+        found = client.get(f"/api/rooms/{room_code}")
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.json()["gameId"], created["gameId"])
+
+        joined = client.post(f"/api/rooms/{room_code}/players", json={"name": "Alice", "anonymousId": "anon_alice"})
+        self.assertEqual(joined.status_code, 200)
+        self.assertEqual(joined.json()["players"][0]["name"], "Alice")
+
+        joined_again = client.post(f"/api/rooms/{room_code}/players", json={"name": "Alice 2", "anonymousId": "anon_alice"})
+        self.assertEqual(joined_again.status_code, 200)
+        self.assertEqual(len(joined_again.json()["players"]), 1)
+        self.assertEqual(joined_again.json()["players"][0]["name"], "Alice 2")
 
     def test_demo_run_requires_deepseek_agent(self):
         client = TestClient(app)

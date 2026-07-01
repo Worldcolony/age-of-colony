@@ -364,6 +364,7 @@ class GameLogEvent:
 @dataclass
 class GameRoom:
     game_id: str
+    room_code: str
     fixture_id: Any
     participant1: str | None = None
     participant2: str | None = None
@@ -393,6 +394,7 @@ class GameRoom:
         colonies.sort(key=lambda item: item["score"], reverse=True)
         return {
             "gameId": self.game_id,
+            "roomCode": self.room_code,
             "fixtureId": self.fixture_id,
             "participant1": self.participant1,
             "participant2": self.participant2,
@@ -1024,6 +1026,7 @@ class GameHarness:
 class GameManager:
     def __init__(self, decision_agent: ColonyDecisionAgent | None = None) -> None:
         self.rooms: dict[str, GameRoom] = {}
+        self.room_codes: dict[str, str] = {}
         self.live_tasks: dict[str, Any] = {}
         self.replay_tasks: dict[str, Any] = {}
         self.decision_agent = decision_agent
@@ -1037,10 +1040,13 @@ class GameManager:
         seed: int | None = None,
         owner_anonymous_id: str | None = None,
         owner_name: str | None = None,
+        room_code: str | None = None,
     ) -> GameRoom:
         game_id = f"game_{uuid.uuid4().hex[:10]}"
+        clean_room_code = self._reserve_room_code(room_code)
         room = GameRoom(
             game_id=game_id,
+            room_code=clean_room_code,
             fixture_id=fixture_id,
             participant1=participant1,
             participant2=participant2,
@@ -1050,23 +1056,55 @@ class GameManager:
         )
         room.add_log(
             "game_created",
-            f"Room created for fixture {fixture_id}.",
+            f"Room {clean_room_code} created for fixture {fixture_id}.",
             {
                 "gameId": game_id,
+                "roomCode": clean_room_code,
                 "fixtureId": fixture_id,
                 "ownerAnonymousId": room.owner_anonymous_id,
                 "ownerName": room.owner_name,
             },
         )
         self.rooms[game_id] = room
+        self.room_codes[clean_room_code] = game_id
         return room
 
     def get_room(self, game_id: str) -> GameRoom | None:
         return self.rooms.get(game_id)
 
+    def get_room_by_code(self, room_code: str) -> GameRoom | None:
+        clean_room_code = normalize_room_code(room_code)
+        game_id = self.room_codes.get(clean_room_code)
+        return self.rooms.get(game_id) if game_id else None
+
+    def register_room(self, room: GameRoom) -> GameRoom:
+        self.rooms[room.game_id] = room
+        self.room_codes[room.room_code] = room.game_id
+        return room
+
+    def _reserve_room_code(self, room_code: str | None = None) -> str:
+        if room_code:
+            clean_room_code = normalize_room_code(room_code)
+            if len(clean_room_code) != 6:
+                raise ValueError("room_code must contain exactly 6 digits")
+            if self.room_codes.get(clean_room_code):
+                raise ValueError("room_code is already in use")
+            self.room_codes.setdefault(clean_room_code, "")
+            return clean_room_code
+        for _ in range(100):
+            candidate = f"{random.randint(100000, 999999)}"
+            if candidate not in self.room_codes:
+                self.room_codes[candidate] = ""
+                return candidate
+        raise RuntimeError("Could not allocate a unique room code")
+
     def harness(self, game_id: str) -> GameHarness:
         room = self.rooms[game_id]
         return GameHarness(room, self.decision_agent)
+
+
+def normalize_room_code(value: str | int | None) -> str:
+    return "".join(character for character in str(value or "") if character.isdigit())[:6]
 
 
 def generate_ants(colony: ColonyState) -> list[AntState]:

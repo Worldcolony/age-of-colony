@@ -120,7 +120,21 @@ body[data-workspace-role="user"] .room-strip {
 }
 
 body[data-workspace-role="user"] .join-form {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(7rem, 0.45fr) minmax(0, 1fr) auto;
+}
+
+body[data-workspace-role="user"] #roomCode,
+body[data-workspace-role="user"] #roomCodeInput {
+  font-variant-numeric: tabular-nums;
+}
+
+body[data-workspace-role="user"] #roomCode {
+  font-size: 1.4rem;
+}
+
+body[data-workspace-role="user"] #roomCodeInput {
+  text-align: center;
+  font-weight: 850;
 }
 
 button,

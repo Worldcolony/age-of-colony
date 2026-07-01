@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-32" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-33" />
   </head>
   <body>
     <header class="topbar">
@@ -125,10 +125,14 @@
           </div>
           <div class="room-strip">
             <div>
-              <span class="setup-label">Room</span>
-              <strong id="roomCode">No room yet</strong>
+              <span class="setup-label">Private code</span>
+              <strong id="roomCode">No code yet</strong>
             </div>
             <form id="joinRoomForm" class="join-form">
+              <label>
+                Room code
+                <input id="roomCodeInput" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+              </label>
               <label>
                 Your name
                 <input id="playerName" type="text" maxlength="32" placeholder="Tanguy" />
@@ -211,6 +215,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-32" type="module"></script>
+    <script src="/static/app.js?v=colony-33" type="module"></script>
   </body>
 </html>

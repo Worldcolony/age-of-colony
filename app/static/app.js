@@ -8,6 +8,7 @@ const state = {
   selected: null,
   game: {
     id: null,
+    roomCode: null,
     stream: null,
     events: [],
     colonyCount: 0,
@@ -56,6 +57,7 @@ const els = {
   gameStatus: document.querySelector("#gameStatus"),
   setupSteps: document.querySelector("#setupSteps"),
   roomCode: document.querySelector("#roomCode"),
+  roomCodeInput: document.querySelector("#roomCodeInput"),
   joinRoomForm: document.querySelector("#joinRoomForm"),
   playerName: document.querySelector("#playerName"),
   joinRoom: document.querySelector("#joinRoom"),
@@ -99,6 +101,10 @@ function bindEvents() {
     loadFixtures();
   });
   els.fixtureSearch.addEventListener("input", debounce(loadFixtures, 300));
+  els.roomCodeInput.addEventListener("input", () => {
+    els.roomCodeInput.value = cleanRoomCode(els.roomCodeInput.value);
+    updateGameActions();
+  });
   els.fixtureDays.addEventListener("change", loadFixtures);
   els.competitionId.addEventListener("change", loadFixtures);
   els.fixtureDate.addEventListener("change", loadFixtures);
@@ -247,28 +253,6 @@ async function applyNextFixture(data) {
   } else {
     updateGameActions();
   }
-  if (!state.game.id) await loadActiveRoom(target.fixtureId);
-}
-
-async function loadActiveRoom(fixtureId) {
-  if (!fixtureId) return null;
-  try {
-    const data = await getJson(`/api/games/active?fixture_id=${encodeURIComponent(fixtureId)}`);
-    if (!data.game?.gameId) {
-      updateGameActions();
-      return null;
-    }
-    if (state.game.id && state.game.id !== data.game.gameId) return null;
-    renderGameState(data.game);
-    els.gameStatus.textContent = "Room ready. Enter your name and join.";
-    return data.game;
-  } catch (error) {
-    if (!state.game.id) {
-      els.gameStatus.textContent = `Room lookup failed: ${error.message}`;
-      updateGameActions();
-    }
-    return null;
-  }
 }
 
 function renderFixtures() {
@@ -389,6 +373,7 @@ async function createGame() {
       creatorName: currentPlayerName() || null,
     });
     state.game.id = game.gameId;
+    state.game.roomCode = game.roomCode || null;
     state.game.events = [];
     state.game.colonyCount = 0;
     state.game.players = [];
@@ -399,6 +384,7 @@ async function createGame() {
     state.game.agentUsage = null;
     els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
     renderGameState(game);
+    if (game.roomCode) els.roomCodeInput.value = game.roomCode;
     openGameStream();
     return game;
   } catch (error) {
@@ -418,11 +404,9 @@ async function participateInMatch() {
 }
 
 async function joinRoom() {
-  if (!state.game.id && state.selected?.fixtureId) {
-    await loadActiveRoom(state.selected.fixtureId);
-  }
-  if (!state.game.id) {
-    els.gameStatus.textContent = "Create a room first, then join.";
+  const roomCode = cleanRoomCode(els.roomCodeInput.value || state.game.roomCode || "");
+  if (roomCode.length !== 6) {
+    els.gameStatus.textContent = "Enter the 6-digit room code.";
     return;
   }
   const name = els.playerName.value.trim();
@@ -433,10 +417,11 @@ async function joinRoom() {
   els.gameStatus.textContent = "Joining room...";
   try {
     persistPlayerName(name);
-    const game = await postJson(`/api/games/${state.game.id}/players`, {
+    const game = await postJson(`/api/rooms/${roomCode}/players`, {
       name,
       anonymousId: state.identity.anonymousId,
     });
+    els.roomCodeInput.value = game.roomCode || roomCode;
     renderGameState(game);
     els.gameStatus.textContent = `${name} joined the room.`;
   } catch (error) {
@@ -570,6 +555,7 @@ async function loadGameReplay() {
 function resetGameUi(message = null) {
   closeGameStream();
   state.game.id = null;
+  state.game.roomCode = null;
   state.game.events = [];
   state.game.colonyCount = 0;
   state.game.players = [];
@@ -585,6 +571,7 @@ function resetGameUi(message = null) {
       : "Create a live room from an upcoming match.");
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+  if (state.role !== "admin") els.roomCodeInput.value = "";
   renderSimulationSummary(null);
   renderRoomSetup(null);
   updateGameActions();
@@ -594,6 +581,7 @@ function renderGameState(game) {
   if (!game) return;
   const colonies = game.colonies || [];
   state.game.id = game.gameId || state.game.id;
+  state.game.roomCode = game.roomCode || state.game.roomCode;
   state.game.colonyCount = colonies.length;
   state.game.players = game.players || state.game.players || [];
   state.game.coloniesById = colonies.reduce((map, colony) => {
@@ -609,8 +597,8 @@ function renderGameState(game) {
   renderSimulationSummary(game);
   els.gameStatus.textContent =
     state.role === "user"
-      ? game.gameId
-        ? "Room ready. Enter your name and join."
+      ? game.roomCode || state.game.roomCode
+        ? `Room ${game.roomCode || state.game.roomCode} ready. Share this code.`
         : "Create a room for this match."
       : [
           game.gameId ? `Room ${game.gameId}` : null,
@@ -719,6 +707,10 @@ function currentPlayerName() {
   return els.playerName.value.trim() || state.identity.playerName || "";
 }
 
+function cleanRoomCode(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 6);
+}
+
 function persistPlayerName(name) {
   const cleanName = String(name || "").trim().slice(0, 32);
   state.identity.playerName = cleanName;
@@ -751,8 +743,12 @@ function renderRoomSetup(game = null) {
   const hasPlayers = players.length > 0;
   const hasColonies = state.game.colonyCount > 0;
   const liveReady = hasRoom && hasColonies && !["running_replay", "running_live", "finished"].includes(status);
-  els.roomCode.textContent = hasRoom ? state.game.id : "No room yet";
-  els.joinRoom.disabled = state.role === "user" ? !state.selected?.fixtureId || status === "finished" : !hasRoom || status === "finished";
+  const roomCode = game?.roomCode || state.game.roomCode || "";
+  els.roomCode.textContent = roomCode || "No code yet";
+  if (roomCode && cleanRoomCode(els.roomCodeInput.value) !== roomCode) {
+    els.roomCodeInput.value = roomCode;
+  }
+  els.joinRoom.disabled = state.role === "user" ? status === "finished" : !hasRoom || status === "finished";
   els.playerName.disabled = state.role === "admin" ? !hasRoom || status === "finished" : status === "finished";
   els.playerList.replaceChildren(
     ...(hasPlayers
@@ -768,7 +764,7 @@ function renderRoomSetup(game = null) {
               ? "No player has joined yet."
               : state.role === "admin"
                 ? "Create a room, then players can join."
-                : "Create a room, then join with your name.",
+                : "Create a private room, or enter a 6-digit code to join.",
           ),
         ]),
   );
@@ -811,7 +807,7 @@ function updateGameActions() {
   els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));
   els.participateMatch.textContent = firstSelected ? "Match selected" : "Select match";
   els.addColony.disabled = !hasRoom || locked;
-  els.joinRoom.disabled = state.role === "user" ? !state.selected?.fixtureId || status === "finished" : !hasRoom || status === "finished";
+  els.joinRoom.disabled = state.role === "user" ? status === "finished" : !hasRoom || status === "finished";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !hasColony;
   els.startGameReplay.disabled = !isAdmin || !hasRoom || locked || !hasColony;
 }

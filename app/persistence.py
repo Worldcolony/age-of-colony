@@ -202,6 +202,22 @@ class SupabaseGameStore:
                 return row
         return None
 
+    def latest_game_for_room_code(self, room_code: str, *, limit: int = 200) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+        clean_room_code = "".join(character for character in str(room_code or "") if character.isdigit())[:6]
+        if len(clean_room_code) != 6:
+            return None
+        payload = self.list_games(limit=limit)
+        for row in payload.get("games", []):
+            public_state = row.get("public_state") or {}
+            if not isinstance(public_state, dict):
+                continue
+            status = public_state.get("status") or row.get("status")
+            if str(public_state.get("roomCode") or "") == clean_room_code and status not in {"finished", "error", "stopped"}:
+                return row
+        return None
+
     def game_replay(self, game_id: str) -> dict[str, Any] | None:
         if not self.configured:
             return None

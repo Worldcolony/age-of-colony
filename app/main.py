@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
-from .game.harness import GameRoom, PlayerState
+from .game.harness import GameRoom, PlayerState, normalize_room_code
 from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .txline import (
     TxLineClient,
@@ -209,6 +210,20 @@ async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str,
 async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
     game_manager.harness(game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+@app.get("/api/rooms/{room_code}")
+async def room_state_by_code(room_code: str) -> dict[str, Any]:
+    room = await _get_room_by_code_or_restore_404(room_code)
+    return room.public_state()
+
+
+@app.post("/api/rooms/{room_code}/players")
+async def join_room_by_code(room_code: str, payload: JoinRoomRequest) -> dict[str, Any]:
+    room = await _get_room_by_code_or_restore_404(room_code)
+    game_manager.harness(room.game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -419,18 +434,6 @@ async def admin_games(limit: int = Query(default=50, ge=1, le=200)) -> dict[str,
             "hint": "Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to persist admin games.",
         }
     return await asyncio.to_thread(supabase_store.list_games, limit=limit)
-
-
-@app.get("/api/games/active")
-async def active_game(fixture_id: str = Query(...)) -> dict[str, Any]:
-    room = _latest_memory_room_for_fixture(fixture_id)
-    if room:
-        return {"source": "memory", "game": room.public_state()}
-    stored = await _latest_stored_game_for_fixture(fixture_id)
-    if stored:
-        restored = _restore_room_from_stored_row(stored)
-        return {"source": "supabase", "game": restored.public_state()}
-    return {"source": "none", "game": None}
 
 
 @app.get("/api/games/{game_id}")
@@ -876,29 +879,24 @@ def _fixture_start_timestamp(fixture: dict[str, Any]) -> float | None:
     return timestamp
 
 
-def _latest_memory_room_for_fixture(fixture_id: str | int):
-    active_rooms = [
-        room
-        for room in game_manager.rooms.values()
-        if str(room.fixture_id) == str(fixture_id) and room.status not in {"finished", "error", "stopped"}
-    ]
-    if not active_rooms:
-        return None
-    active_rooms.sort(key=lambda room: room.log[-1].created_at if room.log else 0, reverse=True)
-    return active_rooms[0]
-
-
-async def _latest_stored_game_for_fixture(fixture_id: str | int) -> dict[str, Any] | None:
-    if not supabase_store.configured:
-        return None
-    return await asyncio.to_thread(supabase_store.latest_game_for_fixture, fixture_id)
-
-
 def _get_game_or_404(game_id: str):
     room = game_manager.get_room(game_id)
     if not room:
         raise HTTPException(status_code=404, detail="Game not found.")
     return room
+
+
+async def _get_room_by_code_or_restore_404(room_code: str):
+    clean_room_code = normalize_room_code(room_code)
+    if len(clean_room_code) != 6:
+        raise HTTPException(status_code=422, detail="Room code must contain 6 digits.")
+    room = game_manager.get_room_by_code(clean_room_code)
+    if room:
+        return room
+    stored = await _stored_room_by_code_or_none(clean_room_code)
+    if stored:
+        return _restore_room_from_stored_row(stored)
+    raise HTTPException(status_code=404, detail="Room code not found.")
 
 
 async def _get_game_or_restore_404(game_id: str):
@@ -928,8 +926,12 @@ def _restore_room_from_stored_row(row: dict[str, Any]):
     except (TypeError, ValueError):
         clean_seed = 7
 
+    restored_room_code = normalize_room_code(public_state.get("roomCode") or row.get("room_code")) or _fallback_room_code_from_game_id(
+        str(game_id)
+    )
     room = GameRoom(
         game_id=str(game_id),
+        room_code=restored_room_code,
         fixture_id=public_state.get("fixtureId") or row.get("fixture_id"),
         participant1=public_state.get("participant1") or row.get("participant1"),
         participant2=public_state.get("participant2") or row.get("participant2"),
@@ -950,8 +952,21 @@ def _restore_room_from_stored_row(row: dict[str, Any]):
                 anonymous_id=str(player.get("anonymousId"))[:80] if player.get("anonymousId") else None,
             )
         )
-    game_manager.rooms[room.game_id] = room
-    return room
+    return game_manager.register_room(room)
+
+
+async def _stored_room_by_code_or_none(room_code: str) -> dict[str, Any] | None:
+    if not supabase_store.configured:
+        return None
+    return await asyncio.to_thread(supabase_store.latest_game_for_room_code, room_code)
+
+
+def _fallback_room_code_from_game_id(game_id: str) -> str:
+    digits = "".join(character for character in game_id if character.isdigit())
+    if digits:
+        return digits[-6:].rjust(6, "0")
+    digest = hashlib.sha1(game_id.encode("utf-8")).hexdigest()
+    return str(int(digest[:8], 16) % 1_000_000).zfill(6)
 
 
 def _add_autorun_colonies(harness: Any) -> None:
