@@ -204,7 +204,7 @@ async function loadFixtures() {
     state.fixtures = data.fixtures || [];
     els.fixtureCount.textContent = fixtureCountLabel(mode, data);
     if (state.role !== "admin") {
-      applyNextFixture(data);
+      await applyNextFixture(data);
       return;
     }
     renderFixtures();
@@ -228,7 +228,7 @@ function fixtureCountLabel(mode, data) {
   return `${count} match(es)`;
 }
 
-function applyNextFixture(data) {
+async function applyNextFixture(data) {
   const target = data.fixture || state.fixtures[0] || null;
   state.fixtures = target ? [target] : [];
   renderLiveMatchTarget(target, data.status || (target ? "next" : "empty"));
@@ -246,6 +246,28 @@ function applyNextFixture(data) {
     setSelectedFixture(target, { reset: false });
   } else {
     updateGameActions();
+  }
+  if (!state.game.id) await loadActiveRoom(target.fixtureId);
+}
+
+async function loadActiveRoom(fixtureId) {
+  if (!fixtureId) return null;
+  try {
+    const data = await getJson(`/api/games/active?fixture_id=${encodeURIComponent(fixtureId)}`);
+    if (!data.game?.gameId) {
+      updateGameActions();
+      return null;
+    }
+    if (state.game.id && state.game.id !== data.game.gameId) return null;
+    renderGameState(data.game);
+    els.gameStatus.textContent = "Room ready. Enter your name and join.";
+    return data.game;
+  } catch (error) {
+    if (!state.game.id) {
+      els.gameStatus.textContent = `Room lookup failed: ${error.message}`;
+      updateGameActions();
+    }
+    return null;
   }
 }
 
@@ -396,7 +418,13 @@ async function participateInMatch() {
 }
 
 async function joinRoom() {
-  if (!state.game.id) return;
+  if (!state.game.id && state.selected?.fixtureId) {
+    await loadActiveRoom(state.selected.fixtureId);
+  }
+  if (!state.game.id) {
+    els.gameStatus.textContent = "Create a room first, then join.";
+    return;
+  }
   const name = els.playerName.value.trim();
   if (!name) {
     els.gameStatus.textContent = "Enter a player name before joining.";
@@ -724,7 +752,7 @@ function renderRoomSetup(game = null) {
   const hasColonies = state.game.colonyCount > 0;
   const liveReady = hasRoom && hasColonies && !["running_replay", "running_live", "finished"].includes(status);
   els.roomCode.textContent = hasRoom ? state.game.id : "No room yet";
-  els.joinRoom.disabled = !hasRoom || status === "finished";
+  els.joinRoom.disabled = state.role === "user" ? !state.selected?.fixtureId || status === "finished" : !hasRoom || status === "finished";
   els.playerName.disabled = state.role === "admin" ? !hasRoom || status === "finished" : status === "finished";
   els.playerList.replaceChildren(
     ...(hasPlayers
@@ -780,7 +808,7 @@ function updateGameActions() {
   els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));
   els.participateMatch.textContent = firstSelected ? "Match selected" : "Select match";
   els.addColony.disabled = !hasRoom || locked;
-  els.joinRoom.disabled = !hasRoom || status === "finished";
+  els.joinRoom.disabled = state.role === "user" ? !state.selected?.fixtureId || status === "finished" : !hasRoom || status === "finished";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !hasColony;
   els.startGameReplay.disabled = !isAdmin || !hasRoom || locked || !hasColony;
 }

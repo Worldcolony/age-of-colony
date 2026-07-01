@@ -236,6 +236,18 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(public["owner"], {"anonymousId": "anon_browser_1", "name": "Tanguy"})
         self.assertEqual(public["players"], [{"playerId": player.player_id, "name": "Tanguy", "anonymousId": "anon_browser_1"}])
 
+    def test_join_player_reuses_anonymous_identity(self):
+        manager = GameManager()
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium")
+        harness = manager.harness(room.game_id)
+
+        first = harness.join_player("Tanguy", anonymous_id="anon_browser_1")
+        second = harness.join_player("Tanguy v2", anonymous_id="anon_browser_1")
+
+        self.assertEqual(first.player_id, second.player_id)
+        self.assertEqual(len(room.players), 1)
+        self.assertEqual(room.players[0].name, "Tanguy v2")
+
     def test_info_high_colony_buys_one_shared_info_packet(self):
         room, harness = self.make_room()
         colony = harness.add_colony(
@@ -1336,6 +1348,19 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["colonies"][0]["style"], "cautious")
         self.assertEqual(game["colonies"][0]["favoriteContext"], "penalties")
         self.assertEqual(game["colonies"][0]["infoNeed"], "high")
+
+    def test_active_game_endpoint_returns_latest_room_for_fixture(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={"fixtureId": 818181, "participant1": "USA", "participant2": "Japan", "seed": 3},
+        ).json()
+
+        active = client.get("/api/games/active?fixture_id=818181")
+
+        self.assertEqual(active.status_code, 200)
+        self.assertEqual(active.json()["source"], "memory")
+        self.assertEqual(active.json()["game"]["gameId"], created["gameId"])
 
     def test_demo_run_requires_deepseek_agent(self):
         client = TestClient(app)

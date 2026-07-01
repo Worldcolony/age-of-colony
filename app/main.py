@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
+from .game.harness import GameRoom, PlayerState
 from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .txline import (
     TxLineClient,
@@ -206,7 +207,7 @@ async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str,
 
 @app.post("/api/games/{game_id}/players")
 async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, Any]:
-    room = _get_game_or_404(game_id)
+    room = await _get_game_or_restore_404(game_id)
     game_manager.harness(game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
@@ -418,6 +419,18 @@ async def admin_games(limit: int = Query(default=50, ge=1, le=200)) -> dict[str,
             "hint": "Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to persist admin games.",
         }
     return await asyncio.to_thread(supabase_store.list_games, limit=limit)
+
+
+@app.get("/api/games/active")
+async def active_game(fixture_id: str = Query(...)) -> dict[str, Any]:
+    room = _latest_memory_room_for_fixture(fixture_id)
+    if room:
+        return {"source": "memory", "game": room.public_state()}
+    stored = await _latest_stored_game_for_fixture(fixture_id)
+    if stored:
+        restored = _restore_room_from_stored_row(stored)
+        return {"source": "supabase", "game": restored.public_state()}
+    return {"source": "none", "game": None}
 
 
 @app.get("/api/games/{game_id}")
@@ -863,10 +876,81 @@ def _fixture_start_timestamp(fixture: dict[str, Any]) -> float | None:
     return timestamp
 
 
+def _latest_memory_room_for_fixture(fixture_id: str | int):
+    active_rooms = [
+        room
+        for room in game_manager.rooms.values()
+        if str(room.fixture_id) == str(fixture_id) and room.status not in {"finished", "error", "stopped"}
+    ]
+    if not active_rooms:
+        return None
+    active_rooms.sort(key=lambda room: room.log[-1].created_at if room.log else 0, reverse=True)
+    return active_rooms[0]
+
+
+async def _latest_stored_game_for_fixture(fixture_id: str | int) -> dict[str, Any] | None:
+    if not supabase_store.configured:
+        return None
+    return await asyncio.to_thread(supabase_store.latest_game_for_fixture, fixture_id)
+
+
 def _get_game_or_404(game_id: str):
     room = game_manager.get_room(game_id)
     if not room:
         raise HTTPException(status_code=404, detail="Game not found.")
+    return room
+
+
+async def _get_game_or_restore_404(game_id: str):
+    room = game_manager.get_room(game_id)
+    if room:
+        return room
+    replay = await _stored_replay_or_none(game_id)
+    if replay:
+        stored_row = (replay.get("stored") or {}).get("game") or {}
+        return _restore_room_from_stored_row({**stored_row, "public_state": replay.get("game") or stored_row.get("public_state")})
+    raise HTTPException(status_code=404, detail="Game not found.")
+
+
+def _restore_room_from_stored_row(row: dict[str, Any]):
+    public_state = row.get("public_state") or row
+    game_id = public_state.get("gameId") or row.get("game_id")
+    if not game_id:
+        raise HTTPException(status_code=404, detail="Game not found.")
+    existing = game_manager.get_room(str(game_id))
+    if existing:
+        return existing
+
+    owner = public_state.get("owner") or {}
+    seed = row.get("seed")
+    try:
+        clean_seed = int(seed) if seed is not None else 7
+    except (TypeError, ValueError):
+        clean_seed = 7
+
+    room = GameRoom(
+        game_id=str(game_id),
+        fixture_id=public_state.get("fixtureId") or row.get("fixture_id"),
+        participant1=public_state.get("participant1") or row.get("participant1"),
+        participant2=public_state.get("participant2") or row.get("participant2"),
+        owner_anonymous_id=owner.get("anonymousId") if isinstance(owner, dict) else None,
+        owner_name=owner.get("name") if isinstance(owner, dict) else None,
+        seed=clean_seed,
+    )
+    room.status = public_state.get("status") or row.get("status") or "created"
+    room.mode = public_state.get("mode") or row.get("mode")
+    room.event_index = int(public_state.get("eventIndex") or row.get("event_index") or 0)
+    for player in public_state.get("players") or []:
+        if not isinstance(player, dict):
+            continue
+        room.players.append(
+            PlayerState(
+                player_id=str(player.get("playerId") or f"player_{len(room.players) + 1}"),
+                name=str(player.get("name") or f"Player {len(room.players) + 1}")[:32],
+                anonymous_id=str(player.get("anonymousId"))[:80] if player.get("anonymousId") else None,
+            )
+        )
+    game_manager.rooms[room.game_id] = room
     return room
 
 

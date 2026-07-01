@@ -459,6 +459,17 @@ class GameHarness:
     def join_player(self, name: str, anonymous_id: str | None = None) -> PlayerState:
         clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
         clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
+        if clean_anonymous_id:
+            for player in self.room.players:
+                if player.anonymous_id == clean_anonymous_id:
+                    if player.name != clean_name:
+                        player.name = clean_name
+                        self.room.add_log(
+                            "player_updated",
+                            f"{player.name} updated their player name.",
+                            {"playerId": player.player_id, "name": player.name, "anonymousId": player.anonymous_id},
+                        )
+                    return player
         player = PlayerState(player_id=f"player_{uuid.uuid4().hex[:8]}", name=clean_name, anonymous_id=clean_anonymous_id)
         self.room.players.append(player)
         self.room.add_log(

@@ -79,12 +79,25 @@ class SupabaseGameStore:
             "agent_usage": _json_safe(room.agent_usage),
             "completed_at": _utc_now() if room.status in {"finished", "error", "stopped"} else None,
         }
-        self._request_json(
-            "aoc_games?on_conflict=game_id",
-            method="POST",
-            body=row,
-            prefer="resolution=merge-duplicates,return=minimal",
-        )
+        try:
+            self._request_json(
+                "aoc_games?on_conflict=game_id",
+                method="POST",
+                body=row,
+                prefer="resolution=merge-duplicates,return=minimal",
+            )
+        except SupabasePersistenceError as exc:
+            if not _missing_owner_columns(str(exc)):
+                raise
+            legacy_row = dict(row)
+            legacy_row.pop("owner_anonymous_id", None)
+            legacy_row.pop("owner_name", None)
+            self._request_json(
+                "aoc_games?on_conflict=game_id",
+                method="POST",
+                body=legacy_row,
+                prefer="resolution=merge-duplicates,return=minimal",
+            )
         event_count = self.sync_events(room)
         return {"stored": True, "gameId": room.game_id, "eventCount": event_count}
 
@@ -135,8 +148,59 @@ class SupabaseGameStore:
                 "public_state",
             ]
         )
-        rows = self._request_json(f"aoc_games?select={fields}&order=updated_at.desc&limit={safe_limit}")
+        try:
+            rows = self._request_json(f"aoc_games?select={fields}&order=updated_at.desc&limit={safe_limit}")
+        except SupabasePersistenceError as exc:
+            if not _missing_owner_columns(str(exc)):
+                raise
+            legacy_fields = ",".join(
+                [
+                    "game_id",
+                    "fixture_id",
+                    "participant1",
+                    "participant2",
+                    "status",
+                    "mode",
+                    "seed",
+                    "event_index",
+                    "agent_usage",
+                    "created_at",
+                    "updated_at",
+                    "completed_at",
+                    "public_state",
+                ]
+            )
+            rows = self._request_json(f"aoc_games?select={legacy_fields}&order=updated_at.desc&limit={safe_limit}")
         return {"source": "supabase", "configured": True, "count": len(rows), "games": rows}
+
+    def latest_game_for_fixture(self, fixture_id: str | int, *, limit: int = 20) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+        cleaned = urllib.parse.quote(str(fixture_id), safe="")
+        safe_limit = max(1, min(int(limit), 50))
+        fields = ",".join(
+            [
+                "game_id",
+                "fixture_id",
+                "participant1",
+                "participant2",
+                "status",
+                "mode",
+                "seed",
+                "event_index",
+                "public_state",
+                "created_at",
+                "updated_at",
+                "completed_at",
+            ]
+        )
+        rows = self._request_json(
+            f"aoc_games?select={fields}&fixture_id=eq.{cleaned}&order=updated_at.desc&limit={safe_limit}"
+        )
+        for row in rows:
+            if row.get("status") not in {"finished", "error", "stopped"}:
+                return row
+        return None
 
     def game_replay(self, game_id: str) -> dict[str, Any] | None:
         if not self.configured:
@@ -223,3 +287,7 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().casefold() in {"1", "true", "yes", "y", "on"}
+
+
+def _missing_owner_columns(detail: str) -> bool:
+    return "owner_anonymous_id" in detail or "owner_name" in detail
