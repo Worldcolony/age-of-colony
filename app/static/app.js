@@ -30,6 +30,7 @@ const USER_LIVE_LIMIT = "100";
 const ANON_ID_STORAGE_KEY = "aocAnonymousId";
 const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
 let countdownTimer = null;
+let copyRoomCodeTimer = null;
 
 const els = {
   healthBadge: document.querySelector("#healthBadge"),
@@ -61,6 +62,7 @@ const els = {
   gameStatus: document.querySelector("#gameStatus"),
   setupSteps: document.querySelector("#setupSteps"),
   roomCode: document.querySelector("#roomCode"),
+  copyRoomCode: document.querySelector("#copyRoomCode"),
   roomCodeInput: document.querySelector("#roomCodeInput"),
   roomLobby: document.querySelector("#roomLobby"),
   matchCountdown: document.querySelector("#matchCountdown"),
@@ -131,6 +133,7 @@ function bindEvents() {
   els.createGame.addEventListener("click", createGame);
   els.openJoinRoom.addEventListener("click", openJoinRoomPage);
   els.backToHome.addEventListener("click", backToHome);
+  els.copyRoomCode.addEventListener("click", copyRoomCode);
   els.participateMatch.addEventListener("click", participateInMatch);
   els.startGameLive.addEventListener("click", startGameLive);
   els.startGameReplay.addEventListener("click", startGameReplay);
@@ -535,6 +538,45 @@ async function joinRoom() {
   } catch (error) {
     els.gameStatus.textContent = error.message;
   }
+}
+
+async function copyRoomCode() {
+  const roomCode = cleanRoomCode(state.game.roomCode || els.roomCode.textContent);
+  if (roomCode.length !== 6) return;
+  try {
+    await writeClipboardText(roomCode);
+    showCopyRoomCodeFeedback("Copied");
+    els.gameStatus.textContent = `Room code ${roomCode} copied.`;
+  } catch {
+    showCopyRoomCodeFeedback("Copy failed");
+    els.gameStatus.textContent = `Room code ${roomCode}.`;
+  }
+}
+
+async function writeClipboardText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const field = document.createElement("input");
+  field.value = value;
+  field.setAttribute("readonly", "");
+  field.style.position = "fixed";
+  field.style.opacity = "0";
+  document.body.append(field);
+  field.select();
+  const copied = document.execCommand("copy");
+  field.remove();
+  if (!copied) throw new Error("Clipboard unavailable");
+}
+
+function showCopyRoomCodeFeedback(label) {
+  if (!els.copyRoomCode) return;
+  clearTimeout(copyRoomCodeTimer);
+  els.copyRoomCode.textContent = label;
+  copyRoomCodeTimer = setTimeout(() => {
+    els.copyRoomCode.textContent = "Copy";
+  }, 1600);
 }
 
 async function addColony() {
@@ -968,6 +1010,10 @@ function renderRoomSetup(game = null) {
   const readyCount = players.filter(playerIsReady).length;
   const roomCode = game?.roomCode || state.game.roomCode || "";
   els.roomCode.textContent = roomCode || "No code yet";
+  if (els.copyRoomCode) {
+    els.copyRoomCode.disabled = cleanRoomCode(roomCode).length !== 6;
+    if (!roomCode) els.copyRoomCode.textContent = "Copy";
+  }
   if (roomCode && cleanRoomCode(els.roomCodeInput.value) !== roomCode) {
     els.roomCodeInput.value = roomCode;
   }
@@ -1094,6 +1140,7 @@ function updateGameActions() {
   els.startGameLive.textContent = !hasRoom || me?.isHost ? "Start game" : "Waiting for host";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !roomReady || !me?.isHost;
   els.startGameReplay.disabled = !isAdmin || !hasRoom || running || status === "finished" || !hasColony;
+  if (els.copyRoomCode) els.copyRoomCode.disabled = cleanRoomCode(state.game.roomCode || "").length !== 6;
 }
 
 function appendGameEvent(event) {
