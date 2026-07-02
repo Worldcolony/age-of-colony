@@ -17,9 +17,12 @@ const state = {
     colonies: [],
     coloniesById: {},
     strategyDrafts: {},
+    selectedColonyId: null,
     status: null,
     activeOpportunities: [],
     agentUsage: null,
+    logCount: 0,
+    eventsLoadedFromReplay: false,
   },
 };
 
@@ -107,6 +110,7 @@ const els = {
   addColony: document.querySelector("#addColony"),
   leaderboardTitle: document.querySelector("#leaderboardTitle"),
   gameLeaderboard: document.querySelector("#gameLeaderboard"),
+  colonyDetail: document.querySelector("#colonyDetail"),
   gameFeed: document.querySelector("#gameFeed"),
 };
 
@@ -491,10 +495,14 @@ async function createGame() {
     state.game.colonies = [];
     state.game.coloniesById = {};
     state.game.strategyDrafts = {};
+    state.game.selectedColonyId = null;
     state.game.status = game.status;
     state.game.activeOpportunities = [];
     state.game.agentUsage = null;
+    state.game.logCount = game.logCount || 0;
+    state.game.eventsLoadedFromReplay = false;
     els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+    renderSelectedColonyDetail();
     renderGameState(game);
     if (game.roomCode) els.roomCodeInput.value = game.roomCode;
     setRoomUrl(game.roomCode);
@@ -807,10 +815,13 @@ async function loadGameReplay() {
   const data = await getJson(`/api/games/${state.game.id}/replay`);
   renderGameState(data.game);
   state.game.events = [];
+  state.game.eventsLoadedFromReplay = true;
   state.game.players = data.game?.players || state.game.players || [];
   state.game.strategyDrafts = {};
   els.gameFeed.innerHTML = "";
   (data.events || []).forEach(appendGameEvent);
+  state.game.logCount = Math.max(state.game.logCount || 0, state.game.events.length);
+  renderSelectedColonyDetail();
 }
 
 function resetGameUi(message = null) {
@@ -823,9 +834,12 @@ function resetGameUi(message = null) {
   state.game.colonies = [];
   state.game.coloniesById = {};
   state.game.strategyDrafts = {};
+  state.game.selectedColonyId = null;
   state.game.status = null;
   state.game.activeOpportunities = [];
   state.game.agentUsage = null;
+  state.game.logCount = 0;
+  state.game.eventsLoadedFromReplay = false;
   els.gameStatus.textContent =
     message ||
     (state.role === "admin"
@@ -834,6 +848,7 @@ function resetGameUi(message = null) {
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
   if (els.leaderboardTitle) els.leaderboardTitle.textContent = "Leaderboard";
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+  renderSelectedColonyDetail();
   if (state.role !== "admin") els.roomCodeInput.value = "";
   delete document.body.dataset.gameStatus;
   renderSimulationSummary(null);
@@ -854,6 +869,7 @@ function renderGameState(game) {
     return map;
   }, {});
   state.game.status = game.status || null;
+  state.game.logCount = Number(game.logCount || state.game.logCount || 0);
   document.body.dataset.gameStatus = state.game.status || "created";
   state.game.activeOpportunities = game.activeOpportunities || [];
   state.game.agentUsage = game.agentUsage || state.game.agentUsage;
@@ -877,6 +893,8 @@ function renderGameState(game) {
 
   if (!colonies.length) {
     els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
+    state.game.selectedColonyId = null;
+    renderSelectedColonyDetail();
     return;
   }
 
@@ -884,6 +902,9 @@ function renderGameState(game) {
     ...colonies.map((colony, index) => {
       const card = document.createElement("article");
       card.className = index === 0 ? "colony-card leader" : "colony-card";
+      if (state.game.selectedColonyId === colony.colonyId) card.classList.add("selected");
+      card.dataset.colonyCard = colony.colonyId || "";
+      card.title = `View ${colony.name} results`;
       const scoreTitle = formatScoreBreakdown(colony.scoreBreakdown);
       const strategyLocked = isRoomLockedStatus(state.game.status);
       const strategyDraft = state.game.strategyDrafts[colony.colonyId] || {};
@@ -894,8 +915,13 @@ function renderGameState(game) {
         <div class="colony-rank">#${index + 1}</div>
         <div>
           <div class="colony-head">
-            <h4>${escapeHtml(colony.name)}</h4>
-            <span>${escapeHtml(colonyRecordLabel(colony))}</span>
+            <div>
+              <h4>${escapeHtml(colony.name)}</h4>
+              <span>${escapeHtml(colonyRecordLabel(colony))}</span>
+            </div>
+            <button type="button" class="colony-detail-trigger" data-colony-detail="${escapeHtml(
+              colony.colonyId,
+            )}" aria-label="View ${escapeHtml(colony.name)} results">Details</button>
           </div>
           <p>${escapeHtml(strategyLabel(colony))}</p>
           ${renderColonyEconomy(colony, scoreTitle)}
@@ -929,8 +955,194 @@ function renderGameState(game) {
       card.querySelector("[data-save-strategy]")?.addEventListener("click", (event) => {
         updateColonyStrategy(event.currentTarget.dataset.saveStrategy);
       });
+      card.querySelector("[data-colony-detail]")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        selectColonyDetail(event.currentTarget.dataset.colonyDetail);
+      });
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("button, select, input, label, a, textarea")) return;
+        selectColonyDetail(colony.colonyId);
+      });
       return card;
     }),
+  );
+  renderSelectedColonyDetail();
+}
+
+async function selectColonyDetail(colonyId) {
+  if (!colonyId) return;
+  state.game.selectedColonyId = colonyId;
+  updateColonyCardSelection();
+  renderSelectedColonyDetail({ loading: shouldLoadReplayEvents() });
+  await ensureReplayEventsLoadedForAudit();
+  updateColonyCardSelection();
+  renderSelectedColonyDetail();
+}
+
+function updateColonyCardSelection() {
+  document.querySelectorAll("[data-colony-card]").forEach((card) => {
+    card.classList.toggle("selected", card.dataset.colonyCard === state.game.selectedColonyId);
+  });
+}
+
+function shouldLoadReplayEvents() {
+  if (!state.game.id || state.game.eventsLoadedFromReplay) return false;
+  const visibleEvents = state.game.events.length;
+  const expectedEvents = Number(state.game.logCount || 0);
+  if (expectedEvents > visibleEvents) return true;
+  const selectedColony = (state.game.colonies || []).find((item) => item.colonyId === state.game.selectedColonyId);
+  if (!selectedColony) return false;
+  const results = colonyResultEvents(selectedColony);
+  return Number(selectedColony.wins || 0) > results.wins.length || Number(selectedColony.losses || 0) > results.losses.length;
+}
+
+async function ensureReplayEventsLoadedForAudit() {
+  if (!shouldLoadReplayEvents()) return;
+  try {
+    const data = await getJson(`/api/games/${state.game.id}/replay`);
+    const events = Array.isArray(data.events) ? data.events : [];
+    state.game.events = events;
+    state.game.eventsLoadedFromReplay = true;
+    state.game.players = data.game?.players || state.game.players || [];
+    state.game.logCount = Math.max(Number(data.game?.logCount || 0), events.length, state.game.logCount || 0);
+    if (data.game) renderGameState(data.game);
+    renderGameJournal();
+    renderSimulationSummary(data.game);
+  } catch (error) {
+    els.gameStatus.textContent = `Could not load colony results: ${error.message}`;
+  }
+}
+
+function renderSelectedColonyDetail(options = {}) {
+  if (!els.colonyDetail) return;
+  const colony = (state.game.colonies || []).find((item) => item.colonyId === state.game.selectedColonyId);
+  if (!colony) {
+    state.game.selectedColonyId = null;
+    els.colonyDetail.hidden = true;
+    els.colonyDetail.innerHTML = `<p class="empty">Select a colony to inspect its resolved bets.</p>`;
+    updateColonyCardSelection();
+    return;
+  }
+
+  const results = colonyResultEvents(colony);
+  const visibleWins = results.wins.length;
+  const visibleLosses = results.losses.length;
+  const engineWins = Number(colony.wins || 0);
+  const engineLosses = Number(colony.losses || 0);
+  const historyMatches = visibleWins === engineWins && visibleLosses === engineLosses;
+  const recordNote = options.loading
+    ? "Loading full match history..."
+    : historyMatches
+      ? "W/L is counted from settled bets only. Voided bets release ants and do not count."
+      : `Engine record is ${engineWins}W / ${engineLosses}L; visible history currently shows ${visibleWins}W / ${visibleLosses}L.`;
+
+  els.colonyDetail.hidden = false;
+  els.colonyDetail.innerHTML = `
+    <div class="colony-detail-head">
+      <div>
+        <span class="detail-kicker">Colony audit</span>
+        <h4>${escapeHtml(colony.name)}</h4>
+        <p>${escapeHtml(recordNote)}</p>
+      </div>
+      <button type="button" class="detail-close" data-close-colony-detail aria-label="Close colony detail">Close</button>
+    </div>
+    <div class="colony-detail-metrics" aria-label="${escapeHtml(`${colony.name} result summary`)}">
+      ${colonyAuditMetric(`${engineWins}W / ${engineLosses}L`, "Record", "resolved bets")}
+      ${colonyAuditMetric(formatSignedNumber(colony.foodNet || 0), "Net food", "from bets", Number(colony.foodNet || 0) >= 0 ? "good" : "bad")}
+      ${colonyAuditMetric(formatScoreValue(colony.score), "Score", "final rank")}
+      ${colonyAuditMetric(`${results.voids.length}`, "Voided", "not counted")}
+    </div>
+    <div class="colony-result-columns">
+      ${renderColonyResultSection("Winning bets", results.wins, "win")}
+      ${renderColonyResultSection("Losing bets", results.losses, "loss")}
+    </div>
+    ${results.voids.length ? renderColonyResultSection("Voided bets", results.voids, "void") : ""}
+  `;
+  els.colonyDetail.querySelector("[data-close-colony-detail]")?.addEventListener("click", () => {
+    state.game.selectedColonyId = null;
+    updateColonyCardSelection();
+    renderSelectedColonyDetail();
+  });
+}
+
+function colonyResultEvents(colony) {
+  const events = (state.game.events || []).filter((event) => {
+    if (!["settlement", "void"].includes(event.kind)) return false;
+    return colonyOwnsResultEvent(colony, event);
+  });
+  return {
+    wins: events.filter((event) => event.kind === "settlement" && event.data?.win),
+    losses: events.filter((event) => event.kind === "settlement" && !event.data?.win),
+    voids: events.filter((event) => event.kind === "void"),
+  };
+}
+
+function colonyOwnsResultEvent(colony, event) {
+  const eventColonyId = event.data?.colonyId;
+  if (eventColonyId && colony.colonyId) return eventColonyId === colony.colonyId;
+  const eventName = marketResultColonyName(event) || eventColonyName(event);
+  return Boolean(eventName && eventName === colony.name);
+}
+
+function colonyAuditMetric(value, label, caption, level = "") {
+  const className = ["colony-audit-metric", level].filter(Boolean).map((item) => escapeHtml(item)).join(" ");
+  return `
+    <span class="${className}">
+      <b>${escapeHtml(value)}</b>
+      <span>${escapeHtml(label)}</span>
+      <small>${escapeHtml(caption)}</small>
+    </span>
+  `;
+}
+
+function renderColonyResultSection(title, events, type) {
+  const emptyText =
+    type === "win"
+      ? "No winning bet yet."
+      : type === "loss"
+        ? "No losing bet yet."
+        : "No voided bet.";
+  return `
+    <section class="colony-result-section ${escapeHtml(type)}">
+      <div class="colony-result-section-head">
+        <span>${escapeHtml(title)}</span>
+        <b>${events.length}</b>
+      </div>
+      ${
+        events.length
+          ? `<ul>${events.map((event) => renderColonyResultItem(event, type)).join("")}</ul>`
+          : `<p class="empty">${escapeHtml(emptyText)}</p>`
+      }
+    </section>
+  `;
+}
+
+function renderColonyResultItem(event, type) {
+  const option = event.data?.option?.label || "Prediction";
+  const detail = marketResultDetail(event);
+  const reason = resultReasonLabel(event.data?.reason);
+  const index = Number.isInteger(event.index) ? `event #${event.index + 1}` : null;
+  const meta = [reason, index].filter(Boolean).join(" · ");
+  return `
+    <li class="colony-result-item ${escapeHtml(type)}">
+      <span class="result-dot" aria-hidden="true"></span>
+      <div>
+        <strong>${escapeHtml(option)}</strong>
+        <p>${escapeHtml(detail)}</p>
+        ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+      </div>
+    </li>
+  `;
+}
+
+function resultReasonLabel(reason) {
+  return (
+    {
+      resolved: "match event resolved",
+      expired: "market expired",
+      full_time: "closed at full time",
+      expired_no_foul: "no matching foul",
+    }[reason] || reason || ""
   );
 }
 
@@ -1241,6 +1453,7 @@ function updateGameActions() {
 function appendGameEvent(event) {
   if (!event || state.game.events.some((item) => item.index === event.index)) return;
   state.game.events.push(event);
+  state.game.logCount = Math.max(state.game.logCount || 0, state.game.events.length, Number(event.index || 0) + 1);
   if (event.kind === "game_finished") {
     state.game.status = "finished";
     document.body.dataset.gameStatus = "finished";
@@ -1256,6 +1469,7 @@ function appendGameEvent(event) {
   renderGameJournal();
   els.gameFeed.scrollTop = els.gameFeed.scrollHeight;
   renderSimulationSummary();
+  renderSelectedColonyDetail();
 }
 
 function renderGameJournal() {
@@ -1867,6 +2081,19 @@ function strategyOptions(options, selected) {
 
 function formatInteger(value) {
   return Math.round(value).toLocaleString("en-US");
+}
+
+function formatScoreValue(value) {
+  const number = Number(value || 0);
+  return number.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+function formatSignedNumber(value) {
+  const number = Number(value || 0);
+  const formatted = formatScoreValue(Math.abs(number));
+  if (number > 0) return `+${formatted}`;
+  if (number < 0) return `-${formatted}`;
+  return "0";
 }
 
 function formatUsd(value) {
