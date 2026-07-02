@@ -547,8 +547,9 @@ async function addColony() {
     els.gameStatus.textContent = "You already have a colony in this room.";
     return;
   }
+  const fallbackName = state.role === "user" ? defaultColonyName() : `Colony ${Date.now().toString().slice(-4)}`;
   const payload = {
-    name: els.colonyName.value.trim() || `Colony ${Date.now().toString().slice(-4)}`,
+    name: els.colonyName.value.trim() || fallbackName,
     size: Number(els.colonySize.value),
     style: els.colonyStyle.value,
     favoriteContext: els.colonyFavorite.value,
@@ -835,6 +836,10 @@ function currentPlayerName() {
   return els.playerName.value.trim() || state.identity.playerName || "";
 }
 
+function defaultColonyName() {
+  return currentPlayer()?.name || currentPlayerName() || "Host";
+}
+
 function cleanRoomCode(value) {
   return String(value || "").replace(/\D/g, "").slice(0, 6);
 }
@@ -965,6 +970,9 @@ function renderRoomSetup(game = null) {
   els.roomCode.textContent = roomCode || "No code yet";
   if (roomCode && cleanRoomCode(els.roomCodeInput.value) !== roomCode) {
     els.roomCodeInput.value = roomCode;
+  }
+  if (state.role === "user" && me && !meReady && !els.colonyName.value.trim()) {
+    els.colonyName.value = defaultColonyName();
   }
   renderRoomCountdown(game);
   els.playerCount.textContent = `${players.length} joined · ${readyCount} ready`;
