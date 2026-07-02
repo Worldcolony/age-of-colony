@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-46" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-47" />
   </head>
   <body>
     <header class="topbar">
@@ -114,6 +114,7 @@
             <button id="openJoinRoom" class="room-action-secondary" type="button">Join room</button>
             <button id="startGameLive" type="button" disabled>Start game</button>
             <button id="finishGameLive" class="button-secondary" type="button" disabled hidden>Finish game</button>
+            <button id="exitGame" class="button-secondary" type="button" hidden>Exit</button>
             <button id="startGameReplay" type="button" disabled hidden>Run replay</button>
           </div>
         </div>
@@ -260,7 +261,7 @@
 
         <div class="game-grid">
           <section>
-            <h3>Leaderboard</h3>
+            <h3 id="leaderboardTitle">Leaderboard</h3>
             <div id="gameLeaderboard" class="leaderboard">
               <p class="empty">No colony.</p>
             </div>
@@ -275,6 +276,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-46" type="module"></script>
+    <script src="/static/app.js?v=colony-47" type="module"></script>
   </body>
 </html>

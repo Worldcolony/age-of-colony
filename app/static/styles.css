@@ -61,6 +61,7 @@ body[data-workspace-role="user"] #joinRoomPage,
 body[data-workspace-role="user"] .room-setup,
 body[data-workspace-role="user"] #colonyForm,
 body[data-workspace-role="user"] #startGameLive,
+body[data-workspace-role="user"] #exitGame,
 body[data-workspace-role="user"][data-game-status="created"] .simulation-panel,
 body[data-workspace-role="user"][data-game-status="created"] .game-grid,
 body[data-workspace-role="user"]:not([data-game-status]) .simulation-panel,
@@ -81,6 +82,25 @@ body[data-workspace-role="user"][data-user-view="room"] #startGameLive {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] #startGameLive,
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] #finishGameLive,
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .room-setup,
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] #colonyForm,
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .simulation-panel,
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .game-grid section:last-child {
+  display: none;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] #exitGame {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .game-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 body[data-workspace-role="user"][data-user-view="join"] #createGame,
@@ -155,6 +175,7 @@ body[data-workspace-role="user"] #openJoinRoom,
 body[data-workspace-role="user"] #joinRoom,
 body[data-workspace-role="user"] #startGameLive,
 body[data-workspace-role="user"] #finishGameLive,
+body[data-workspace-role="user"] #exitGame,
 body[data-workspace-role="user"] #addColony,
 body[data-workspace-role="user"] #backToHome {
   min-height: 3rem;

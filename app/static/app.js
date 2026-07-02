@@ -73,6 +73,7 @@ const els = {
   openJoinRoom: document.querySelector("#openJoinRoom"),
   startGameLive: document.querySelector("#startGameLive"),
   finishGameLive: document.querySelector("#finishGameLive"),
+  exitGame: document.querySelector("#exitGame"),
   startGameReplay: document.querySelector("#startGameReplay"),
   gameStatus: document.querySelector("#gameStatus"),
   setupSteps: document.querySelector("#setupSteps"),
@@ -104,6 +105,7 @@ const els = {
   colonyProfileTitle: document.querySelector("#colonyProfileTitle"),
   colonyProfileMeta: document.querySelector("#colonyProfileMeta"),
   addColony: document.querySelector("#addColony"),
+  leaderboardTitle: document.querySelector("#leaderboardTitle"),
   gameLeaderboard: document.querySelector("#gameLeaderboard"),
   gameFeed: document.querySelector("#gameFeed"),
 };
@@ -157,6 +159,7 @@ function bindEvents() {
   els.participateMatch.addEventListener("click", participateInMatch);
   els.startGameLive.addEventListener("click", startGameLive);
   els.finishGameLive.addEventListener("click", finishGameLive);
+  els.exitGame.addEventListener("click", exitFinishedGame);
   els.startGameReplay.addEventListener("click", startGameReplay);
   els.joinRoomForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -194,6 +197,7 @@ function applyWorkspaceRole(role, options = {}) {
   els.startGameLive.textContent = "Start game";
   els.startGameLive.hidden = isAdmin;
   els.finishGameLive.hidden = isAdmin;
+  els.exitGame.hidden = true;
   els.startGameReplay.hidden = !isAdmin;
 
   clearSelection();
@@ -246,6 +250,12 @@ function openJoinRoomPage() {
 }
 
 function backToHome() {
+  if (state.role !== "user") return;
+  resetGameUi("Create or join a private room.");
+  setUserView("home");
+}
+
+function exitFinishedGame() {
   if (state.role !== "user") return;
   resetGameUi("Create or join a private room.");
   setUserView("home");
@@ -822,6 +832,7 @@ function resetGameUi(message = null) {
       ? "Create a replay room from a completed match."
       : "Create or join a private room.");
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
+  if (els.leaderboardTitle) els.leaderboardTitle.textContent = "Leaderboard";
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
   if (state.role !== "admin") els.roomCodeInput.value = "";
   delete document.body.dataset.gameStatus;
@@ -850,6 +861,9 @@ function renderGameState(game) {
   updateGameActions();
   renderRoomSetup(game);
   renderSimulationSummary(game);
+  if (els.leaderboardTitle) {
+    els.leaderboardTitle.textContent = state.role === "user" && state.game.status === "finished" ? "Final results" : "Leaderboard";
+  }
   els.gameStatus.textContent =
     state.role === "user"
       ? userRoomStatusText(game)
@@ -1215,6 +1229,11 @@ function updateGameActions() {
     els.finishGameLive.hidden = !canFinishLive;
     els.finishGameLive.disabled = !canFinishLive;
   }
+  if (els.exitGame) {
+    const showExit = state.role === "user" && hasRoom && status === "finished";
+    els.exitGame.hidden = !showExit;
+    els.exitGame.disabled = !showExit;
+  }
   els.startGameReplay.disabled = !isAdmin || !hasRoom || running || status === "finished" || !hasColony;
   if (els.copyRoomCode) els.copyRoomCode.disabled = cleanRoomCode(state.game.roomCode || "").length !== 6;
 }
@@ -1225,6 +1244,8 @@ function appendGameEvent(event) {
   if (event.kind === "game_finished") {
     state.game.status = "finished";
     state.game.agentUsage = event.data?.agentUsage || state.game.agentUsage;
+    if (els.leaderboardTitle) els.leaderboardTitle.textContent = "Final results";
+    closeGameStream();
     updateGameActions();
   } else if (event.kind === "game_error") {
     state.game.status = "error";
