@@ -18,8 +18,8 @@ export class ApiError extends Error {
   }
 }
 
-async function req<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const opts: RequestInit = { method, headers: {} };
+async function req<T>(path: string, method = "GET", body?: unknown, headers?: Record<string, string>): Promise<T> {
+  const opts: RequestInit = { method, headers: { ...headers } };
   if (body !== undefined) {
     (opts.headers as Record<string, string>)["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body ?? {});
@@ -41,6 +41,19 @@ function qs(params: Record<string, string | number | undefined | null> = {}): st
   const str = s.toString();
   return str ? `?${str}` : "";
 }
+
+export interface QueenAuth {
+  signature: string; // base64 Ed25519 signature from Phantom signMessage
+  ts: number; // unix seconds baked into the signed message
+}
+
+// Must exactly match app/queen_auth.py::queen_auth_message
+export const queenAuthMessage = (wallet: string, ts: number) => `age-of-colony:queen:${wallet}:${ts}`;
+
+const authHeaders = (auth: QueenAuth): Record<string, string> => ({
+  "x-aoc-signature": auth.signature,
+  "x-aoc-ts": String(auth.ts),
+});
 
 export interface QueenRecord {
   wallet: string;
@@ -88,11 +101,13 @@ export const api = {
   joinRoomByCode: (code: string, name: string, anonymousId?: string) =>
     req<GameState>(`/api/rooms/${encodeURIComponent(code)}/players`, "POST", { name, anonymousId }),
 
-  // queens — one royal profile per wallet (server-enforced by DB primary key)
+  // queens — one royal profile per wallet (server-enforced by DB primary key).
+  // Mutations require an Ed25519 wallet signature (see queenAuthMessage).
   getQueen: (wallet: string) => req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`),
-  putQueen: (wallet: string, body: { name: string; motto?: string; emblem?: string }) =>
-    req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`, "PUT", body),
-  deleteQueen: (wallet: string) => req<{ deleted: boolean }>(`/api/queens/${encodeURIComponent(wallet)}`, "DELETE"),
+  putQueen: (wallet: string, body: { name: string; motto?: string; emblem?: string }, auth: QueenAuth) =>
+    req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`, "PUT", body, authHeaders(auth)),
+  deleteQueen: (wallet: string, auth: QueenAuth) =>
+    req<{ deleted: boolean }>(`/api/queens/${encodeURIComponent(wallet)}`, "DELETE", undefined, authHeaders(auth)),
   addColony: (id: string, body: CreateColonyBody) => req<GameState>(`/api/games/${id}/colonies`, "POST", body),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),

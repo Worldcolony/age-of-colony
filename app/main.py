@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator
 import os
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +19,7 @@ from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import GameRoom, PlayerState, normalize_room_code
 from .persistence import SupabaseGameStore, SupabasePersistenceError
+from .queen_auth import require_wallet_owner
 from .txline import (
     TxLineClient,
     TxLineConfigError,
@@ -268,7 +269,11 @@ async def get_queen(wallet: str) -> dict[str, Any]:
 
 
 @app.put("/api/queens/{wallet}")
-async def upsert_queen(wallet: str, payload: QueenUpsertRequest) -> dict[str, Any]:
+async def upsert_queen(
+    wallet: str,
+    payload: QueenUpsertRequest,
+    _owner: str = Depends(require_wallet_owner),
+) -> dict[str, Any]:
     _queen_store_or_503()
     name = (payload.name or "").strip()[:24]
     if not name:
@@ -285,7 +290,10 @@ async def upsert_queen(wallet: str, payload: QueenUpsertRequest) -> dict[str, An
 
 
 @app.delete("/api/queens/{wallet}")
-async def delete_queen(wallet: str) -> dict[str, Any]:
+async def delete_queen(
+    wallet: str,
+    _owner: str = Depends(require_wallet_owner),
+) -> dict[str, Any]:
     _queen_store_or_503()
     await asyncio.to_thread(supabase_store.delete_queen, _clean_wallet_or_422(wallet))
     return {"deleted": True, "wallet": _clean_wallet_or_422(wallet)}

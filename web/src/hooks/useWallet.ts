@@ -10,6 +10,7 @@ type PhantomProvider = {
   publicKey?: { toBase58?: () => string; toString?: () => string } | null;
   connect: (opts?: { onlyIfTrusted?: boolean }) => Promise<{ publicKey?: any }>;
   disconnect: () => Promise<void>;
+  signMessage?: (message: Uint8Array, display?: string) => Promise<{ signature: Uint8Array }>;
   on?: (event: string, cb: (arg?: any) => void) => void;
 };
 
@@ -19,6 +20,17 @@ function detect(): PhantomProvider | null {
   if (w.phantom?.solana) return w.phantom.solana as PhantomProvider;
   if (w.solana?.isPhantom) return w.solana as PhantomProvider;
   return null;
+}
+
+// Sign an arbitrary message with the connected Phantom wallet; returns base64.
+// Used to prove wallet ownership for queen mutations (see app/queen_auth.py).
+export async function signWalletMessage(message: string): Promise<string> {
+  const p = detect();
+  if (!p?.signMessage) throw new Error("Phantom signMessage unavailable.");
+  const { signature } = await p.signMessage(new TextEncoder().encode(message), "utf8");
+  let bin = "";
+  for (const byte of signature) bin += String.fromCharCode(byte);
+  return btoa(bin);
 }
 
 function pkStr(pk: any): string | null {

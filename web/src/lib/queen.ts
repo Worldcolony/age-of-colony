@@ -4,7 +4,8 @@
 // fallback (used when the engine or its queen store is unreachable).
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, queenAuthMessage, type QueenAuth } from "@/lib/api";
+import { signWalletMessage } from "@/hooks/useWallet";
 import { useStore } from "@/store/game";
 
 export interface Queen {
@@ -42,6 +43,13 @@ export function removeQueenLocal(pubkey: string): void {
 
 function applyName(name: string | null) {
   useStore.getState().setWallet({ name });
+}
+
+// Sign the ownership challenge (message format must match app/queen_auth.py).
+async function signQueenChallenge(pubkey: string): Promise<QueenAuth> {
+  const ts = Math.floor(Date.now() / 1000);
+  const signature = await signWalletMessage(queenAuthMessage(pubkey, ts));
+  return { signature, ts };
 }
 
 // Loads the wallet's queen (server-first, local fallback) and mirrors her
@@ -83,23 +91,13 @@ export function useQueen() {
       } catch (e) {
         if (cancelled) return;
         const err = e as ApiError;
-        if (err?.status === 404 && local) {
-          // she exists only on this device — migrate her to the colony records
-          try {
-            const migrated = await api.putQueen(pk, { name: local.name, motto: local.motto, emblem: local.emblem });
-            if (cancelled) return;
-            const q: Queen = { ...local, crownedAt: migrated.crownedAt ?? local.crownedAt };
-            saveQueenLocal(pk, q);
-            setQueen(q);
-            setSource("server");
-          } catch {
-            /* stay on local */
-          }
-        } else if (err?.status === 404) {
+        if (err?.status === 404 && !local) {
           setQueen(null);
           setSource(null);
         }
-        // 503 (store unconfigured) or network error: keep the local fallback
+        // 404 with a local queen: she lives on this device only — the next
+        // explicit save (which prompts for a wallet signature) syncs her up.
+        // 503 (store unconfigured) or network error: keep the local fallback.
       }
     })();
     return () => {
@@ -119,14 +117,15 @@ export function useQueen() {
       setSource("local");
       applyName(full.name);
       try {
-        const remote = await api.putQueen(pk, { name: q.name, motto: q.motto, emblem: q.emblem });
+        const auth = await signQueenChallenge(pk); // Phantom popup: prove the throne is yours
+        const remote = await api.putQueen(pk, { name: q.name, motto: q.motto, emblem: q.emblem }, auth);
         const merged: Queen = { ...full, crownedAt: remote.crownedAt ?? full.crownedAt };
         saveQueenLocal(pk, merged);
         setQueen(merged);
         setSource("server");
         return merged;
       } catch {
-        return full; // engine offline / store unconfigured — local cache holds her
+        return full; // signature declined / engine offline — local cache holds her
       }
     },
     [wallet.pubkey],
@@ -140,9 +139,10 @@ export function useQueen() {
     setSource(null);
     applyName(null);
     try {
-      await api.deleteQueen(pk);
+      const auth = await signQueenChallenge(pk);
+      await api.deleteQueen(pk, auth);
     } catch {
-      /* best effort */
+      /* signature declined or offline — server copy stays; local is cleared */
     }
   }, [wallet.pubkey]);
 
