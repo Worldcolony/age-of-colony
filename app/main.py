@@ -62,6 +62,7 @@ AUTORUN_COLONIES = (
     ("Amber Swarm", 20, "balanced", "momentum", "medium"),
     ("Black Rush", 50, "aggressive", "chaos", "low"),
 )
+LIVE_SCORE_POLL_SECONDS = 2.5
 
 
 class CreateGameRequest(BaseModel):
@@ -238,7 +239,7 @@ async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, An
 @app.get("/api/rooms/{room_code}")
 async def room_state_by_code(room_code: str) -> dict[str, Any]:
     room = await _get_room_by_code_or_restore_404(room_code)
-    await _ensure_waiting_room_progress(room)
+    await _ensure_room_progress(room)
     return room.public_state()
 
 
@@ -445,11 +446,23 @@ async def _ensure_waiting_room_progress(room: GameRoom) -> None:
     _schedule_kickoff_start(room)
 
 
+async def _ensure_room_progress(room: GameRoom) -> None:
+    await _ensure_waiting_room_progress(room)
+    if room.status == "running_live":
+        _ensure_live_task(room)
+
+
+def _ensure_live_task(room: GameRoom) -> None:
+    task = game_manager.live_tasks.get(room.game_id)
+    if task and not task.done():
+        return
+    game_manager.live_tasks[room.game_id] = asyncio.create_task(_run_live_game(room.game_id))
+
+
 async def _start_live_room_now(room: GameRoom) -> None:
-    if room.game_id not in game_manager.live_tasks:
-        game_manager.live_tasks[room.game_id] = asyncio.create_task(_run_live_game(room.game_id))
     room.status = "running_live"
-    room.add_log("game_started", "Live game connected to the TXLine stream.", {"mode": "live"})
+    room.add_log("game_started", "Live game connected to TXLine updates.", {"mode": "live"})
+    _ensure_live_task(room)
     await _sync_room_to_supabase_async(room)
 
 
@@ -625,11 +638,18 @@ async def admin_games(limit: int = Query(default=50, ge=1, le=200)) -> dict[str,
 async def game_state(game_id: str) -> dict[str, Any]:
     room = game_manager.get_room(game_id)
     if room:
-        await _ensure_waiting_room_progress(room)
+        await _ensure_room_progress(room)
         return room.public_state()
     replay = await _stored_replay_or_none(game_id)
     if replay:
-        return replay["game"]
+        stored_game = replay["game"]
+        if stored_game.get("status") in {"waiting_kickoff", "running_live"}:
+            room = _restore_room_from_stored_row(
+                {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game}
+            )
+            await _ensure_room_progress(room)
+            return room.public_state()
+        return stored_game
     raise HTTPException(status_code=404, detail="Game not found.")
 
 
@@ -649,7 +669,18 @@ async def game_replay(game_id: str) -> dict[str, Any]:
 
 @app.get("/api/games/{game_id}/events")
 async def game_events(game_id: str) -> StreamingResponse:
-    room = _get_game_or_404(game_id)
+    room = game_manager.get_room(game_id)
+    if not room:
+        replay = await _stored_replay_or_none(game_id)
+        if not replay:
+            raise HTTPException(status_code=404, detail="Game not found.")
+        stored_game = replay["game"]
+        if stored_game.get("status") not in {"waiting_kickoff", "running_live"}:
+            raise HTTPException(status_code=404, detail="Live event stream not available for stored replay.")
+        room = _restore_room_from_stored_row(
+            {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game}
+        )
+    await _ensure_room_progress(room)
 
     async def generate() -> AsyncIterator[str]:
         cursor = 0
@@ -1268,23 +1299,40 @@ async def _run_live_game(game_id: str) -> None:
     if not room:
         return
     client = TxLineClient()
-    possession_state: dict[Any, dict[str, Any]] = {}
     harness = game_manager.harness(game_id)
-    fixture = {
-        "fixtureId": room.fixture_id,
-        "participant1": room.participant1,
-        "participant2": room.participant2,
-    }
+    seen_event_keys: set[tuple[Any, ...]] = set()
+    first_batch = True
     try:
-        async for event in client.stream_score_events():
-            data = event.get("data")
-            if not isinstance(data, dict):
-                continue
-            normalized = normalize_score_record(data, fixture=fixture)
-            annotate_possession_changes([normalized], possession_state)
-            if str(normalized.get("fixtureId")) != str(room.fixture_id):
-                continue
-            harness.process_event(normalized)
+        while True:
+            room = game_manager.get_room(game_id)
+            if not room or room.status != "running_live":
+                break
+            timeline = await _live_score_timeline(client, room)
+            timeline_events = timeline["events"]
+            if first_batch and room.event_index:
+                for event in timeline_events[: room.event_index]:
+                    seen_event_keys.add(_live_event_key(event))
+            new_events = [
+                event
+                for event in timeline_events
+                if str(event.get("fixtureId")) == str(room.fixture_id) and _remember_live_event(seen_event_keys, event)
+            ]
+            if new_events:
+                if first_batch and room.event_index == 0:
+                    room.add_log(
+                        "live_sync",
+                        f"Live catch-up loaded {len(new_events)} TXLine updates.",
+                        {
+                            "source": timeline.get("resolvedSource"),
+                            "rawCount": timeline.get("rawCount"),
+                            "fixtureId": room.fixture_id,
+                        },
+                    )
+                await asyncio.to_thread(_process_live_events, harness, new_events)
+                _sync_room_agent_usage(game_id)
+                await _sync_room_to_supabase_async(room)
+            first_batch = False
+            await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
     except asyncio.CancelledError:
         room.status = "stopped"
     except Exception as exc:
@@ -1294,6 +1342,61 @@ async def _run_live_game(game_id: str) -> None:
     finally:
         await _sync_room_to_supabase_async(room)
         game_manager.live_tasks.pop(game_id, None)
+
+
+async def _live_score_timeline(client: TxLineClient, room: GameRoom) -> dict[str, Any]:
+    try:
+        fixture_id = int(room.fixture_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Live mode requires a numeric fixture id.") from exc
+
+    records = await client.score_updates(fixture_id)
+    resolved_source = "updates"
+    if not records:
+        records = await client.score_snapshot(fixture_id)
+        resolved_source = "snapshot"
+
+    timeline = build_timeline(
+        records,
+        fixture={
+            "fixtureId": room.fixture_id,
+            "participant1": room.participant1,
+            "participant2": room.participant2,
+        },
+        important_only=False,
+        include_possession_changes=True,
+        limit=None,
+    )
+    timeline["resolvedSource"] = resolved_source
+    return timeline
+
+
+def _remember_live_event(seen_event_keys: set[tuple[Any, ...]], event: dict[str, Any]) -> bool:
+    key = _live_event_key(event)
+    if key in seen_event_keys:
+        return False
+    seen_event_keys.add(key)
+    return True
+
+
+def _live_event_key(event: dict[str, Any]) -> tuple[Any, ...]:
+    fixture_id = event.get("fixtureId")
+    seq = event.get("seq")
+    if seq is not None:
+        return ("seq", fixture_id, seq)
+    return (
+        "event",
+        fixture_id,
+        event.get("id"),
+        event.get("ts"),
+        event.get("action"),
+        event.get("clockSeconds"),
+    )
+
+
+def _process_live_events(harness: Any, events: list[dict[str, Any]]) -> None:
+    for event in events:
+        harness.process_event(event)
 
 
 def _sync_room_agent_usage(game_id: str) -> None:

@@ -1220,7 +1220,11 @@ function appendGameEvent(event) {
 function renderGameJournal() {
   const events = state.game.events || [];
   if (!events.length) {
-    els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
+    const message =
+      state.game.status === "running_live"
+        ? "Live room connected. Waiting for the first TXLine update before ants can vote."
+        : "Automatic decisions will appear here.";
+    els.gameFeed.innerHTML = `<li class="empty">${message}</li>`;
     return;
   }
   els.gameFeed.replaceChildren(...buildJournalNodes(events));
@@ -1546,22 +1550,28 @@ function renderSimulationSummary(game = null) {
   els.simulationStatus.className = `sim-status ${status}`;
   els.simulationStatus.textContent = statusLabels[status] || status;
   const eventIndex = game?.eventIndex;
-  els.simulationStats.textContent = [
-    eventIndex != null ? `${eventIndex} TXLine events read` : null,
-    `${counts.opportunity || 0} markets`,
-    `${counts.ant_agent_vote || 0} AI ant votes`,
-    counts.agent_decision ? `${counts.agent_decision} agent decisions` : null,
-    `${counts.prediction || 0} commitments`,
-    `${counts.settlement || 0} results`,
-    counts.void ? `${counts.void} void` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const waitingForFirstLiveUpdate = status === "running_live" && Number(eventIndex || 0) === 0;
+  els.simulationStats.textContent = waitingForFirstLiveUpdate
+    ? "Connected to TXLine updates · waiting for the first live event"
+    : [
+        eventIndex != null ? `${eventIndex} TXLine events read` : null,
+        `${counts.opportunity || 0} markets`,
+        `${counts.ant_agent_vote || 0} AI ant votes`,
+        counts.agent_decision ? `${counts.agent_decision} agent decisions` : null,
+        `${counts.prediction || 0} commitments`,
+        `${counts.settlement || 0} results`,
+        counts.void ? `${counts.void} void` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
   renderAgentCost(status, game?.agentUsage || state.game.agentUsage);
 
   const markets = game?.activeOpportunities || state.game.activeOpportunities || [];
   if (!markets.length) {
-    els.activeMarkets.innerHTML = `<span class="empty">No active market.</span>`;
+    const message = waitingForFirstLiveUpdate
+      ? "Waiting for TXLine updates. Bets open on penalties, danger, corners, free kicks or shots."
+      : "No active market.";
+    els.activeMarkets.innerHTML = `<span class="empty">${message}</span>`;
     return;
   }
   els.activeMarkets.replaceChildren(
