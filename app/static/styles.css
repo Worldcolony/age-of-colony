@@ -1399,87 +1399,86 @@ tbody tr.selected {
   color: #5b21b6;
 }
 
-.colony-economy-grid {
+.simple-economy {
   display: grid;
-  gap: 0.34rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
   margin-top: 0.5rem;
 }
 
-.economy-row {
+.economy-core {
   display: grid;
-  grid-template-columns: 4.4rem minmax(0, 1fr);
-  gap: 0.45rem;
-  align-items: start;
+  gap: 0.04rem;
+  min-height: 4rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: #fff;
 }
 
-.economy-label {
-  padding-top: 0.28rem;
-  color: var(--muted);
-  font-size: 0.68rem;
+.economy-core b {
+  color: var(--text);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.economy-core span {
+  color: var(--text);
+  font-size: 0.76rem;
   font-weight: 850;
-  letter-spacing: 0;
-  text-transform: uppercase;
 }
 
-.economy-metrics {
+.economy-core small {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.economy-core.warning {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.economy-core.danger {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.economy-core.active {
+  border-color: #7dd3fc;
+  background: #f0f9ff;
+}
+
+.economy-extras {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.28rem;
-  min-width: 0;
+  gap: 0.3rem;
+  margin-top: 0.42rem;
 }
 
-.economy-metric {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.24rem;
-  min-height: 1.58rem;
+.economy-extra {
   border: 1px solid var(--panel-border);
   border-radius: 999px;
-  padding: 0.12rem 0.42rem;
+  padding: 0.13rem 0.42rem;
   background: #fff;
   color: var(--muted);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 800;
   white-space: nowrap;
 }
 
-.economy-metric b {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
-.economy-metric small {
-  font-size: 0.68rem;
-}
-
-.economy-metric.warning {
+.economy-extra.warning {
   border-color: #fbbf24;
   background: #fffbeb;
   color: #92400e;
 }
 
-.economy-metric.warning b {
-  color: #78350f;
-}
-
-.economy-metric.danger {
+.economy-extra.danger {
   border-color: #fca5a5;
   background: #fef2f2;
   color: #991b1b;
-}
-
-.economy-metric.danger b {
-  color: #7f1d1d;
-}
-
-.economy-metric.active {
-  border-color: #7dd3fc;
-  background: #f0f9ff;
-  color: #075985;
-}
-
-.economy-metric.active b {
-  color: #0c4a6e;
 }
 
 .colony-stats {
@@ -1728,15 +1727,6 @@ tbody tr.selected {
   .setup-steps,
   .strategy-editor {
     grid-template-columns: 1fr;
-  }
-
-  .economy-row {
-    grid-template-columns: 1fr;
-    gap: 0.2rem;
-  }
-
-  .economy-label {
-    padding-top: 0;
   }
 
   .table-wrap {
