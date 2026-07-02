@@ -128,6 +128,10 @@ class StartGameRequest(BaseModel):
     anonymousId: str | None = None
 
 
+class FinishGameRequest(BaseModel):
+    anonymousId: str | None = None
+
+
 class DemoRunRequest(BaseModel):
     seed: int | None = None
 
@@ -384,9 +388,22 @@ async def start_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
     return room.public_state()
 
 
-def _ensure_live_host(room: GameRoom, anonymous_id: str | None) -> None:
+@app.post("/api/games/{game_id}/finish")
+async def finish_game(game_id: str, payload: FinishGameRequest) -> dict[str, Any]:
+    room = await _get_game_or_restore_404(game_id)
+    _ensure_live_host(room, payload.anonymousId, action="finish the game")
+    if room.status == "finished":
+        return room.public_state()
+    if room.status not in {"waiting_kickoff", "running_live"}:
+        raise HTTPException(status_code=409, detail="Only a live room can be manually finished.")
+    game_manager.harness(room.game_id).finish_game(mode="live")
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+def _ensure_live_host(room: GameRoom, anonymous_id: str | None, *, action: str = "start the game") -> None:
     if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
-        raise HTTPException(status_code=403, detail="Only the room host can start the game.")
+        raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
 
 
 def _ensure_live_room_ready(room: GameRoom) -> None:

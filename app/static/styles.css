@@ -154,6 +154,7 @@ body[data-workspace-role="user"] #createGame,
 body[data-workspace-role="user"] #openJoinRoom,
 body[data-workspace-role="user"] #joinRoom,
 body[data-workspace-role="user"] #startGameLive,
+body[data-workspace-role="user"] #finishGameLive,
 body[data-workspace-role="user"] #addColony,
 body[data-workspace-role="user"] #backToHome {
   min-height: 3rem;

@@ -72,6 +72,7 @@ const els = {
   createGame: document.querySelector("#createGame"),
   openJoinRoom: document.querySelector("#openJoinRoom"),
   startGameLive: document.querySelector("#startGameLive"),
+  finishGameLive: document.querySelector("#finishGameLive"),
   startGameReplay: document.querySelector("#startGameReplay"),
   gameStatus: document.querySelector("#gameStatus"),
   setupSteps: document.querySelector("#setupSteps"),
@@ -155,6 +156,7 @@ function bindEvents() {
   els.copyRoomCode.addEventListener("click", copyRoomCode);
   els.participateMatch.addEventListener("click", participateInMatch);
   els.startGameLive.addEventListener("click", startGameLive);
+  els.finishGameLive.addEventListener("click", finishGameLive);
   els.startGameReplay.addEventListener("click", startGameReplay);
   els.joinRoomForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -191,6 +193,7 @@ function applyWorkspaceRole(role, options = {}) {
   els.joinRoom.textContent = isAdmin ? "Add player" : "Join";
   els.startGameLive.textContent = "Start game";
   els.startGameLive.hidden = isAdmin;
+  els.finishGameLive.hidden = isAdmin;
   els.startGameReplay.hidden = !isAdmin;
 
   clearSelection();
@@ -741,6 +744,30 @@ async function startGameLive() {
   }
 }
 
+async function finishGameLive() {
+  if (!state.game.id) return;
+  if (state.role !== "user") {
+    els.gameStatus.textContent = "Manual finish is available in user mode.";
+    return;
+  }
+  if (!currentPlayer()?.isHost) {
+    els.gameStatus.textContent = "Only the room host can finish the game.";
+    updateGameActions();
+    return;
+  }
+  els.gameStatus.textContent = "Finishing game...";
+  try {
+    const game = await postJson(`/api/games/${state.game.id}/finish`, {
+      anonymousId: state.identity.anonymousId,
+    });
+    renderGameState(game);
+    closeGameStream();
+    els.gameStatus.textContent = "Match finished. Final leaderboard available.";
+  } catch (error) {
+    els.gameStatus.textContent = error.message;
+  }
+}
+
 function openGameStream() {
   closeGameStream();
   if (!state.game.id) return;
@@ -1183,6 +1210,11 @@ function updateGameActions() {
   els.joinRoom.disabled = state.role === "user" ? Boolean(me) || !hasJoinCode || locked : !hasRoom || locked;
   els.startGameLive.textContent = !hasRoom || me?.isHost ? "Start game" : "Waiting for host";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !roomReady || !me?.isHost;
+  if (els.finishGameLive) {
+    const canFinishLive = state.role === "user" && hasRoom && me?.isHost && ["waiting_kickoff", "running_live"].includes(status);
+    els.finishGameLive.hidden = !canFinishLive;
+    els.finishGameLive.disabled = !canFinishLive;
+  }
   els.startGameReplay.disabled = !isAdmin || !hasRoom || running || status === "finished" || !hasColony;
   if (els.copyRoomCode) els.copyRoomCode.disabled = cleanRoomCode(state.game.roomCode || "").length !== 6;
 }

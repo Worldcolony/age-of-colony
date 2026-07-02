@@ -6,7 +6,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
-from app.main import app, _finish_live_game, _live_timeline_finished, _pick_live_target_fixture, _process_live_events
+from app.main import app, _finish_live_game, _live_timeline_finished, _pick_live_target_fixture, _process_live_events, game_manager
 from app.game.harness import (
     GameHarness,
     GameManager,
@@ -1548,6 +1548,42 @@ class DemoRunApiTest(unittest.TestCase):
             },
         )
         self.assertEqual(colony_after_lock.status_code, 422)
+
+    def test_live_host_can_manually_finish_stuck_room(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 939393,
+                "participant1": "Spain",
+                "participant2": "Austria",
+                "creatorName": "Host Alice",
+                "anonymousId": "anon_finish_host",
+            },
+        ).json()
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Finish Nest",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_finish_host",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+        room = game_manager.get_room(created["gameId"])
+        self.assertIsNotNone(room)
+        room.status = "running_live"
+
+        blocked = client.post(f"/api/games/{created['gameId']}/finish", json={"anonymousId": "anon_someone_else"})
+        self.assertEqual(blocked.status_code, 403)
+
+        finished = client.post(f"/api/games/{created['gameId']}/finish", json={"anonymousId": "anon_finish_host"})
+        self.assertEqual(finished.status_code, 200)
+        self.assertEqual(finished.json()["status"], "finished")
+        self.assertTrue(any(event.kind == "game_finished" for event in room.log))
 
     def test_demo_run_requires_deepseek_agent(self):
         client = TestClient(app)
