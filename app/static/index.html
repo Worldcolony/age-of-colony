@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-35" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-36" />
   </head>
   <body>
     <header class="topbar">
@@ -111,10 +111,30 @@
           </div>
           <div class="button-row">
             <button id="createGame" type="button">Create room</button>
+            <button id="openJoinRoom" type="button">Join room</button>
             <button id="startGameLive" type="button" disabled>Start game</button>
             <button id="startGameReplay" type="button" disabled hidden>Run replay</button>
           </div>
         </div>
+
+        <section id="joinRoomPage" class="join-page" aria-label="Join room">
+          <div>
+            <h3>Join room</h3>
+            <p>Enter the private 6-digit code from the host.</p>
+          </div>
+          <form id="joinRoomForm" class="join-form">
+            <label>
+              Room code
+              <input id="roomCodeInput" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+            </label>
+            <label>
+              Your name
+              <input id="playerName" type="text" maxlength="32" placeholder="Tanguy" />
+            </label>
+            <button id="joinRoom" type="submit" disabled>Join</button>
+          </form>
+          <button id="backToHome" class="button-secondary" type="button">Back</button>
+        </section>
 
         <section class="room-setup" aria-label="Room setup">
           <div id="setupSteps" class="setup-steps">
@@ -128,17 +148,6 @@
               <span class="setup-label">Private code</span>
               <strong id="roomCode">No code yet</strong>
             </div>
-            <form id="joinRoomForm" class="join-form">
-              <label>
-                Room code
-                <input id="roomCodeInput" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
-              </label>
-              <label>
-                Your name
-                <input id="playerName" type="text" maxlength="32" placeholder="Tanguy" />
-              </label>
-              <button id="joinRoom" type="submit" disabled>Join</button>
-            </form>
           </div>
           <div id="roomLobby" class="room-lobby">
             <div class="lobby-stat">
@@ -225,6 +234,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-35" type="module"></script>
+    <script src="/static/app.js?v=colony-36" type="module"></script>
   </body>
 </html>

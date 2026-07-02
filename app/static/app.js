@@ -1,5 +1,6 @@
 const state = {
   role: "user",
+  userView: "home",
   identity: {
     anonymousId: null,
     playerName: "",
@@ -54,6 +55,7 @@ const els = {
   manualFixture: document.querySelector("#manualFixture"),
   manualFixtureId: document.querySelector("#manualFixtureId"),
   createGame: document.querySelector("#createGame"),
+  openJoinRoom: document.querySelector("#openJoinRoom"),
   startGameLive: document.querySelector("#startGameLive"),
   startGameReplay: document.querySelector("#startGameReplay"),
   gameStatus: document.querySelector("#gameStatus"),
@@ -64,8 +66,10 @@ const els = {
   matchCountdown: document.querySelector("#matchCountdown"),
   playerCount: document.querySelector("#playerCount"),
   joinRoomForm: document.querySelector("#joinRoomForm"),
+  joinRoomPage: document.querySelector("#joinRoomPage"),
   playerName: document.querySelector("#playerName"),
   joinRoom: document.querySelector("#joinRoom"),
+  backToHome: document.querySelector("#backToHome"),
   playerList: document.querySelector("#playerList"),
   simulationStatus: document.querySelector("#simulationStatus"),
   simulationStats: document.querySelector("#simulationStats"),
@@ -91,6 +95,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyWorkspaceRole(initialWorkspaceRole(), { load: false });
   const initialCode = initialRoomCode();
   if (initialCode) els.roomCodeInput.value = initialCode;
+  setUserView(initialUserView(), { updateUrl: false });
   await checkHealth();
   await loadFixtures();
   if (initialCode) await loadRoomByCode(initialCode);
@@ -124,6 +129,8 @@ function bindEvents() {
     selectFixture({ fixtureId, participant1: null, participant2: null, competition: "Manual" });
   });
   els.createGame.addEventListener("click", createGame);
+  els.openJoinRoom.addEventListener("click", openJoinRoomPage);
+  els.backToHome.addEventListener("click", backToHome);
   els.participateMatch.addEventListener("click", participateInMatch);
   els.startGameLive.addEventListener("click", startGameLive);
   els.startGameReplay.addEventListener("click", startGameReplay);
@@ -159,6 +166,7 @@ function applyWorkspaceRole(role, options = {}) {
 
   clearSelection();
   resetGameUi();
+  setUserView("home", { updateUrl: false });
   updateFixtureFilterState();
   if (load) loadFixtures();
 }
@@ -171,6 +179,44 @@ function initialWorkspaceRole() {
 function initialRoomCode() {
   const params = new URLSearchParams(window.location.search);
   return cleanRoomCode(params.get("room") || params.get("code"));
+}
+
+function initialUserView() {
+  const params = new URLSearchParams(window.location.search);
+  if (state.role !== "user") return "home";
+  if (params.get("join") === "1" || params.get("view") === "join" || initialRoomCode()) return "join";
+  return "home";
+}
+
+function setUserView(view, options = {}) {
+  const { updateUrl = true } = options;
+  if (state.role !== "user") {
+    state.userView = "home";
+    delete document.body.dataset.userView;
+    return;
+  }
+  state.userView = ["home", "join", "room"].includes(view) ? view : "home";
+  document.body.dataset.userView = state.userView;
+  if (updateUrl) {
+    if (state.userView === "home") setHomeUrl();
+    if (state.userView === "join") setJoinUrl(cleanRoomCode(els.roomCodeInput.value || ""));
+  }
+  updateGameActions();
+}
+
+function openJoinRoomPage() {
+  if (state.userView !== "join" && state.game.id && !currentPlayer()) {
+    resetGameUi("Enter a private code to join.");
+  }
+  setUserView("join");
+  els.gameStatus.textContent = "Enter a private code to join.";
+  els.roomCodeInput.focus();
+}
+
+function backToHome() {
+  if (state.role !== "user") return;
+  resetGameUi("Create or join a private room.");
+  setUserView("home");
 }
 
 function updateFixtureFilterState() {
@@ -376,11 +422,7 @@ async function createGame() {
     els.gameStatus.textContent = state.role === "admin" ? "Select a replay fixture before creating a room." : "Select a live fixture before creating a room.";
     return null;
   }
-  const creatorName = currentPlayerName();
-  if (state.role === "user" && !creatorName) {
-    els.gameStatus.textContent = "Enter your player name before creating a room.";
-    return null;
-  }
+  const creatorName = state.role === "user" ? currentPlayerName() || "Host" : currentPlayerName();
 
   closeGameStream();
   els.gameStatus.textContent = state.role === "admin" ? "Creating replay room..." : "Creating live room...";
@@ -414,6 +456,7 @@ async function createGame() {
     renderGameState(game);
     if (game.roomCode) els.roomCodeInput.value = game.roomCode;
     setRoomUrl(game.roomCode);
+    if (state.role === "user") setUserView("room", { updateUrl: false });
     openGameStream();
     return game;
   } catch (error) {
@@ -440,11 +483,25 @@ async function loadRoomByCode(roomCode) {
     setSelectedFixture(fixtureFromGame(game), { reset: false });
     els.roomCodeInput.value = game.roomCode || cleanCode;
     renderGameState(game);
-    setRoomUrl(game.roomCode || cleanCode);
-    openGameStream();
+    const isMember = Boolean(currentPlayer(game.players || []));
+    if (state.role === "user") {
+      setUserView(isMember ? "room" : "join", { updateUrl: false });
+      if (isMember) {
+        setRoomUrl(game.roomCode || cleanCode);
+        openGameStream();
+      } else {
+        setJoinUrl(game.roomCode || cleanCode);
+        closeGameStream();
+        els.gameStatus.textContent = "Enter your name to join this room.";
+      }
+    } else {
+      setRoomUrl(game.roomCode || cleanCode);
+      openGameStream();
+    }
     return game;
   } catch (error) {
     els.gameStatus.textContent = error.message;
+    setUserView("join", { updateUrl: false });
     updateGameActions();
     return null;
   }
@@ -472,6 +529,7 @@ async function joinRoom() {
     setSelectedFixture(fixtureFromGame(game), { reset: false });
     renderGameState(game);
     setRoomUrl(game.roomCode || roomCode);
+    if (state.role === "user") setUserView("room", { updateUrl: false });
     openGameStream();
     els.gameStatus.textContent = `${name} joined the room.`;
   } catch (error) {
@@ -637,7 +695,7 @@ function resetGameUi(message = null) {
     message ||
     (state.role === "admin"
       ? "Create a replay room from a completed match."
-      : "Create a live room from an upcoming match.");
+      : "Create or join a private room.");
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
   if (state.role !== "admin") els.roomCodeInput.value = "";
@@ -798,6 +856,30 @@ function setRoomUrl(roomCode) {
   const url = new URL(window.location.href);
   url.searchParams.set("room", cleanCode);
   url.searchParams.delete("code");
+  url.searchParams.delete("join");
+  url.searchParams.delete("view");
+  history.replaceState({}, "", url);
+}
+
+function setJoinUrl(roomCode = "") {
+  if (!history.replaceState) return;
+  const cleanCode = cleanRoomCode(roomCode);
+  const url = new URL(window.location.href);
+  url.searchParams.set("join", "1");
+  if (cleanCode) url.searchParams.set("room", cleanCode);
+  else url.searchParams.delete("room");
+  url.searchParams.delete("code");
+  url.searchParams.delete("view");
+  history.replaceState({}, "", url);
+}
+
+function setHomeUrl() {
+  if (!history.replaceState) return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("room");
+  url.searchParams.delete("code");
+  url.searchParams.delete("join");
+  url.searchParams.delete("view");
   history.replaceState({}, "", url);
 }
 
@@ -988,8 +1070,11 @@ function updateGameActions() {
   const roomReady = allPlayersReady();
   els.createGame.disabled =
     state.role === "user"
-      ? !state.selected?.fixtureId || hasRoom || !currentPlayerName()
+      ? state.userView !== "home" || !state.selected?.fixtureId || hasRoom
       : !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
+  if (els.openJoinRoom) {
+    els.openJoinRoom.disabled = state.role !== "user" || state.userView !== "home";
+  }
   const firstUpcoming = state.fixtures[0] || null;
   const firstSelected = firstUpcoming?.fixtureId && state.selected?.fixtureId === firstUpcoming.fixtureId;
   els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));

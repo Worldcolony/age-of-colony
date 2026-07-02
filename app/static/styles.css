@@ -37,7 +37,9 @@ body[data-workspace-role="admin"] {
 body[data-workspace-role="admin"] #fixtureFilters,
 body[data-workspace-role="admin"] #refreshFixtures,
 body[data-workspace-role="admin"] #manualFixture,
-body[data-workspace-role="admin"] #liveMatchTarget {
+body[data-workspace-role="admin"] #liveMatchTarget,
+body[data-workspace-role="admin"] #openJoinRoom,
+body[data-workspace-role="admin"] #joinRoomPage {
   display: none;
 }
 
@@ -51,10 +53,36 @@ body[data-workspace-role="user"] .panel-fixtures > .panel-heading,
 body[data-workspace-role="user"] #participateMatch,
 body[data-workspace-role="user"] #startGameReplay,
 body[data-workspace-role="user"] #setupSteps,
+body[data-workspace-role="user"] #joinRoomPage,
+body[data-workspace-role="user"] .room-setup,
+body[data-workspace-role="user"] #colonyForm,
+body[data-workspace-role="user"] #startGameLive,
 body[data-workspace-role="user"][data-game-status="created"] .simulation-panel,
 body[data-workspace-role="user"][data-game-status="created"] .game-grid,
 body[data-workspace-role="user"]:not([data-game-status]) .simulation-panel,
 body[data-workspace-role="user"]:not([data-game-status]) .game-grid {
+  display: none;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] #joinRoomPage,
+body[data-workspace-role="user"][data-user-view="room"] .room-setup {
+  display: grid;
+}
+
+body[data-workspace-role="user"][data-user-view="room"] #colonyForm {
+  display: grid;
+}
+
+body[data-workspace-role="user"][data-user-view="room"] #startGameLive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] #createGame,
+body[data-workspace-role="user"][data-user-view="join"] #openJoinRoom,
+body[data-workspace-role="user"][data-user-view="room"] #createGame,
+body[data-workspace-role="user"][data-user-view="room"] #openJoinRoom {
   display: none;
 }
 
@@ -101,9 +129,11 @@ body[data-workspace-role="user"] .button-row {
 }
 
 body[data-workspace-role="user"] #createGame,
+body[data-workspace-role="user"] #openJoinRoom,
 body[data-workspace-role="user"] #joinRoom,
 body[data-workspace-role="user"] #startGameLive,
-body[data-workspace-role="user"] #addColony {
+body[data-workspace-role="user"] #addColony,
+body[data-workspace-role="user"] #backToHome {
   min-height: 2.7rem;
   padding-inline: 1rem;
   font-weight: 850;
@@ -117,11 +147,31 @@ body[data-workspace-role="user"] .room-setup {
 }
 
 body[data-workspace-role="user"] .room-strip {
-  grid-template-columns: minmax(150px, 0.8fr) minmax(280px, 1.2fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 body[data-workspace-role="user"] .join-form {
   grid-template-columns: minmax(7rem, 0.45fr) minmax(0, 1fr) auto;
+}
+
+body[data-workspace-role="user"] .join-page {
+  gap: 1rem;
+  margin-top: 0.85rem;
+}
+
+body[data-workspace-role="user"] .join-page h3,
+body[data-workspace-role="user"] .join-page p {
+  margin: 0;
+}
+
+body[data-workspace-role="user"] .join-page h3 {
+  font-size: 1.55rem;
+}
+
+body[data-workspace-role="user"] .join-page p {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 1rem;
 }
 
 body[data-workspace-role="user"] .colony-form {
@@ -201,6 +251,16 @@ button {
 
 button:hover {
   background: var(--brand-dark);
+}
+
+button.button-secondary {
+  border: 1px solid var(--panel-border);
+  background: #fff;
+  color: var(--text);
+}
+
+button.button-secondary:hover {
+  background: #f8fafc;
 }
 
 button:disabled {
