@@ -1,16 +1,20 @@
 // Queen Ant — the player's royal profile. Exactly one queen per wallet:
-// records are keyed by the wallet pubkey, so a wallet can only ever
-// hold a single queen (saving again updates her, never adds another).
+// the server table's PRIMARY KEY is the wallet pubkey, so upserts amend
+// her and can never create a second. localStorage is a cache + offline
+// fallback (used when the engine or its queen store is unreachable).
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { api, ApiError } from "@/lib/api";
 import { useStore } from "@/store/game";
 
 export interface Queen {
   name: string;
   motto: string;
   emblem: string;
-  crownedAt: number;
+  crownedAt: number | string;
 }
+
+export type QueenSource = "server" | "local" | null;
 
 export const EMBLEMS = ["👑", "🐜", "⚔️", "🛡️", "🌿", "🔥", "💎", "🍄"] as const;
 
@@ -28,47 +32,121 @@ export function loadQueen(pubkey: string | null): Queen | null {
   }
 }
 
-export function saveQueen(pubkey: string, queen: Queen): void {
+export function saveQueenLocal(pubkey: string, queen: Queen): void {
   localStorage.setItem(keyFor(pubkey), JSON.stringify(queen));
 }
 
-export function removeQueen(pubkey: string): void {
+export function removeQueenLocal(pubkey: string): void {
   localStorage.removeItem(keyFor(pubkey));
 }
 
-// Loads the wallet's queen and mirrors her name into the store so
-// room joins / player lists use the royal name everywhere.
+function applyName(name: string | null) {
+  useStore.getState().setWallet({ name });
+}
+
+// Loads the wallet's queen (server-first, local fallback) and mirrors her
+// name into the store so room joins / player lists use the royal name.
 export function useQueen() {
   const wallet = useStore((s) => s.wallet);
   const [queen, setQueen] = useState<Queen | null>(null);
+  const [source, setSource] = useState<QueenSource>(null);
 
   useEffect(() => {
-    const q = loadQueen(wallet.pubkey);
-    setQueen(q);
-    if (q) useStore.getState().setWallet({ name: q.name });
+    let cancelled = false;
+    const pk = wallet.pubkey;
+    if (!pk) {
+      setQueen(null);
+      setSource(null);
+      return;
+    }
+    const local = loadQueen(pk);
+    // show the cached queen immediately, then reconcile with the server
+    if (local) {
+      setQueen(local);
+      setSource("local");
+      applyName(local.name);
+    }
+    (async () => {
+      try {
+        const remote = await api.getQueen(pk);
+        if (cancelled) return;
+        const q: Queen = {
+          name: remote.name,
+          motto: remote.motto ?? "",
+          emblem: remote.emblem || "👑",
+          crownedAt: remote.crownedAt ?? Date.now(),
+        };
+        saveQueenLocal(pk, q);
+        setQueen(q);
+        setSource("server");
+        applyName(q.name);
+      } catch (e) {
+        if (cancelled) return;
+        const err = e as ApiError;
+        if (err?.status === 404 && local) {
+          // she exists only on this device — migrate her to the colony records
+          try {
+            const migrated = await api.putQueen(pk, { name: local.name, motto: local.motto, emblem: local.emblem });
+            if (cancelled) return;
+            const q: Queen = { ...local, crownedAt: migrated.crownedAt ?? local.crownedAt };
+            saveQueenLocal(pk, q);
+            setQueen(q);
+            setSource("server");
+          } catch {
+            /* stay on local */
+          }
+        } else if (err?.status === 404) {
+          setQueen(null);
+          setSource(null);
+        }
+        // 503 (store unconfigured) or network error: keep the local fallback
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [wallet.pubkey]);
 
   const save = useCallback(
-    (q: Omit<Queen, "crownedAt">) => {
-      if (!wallet.pubkey) return null;
-      const existing = loadQueen(wallet.pubkey);
+    async (q: Omit<Queen, "crownedAt">) => {
+      const pk = wallet.pubkey;
+      if (!pk) return null;
+      const existing = loadQueen(pk);
+      // optimistic local write so the UI never blocks on the network
       const full: Queen = { ...q, crownedAt: existing?.crownedAt ?? Date.now() };
-      saveQueen(wallet.pubkey, full);
+      saveQueenLocal(pk, full);
       setQueen(full);
-      useStore.getState().setWallet({ name: full.name });
-      return full;
+      setSource("local");
+      applyName(full.name);
+      try {
+        const remote = await api.putQueen(pk, { name: q.name, motto: q.motto, emblem: q.emblem });
+        const merged: Queen = { ...full, crownedAt: remote.crownedAt ?? full.crownedAt };
+        saveQueenLocal(pk, merged);
+        setQueen(merged);
+        setSource("server");
+        return merged;
+      } catch {
+        return full; // engine offline / store unconfigured — local cache holds her
+      }
     },
     [wallet.pubkey],
   );
 
-  const abdicate = useCallback(() => {
-    if (!wallet.pubkey) return;
-    removeQueen(wallet.pubkey);
+  const abdicate = useCallback(async () => {
+    const pk = wallet.pubkey;
+    if (!pk) return;
+    removeQueenLocal(pk);
     setQueen(null);
-    useStore.getState().setWallet({ name: null });
+    setSource(null);
+    applyName(null);
+    try {
+      await api.deleteQueen(pk);
+    } catch {
+      /* best effort */
+    }
   }, [wallet.pubkey]);
 
-  return { wallet, queen, save, abdicate };
+  return { wallet, queen, source, save, abdicate };
 }
 
 // Null-rendering sync so the queen's name is applied app-wide on load.

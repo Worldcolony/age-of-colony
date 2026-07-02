@@ -6,7 +6,7 @@ import { AntMarch } from "@/components/AntMarch";
 
 export default function QueenPage() {
   const { connect } = useWallet();
-  const { wallet, queen, save, abdicate } = useQueen();
+  const { wallet, queen, source, save, abdicate } = useQueen();
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
@@ -66,6 +66,7 @@ export default function QueenPage() {
             <div className="flex flex-wrap items-center justify-center gap-2 font-mono text-[10px] uppercase tracking-wider text-ink-faint">
               <span className="plate px-2.5 py-1">🔗 {wallet.short}</span>
               <span className="plate px-2.5 py-1">Reigning since {new Date(queen.crownedAt).toLocaleDateString()}</span>
+              <span className="plate px-2.5 py-1">{source === "server" ? "☁️ colony records" : "📱 this device"}</span>
             </div>
           </div>
         </div>

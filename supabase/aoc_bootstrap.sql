@@ -86,3 +86,34 @@ alter table public.aoc_game_events enable row level security;
 
 -- No public write policies are required for V0. The FastAPI backend writes with
 -- the service role key, and the frontend reads through backend endpoints.
+
+-- ---------------------------------------------------------------------
+-- aoc_queens: the player's royal profile. wallet is the PRIMARY KEY, so
+-- the database itself enforces exactly one queen per wallet — upserts
+-- amend her, they can never create a second.
+-- ---------------------------------------------------------------------
+create table if not exists public.aoc_queens (
+  wallet      text primary key,
+  name        text not null,
+  motto       text not null default '',
+  emblem      text not null default '👑',
+  crowned_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+
+  constraint aoc_queens_name_length_check check (char_length(name) between 1 and 24),
+  constraint aoc_queens_motto_length_check check (char_length(motto) <= 48)
+);
+
+create or replace function public.aoc_queens_touch_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  new.crowned_at = old.crowned_at;  -- coronation date is immutable
+  return new;
+end;
+$$;
+
+drop trigger if exists aoc_queens_touch_updated_at on public.aoc_queens;
+create trigger aoc_queens_touch_updated_at
+  before update on public.aoc_queens
+  for each row execute function public.aoc_queens_touch_updated_at();

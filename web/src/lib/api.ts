@@ -42,6 +42,15 @@ function qs(params: Record<string, string | number | undefined | null> = {}): st
   return str ? `?${str}` : "";
 }
 
+export interface QueenRecord {
+  wallet: string;
+  name: string;
+  motto: string;
+  emblem: string;
+  crownedAt?: string | number | null;
+  updatedAt?: string | null;
+}
+
 export interface FixtureList {
   count?: number;
   mode?: string;
@@ -78,6 +87,12 @@ export const api = {
   getRoomByCode: (code: string) => req<GameState>(`/api/rooms/${encodeURIComponent(code)}`),
   joinRoomByCode: (code: string, name: string, anonymousId?: string) =>
     req<GameState>(`/api/rooms/${encodeURIComponent(code)}/players`, "POST", { name, anonymousId }),
+
+  // queens — one royal profile per wallet (server-enforced by DB primary key)
+  getQueen: (wallet: string) => req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`),
+  putQueen: (wallet: string, body: { name: string; motto?: string; emblem?: string }) =>
+    req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`, "PUT", body),
+  deleteQueen: (wallet: string) => req<{ deleted: boolean }>(`/api/queens/${encodeURIComponent(wallet)}`, "DELETE"),
   addColony: (id: string, body: CreateColonyBody) => req<GameState>(`/api/games/${id}/colonies`, "POST", body),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),

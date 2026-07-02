@@ -56,7 +56,7 @@ class SupabaseGameStore:
             "configured": self.configured,
             "enabled": self.settings.enabled,
             "url": self.settings.url,
-            "tables": ["aoc_games", "aoc_game_events"],
+            "tables": ["aoc_games", "aoc_game_events", "aoc_queens"],
         }
 
     def sync_room(self, room: Any) -> dict[str, Any]:
@@ -239,6 +239,37 @@ class SupabaseGameStore:
             },
         }
 
+    # ------------------------------------------------------------------
+    # Queens — one royal profile per wallet (wallet is the primary key,
+    # so upserts amend the existing queen and can never create a second).
+    # ------------------------------------------------------------------
+    def get_queen(self, wallet: str) -> dict[str, Any] | None:
+        if not self.configured:
+            return None
+        cleaned = urllib.parse.quote(str(wallet), safe="")
+        rows = self._request_json(f"aoc_queens?select=*&wallet=eq.{cleaned}&limit=1")
+        return _queen_public_state(rows[0]) if rows else None
+
+    def upsert_queen(self, wallet: str, *, name: str, motto: str, emblem: str) -> dict[str, Any]:
+        row = {
+            "wallet": str(wallet),
+            "name": name,
+            "motto": motto,
+            "emblem": emblem,
+        }
+        rows = self._request_json(
+            "aoc_queens?on_conflict=wallet",
+            method="POST",
+            body=row,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return _queen_public_state(rows[0]) if rows else _queen_public_state(row)
+
+    def delete_queen(self, wallet: str) -> bool:
+        cleaned = urllib.parse.quote(str(wallet), safe="")
+        self._request_json(f"aoc_queens?wallet=eq.{cleaned}", method="DELETE", prefer="return=minimal")
+        return True
+
     def _request_json(
         self,
         path: str,
@@ -274,6 +305,17 @@ class SupabaseGameStore:
             raise SupabasePersistenceError(f"Supabase {method} failed: {exc}") from exc
 
         return json.loads(payload) if payload.strip() else []
+
+
+def _queen_public_state(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "wallet": row.get("wallet"),
+        "name": row.get("name"),
+        "motto": row.get("motto") or "",
+        "emblem": row.get("emblem") or "👑",
+        "crownedAt": row.get("crowned_at"),
+        "updatedAt": row.get("updated_at"),
+    }
 
 
 def _stored_event_public_state(row: dict[str, Any]) -> dict[str, Any]:

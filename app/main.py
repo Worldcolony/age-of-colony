@@ -88,6 +88,12 @@ class JoinRoomRequest(BaseModel):
     anonymousId: str | None = None
 
 
+class QueenUpsertRequest(BaseModel):
+    name: str
+    motto: str | None = None
+    emblem: str | None = None
+
+
 class UpdateColonyStrategyRequest(BaseModel):
     style: str | None = None
     favoriteContext: str | None = None
@@ -232,6 +238,57 @@ async def join_room_by_code(room_code: str, payload: JoinRoomRequest) -> dict[st
     game_manager.harness(room.game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
+
+
+# ---------------------------------------------------------------------------
+# Queens — one royal profile per wallet (DB primary key enforces uniqueness).
+# ---------------------------------------------------------------------------
+def _clean_wallet_or_422(wallet: str) -> str:
+    cleaned = (wallet or "").strip()[:80]
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="wallet is required")
+    return cleaned
+
+
+def _queen_store_or_503() -> None:
+    if not supabase_store.configured:
+        raise HTTPException(
+            status_code=503,
+            detail="queen_store_not_configured",
+        )
+
+
+@app.get("/api/queens/{wallet}")
+async def get_queen(wallet: str) -> dict[str, Any]:
+    _queen_store_or_503()
+    queen = await asyncio.to_thread(supabase_store.get_queen, _clean_wallet_or_422(wallet))
+    if queen is None:
+        raise HTTPException(status_code=404, detail="This wallet has not crowned a queen yet.")
+    return queen
+
+
+@app.put("/api/queens/{wallet}")
+async def upsert_queen(wallet: str, payload: QueenUpsertRequest) -> dict[str, Any]:
+    _queen_store_or_503()
+    name = (payload.name or "").strip()[:24]
+    if not name:
+        raise HTTPException(status_code=422, detail="Your queen needs a name.")
+    motto = (payload.motto or "").strip()[:48]
+    emblem = (payload.emblem or "👑").strip()[:8] or "👑"
+    return await asyncio.to_thread(
+        supabase_store.upsert_queen,
+        _clean_wallet_or_422(wallet),
+        name=name,
+        motto=motto,
+        emblem=emblem,
+    )
+
+
+@app.delete("/api/queens/{wallet}")
+async def delete_queen(wallet: str) -> dict[str, Any]:
+    _queen_store_or_503()
+    await asyncio.to_thread(supabase_store.delete_queen, _clean_wallet_or_422(wallet))
+    return {"deleted": True, "wallet": _clean_wallet_or_422(wallet)}
 
 
 @app.patch("/api/games/{game_id}/colonies/{colony_id}/strategy")
