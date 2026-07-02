@@ -16,6 +16,7 @@ export function BottomNav() {
     { href: code ? `/room/${code}` : "/lobby", ic: "🎟️", label: "Room", active: pathname.startsWith("/room"), disabled: !code },
     { href: id ? `/cockpit/${id}` : "/setup", ic: "🐜", label: "Colony", active: pathname.startsWith("/cockpit") || pathname === "/setup", disabled: false },
     { href: id ? `/results/${id}` : "/lobby", ic: "🏆", label: "Ranks", active: pathname.startsWith("/results"), disabled: !id },
+    { href: "/queen", ic: "👑", label: "Queen", active: pathname === "/queen", disabled: false },
   ];
 
   return (
