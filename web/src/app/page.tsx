@@ -39,7 +39,7 @@ export default function SplashPage() {
     <div className="flex min-h-[86dvh] flex-1 flex-col items-center justify-center">
       <div className="glass bracket w-full max-w-[340px] p-6 text-center">
         <p className="eyebrow mb-3">Live Colony Engine</p>
-        <h1 className="hud-title glow-lime text-[26px] leading-tight">
+        <h1 className="hud-title glow-lime text-[15px] leading-[1.7]">
           Age of
           <br />
           Colony

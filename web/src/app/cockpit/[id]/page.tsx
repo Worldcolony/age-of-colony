@@ -97,12 +97,12 @@ export default function CockpitPage() {
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <button className="text-sm font-semibold text-ink-soft" onClick={() => router.push("/lobby")}>← Lobby</button>
-        <span className={`rounded-full border px-3 py-1 text-xs font-bold ${RUNNING.has(status) ? "border-magenta/40 text-magenta" : status === "finished" ? "border-lime/40 text-lime" : "border-white/10 text-ink-faint"}`}>
+        <span className={`rounded-full border px-3 py-1 text-xs font-bold ${RUNNING.has(status) ? "border-magenta/40 text-magenta" : status === "finished" ? "border-lime/40 text-lime" : "border-brd text-ink-faint"}`}>
           {status.replace("_", " ") || "…"}
         </span>
       </div>
 
-      <div className="glass flex flex-col gap-3 !bg-white/[0.06] p-4">
+      <div className="glass flex flex-col gap-3 !bg-parch-strong p-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 font-bold"><span className="text-2xl">{flag(p1)}</span>{p1}</div>
           <span className="font-mono text-xs text-amber">LIVE</span>
@@ -121,18 +121,18 @@ export default function CockpitPage() {
       <RankCard mine={mine} rank={(myIdx < 0 ? 0 : myIdx) + 1} />
 
       {(game?.activeOpportunities ?? []).map((o, i) => (
-        <div key={i} className="glass flex flex-col gap-2.5 border border-white/25 p-4" style={{ boxShadow: "0 0 18px rgba(56,232,255,0.4)" }}>
+        <div key={i} className="glass flex flex-col gap-2.5 border border-brd p-4" style={{ boxShadow: "3px 3px 0 rgba(74,58,30,0.22)" }}>
           <span className="flex w-fit items-center gap-1.5 rounded-full border border-magenta/40 px-3 py-1 text-xs font-bold text-magenta"><span className="live-dot" />{(o.kind || "market").toUpperCase()}</span>
           <div className="font-bold">{o.label || o.question || "New market"}</div>
           <div className="flex flex-wrap gap-2">
             {(o.options || []).map((op, j) => (
-              <div key={j} className="flex-1 rounded-lg border border-white/10 bg-black/30 p-2.5 text-center text-sm font-bold">{op.label || op.value}</div>
+              <div key={j} className="flex-1 rounded-lg border border-brd bg-slot p-2.5 text-center text-sm font-bold">{op.label || op.value}</div>
             ))}
           </div>
         </div>
       ))}
 
-      <h2 className="hud-title text-sm">🎛️ Soundboard</h2>
+      <h2 className="hud-title text-[11px]">🎛️ Soundboard</h2>
       {mine ? (
         <div className="glass flex flex-col gap-3.5 p-4">
           <SbRow label="Style">
@@ -153,7 +153,7 @@ export default function CockpitPage() {
       <div className="glass flex flex-col gap-3 p-4">
         <div className="flex gap-2">
           {(["match", "colony"] as const).map((t) => (
-            <button key={t} className="flex-1 rounded-lg border border-white/10 bg-black/25 py-2 text-xs font-bold data-[a=true]:border-cyan/40 data-[a=true]:text-cyan" data-a={feedTab === t} onClick={() => setFeedTab(t)}>
+            <button key={t} className="flex-1 rounded-lg border border-brd bg-slot py-2 text-xs font-bold data-[a=true]:border-cyan/40 data-[a=true]:text-cyan" data-a={feedTab === t} onClick={() => setFeedTab(t)}>
               {t === "match" ? "Match" : "Colony"}
             </button>
           ))}
@@ -163,7 +163,7 @@ export default function CockpitPage() {
             <span className="py-5 text-center text-sm text-ink-faint">Waiting for events…</span>
           ) : (
             feedRows.map((e) => (
-              <div key={e.index} className="flex items-start gap-2.5 rounded-xl border-l-2 border-white/25 bg-black/25 px-3 py-2.5">
+              <div key={e.index} className="flex items-start gap-2.5 rounded-xl border-l-2 border-brd bg-slot px-3 py-2.5">
                 <span className="text-lg">{kindIcon(e.kind)}</span>
                 <span className="flex-1 text-[13px] leading-snug">{e.message || e.kind}</span>
                 <span className="font-mono text-[10px] text-ink-faint">#{e.index}</span>
@@ -180,7 +180,7 @@ function RankCard({ mine, rank }: { mine?: Colony; rank: number }) {
   if (!mine) return <div className="glass p-4 text-center text-sm text-ink-faint">Deploy a colony to compete.</div>;
   return (
     <div className="glass flex items-center gap-3.5 p-4">
-      <div className="font-display text-2xl text-lime" style={{ textShadow: "0 0 18px rgba(182,255,60,0.55)" }}>#{rank}</div>
+      <div className="font-display text-2xl text-lime" style={{ textShadow: "2px 2px 0 rgba(176,126,28,0.4)" }}>#{rank}</div>
       <div className="flex flex-1 flex-col gap-2">
         <div className="flex items-center justify-between">
           <strong>{mine.name}</strong>
@@ -199,7 +199,7 @@ function RankCard({ mine, rank }: { mine?: Colony; rank: number }) {
 }
 function Vital({ icon, v, l }: { icon: string; v: number | string; l: string }) {
   return (
-    <span className="flex items-center gap-1 rounded-full border border-white/10 bg-black/30 px-2.5 py-1">
+    <span className="flex items-center gap-1 rounded-full border border-brd bg-slot px-2.5 py-1">
       <span>{icon}</span><b className="font-mono">{v}</b><span className="text-ink-faint">{l}</span>
     </span>
   );

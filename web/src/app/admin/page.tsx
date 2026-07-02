@@ -59,9 +59,9 @@ export default function AdminPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <h1 className="hud-title text-lg">Admin</h1>
+      <h1 className="hud-title text-[13px]">Admin</h1>
       <div className="glass flex flex-col gap-3 p-4">
-        <h2 className="hud-title text-sm">Backend</h2>
+        <h2 className="hud-title text-[11px]">Backend</h2>
         <div className="flex gap-2">
           <span className={`rounded-full border px-3 py-1 text-xs font-bold ${tx ? "border-lime/40 text-lime" : "border-danger/40 text-danger"}`}>TXLine {tx ? "✓" : "✗"}</span>
           <span className={`rounded-full border px-3 py-1 text-xs font-bold ${or ? "border-lime/40 text-lime" : "border-danger/40 text-danger"}`}>OpenRouter {or ? "✓" : "✗"}</span>
@@ -70,14 +70,14 @@ export default function AdminPage() {
       </div>
 
       <div className="glass flex flex-col gap-3 p-4">
-        <h2 className="hud-title text-sm">Quick actions</h2>
+        <h2 className="hud-title text-[11px]">Quick actions</h2>
         <button className="btn btn-primary" onClick={demo}>▶ Run demo match</button>
         <button className="btn btn-ghost" onClick={runPrev}>Run latest completed fixture</button>
       </div>
 
       {msg && <p className="text-sm text-ink-soft">{msg}</p>}
       <div className="flex items-center justify-between">
-        <h2 className="hud-title text-sm">Recent fixtures</h2>
+        <h2 className="hud-title text-[11px]">Recent fixtures</h2>
         <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={loadRecent}>↻</button>
       </div>
       {fixtures.slice(0, 25).map((f) => {

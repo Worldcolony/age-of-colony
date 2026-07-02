@@ -59,9 +59,9 @@ export default function LobbyPage() {
       <div className="flex items-center justify-between">
         <div>
           <p className="eyebrow">TXLine · World Cup</p>
-          <h1 className="hud-title text-lg">Lobby</h1>
+          <h1 className="hud-title text-[13px]">Lobby</h1>
         </div>
-        <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-ink-soft">
+        <span className="rounded-full border border-brd px-3 py-1 text-xs text-ink-soft">
           {wallet.connected ? wallet.short : "guest"}
         </span>
       </div>
@@ -69,7 +69,7 @@ export default function LobbyPage() {
       {featured && <MatchCard f={featured.f} featured status={featured.status} onCreate={createRoom} />}
 
       <div className="glass flex flex-col gap-3 p-4">
-        <h2 className="hud-title text-sm">Join a room</h2>
+        <h2 className="hud-title text-[11px]">Join a room</h2>
         <div className="flex gap-2">
           <input
             className="input text-center font-mono uppercase tracking-[0.3em]"
@@ -85,7 +85,7 @@ export default function LobbyPage() {
       </div>
 
       <div className="flex items-center justify-between">
-        <h2 className="hud-title text-sm">Upcoming matches</h2>
+        <h2 className="hud-title text-[11px]">Upcoming matches</h2>
         <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={load}>
           ↻
         </button>
@@ -112,7 +112,7 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
   const p2 = teamName(f.participant2);
   const live = status === "current";
   return (
-    <div className={`glass flex flex-col gap-3 p-4 ${featured ? "!bg-white/[0.06]" : ""}`}>
+    <div className={`glass flex flex-col gap-3 p-4 ${featured ? "!bg-parch-strong" : ""}`}>
       {featured && (
         <div className="flex items-center justify-between">
           <p className="eyebrow">Featured</p>
@@ -121,7 +121,7 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
               <span className="live-dot" /> LIVE
             </span>
           ) : (
-            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-ink-faint">{status === "next" ? "Next" : "Upcoming"}</span>
+            <span className="rounded-full border border-brd px-3 py-1 text-xs text-ink-faint">{status === "next" ? "Next" : "Upcoming"}</span>
           )}
         </div>
       )}

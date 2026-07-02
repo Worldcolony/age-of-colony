@@ -53,7 +53,7 @@ export default function ResultsPage() {
           </div>
         )}
       </div>
-      <h1 className="hud-title text-lg">{finished ? "Final standings" : "Live rankings"}</h1>
+      <h1 className="hud-title text-[13px]">{finished ? "Final standings" : "Live rankings"}</h1>
 
       <div className="glass p-4">
         <div className="mb-3 flex items-end justify-center gap-2.5">
@@ -64,10 +64,10 @@ export default function ResultsPage() {
               <div key={pos} className="flex max-w-[110px] flex-1 flex-col items-center gap-1.5 text-center">
                 {c ? (
                   <>
-                    <div className={`grid h-11 w-11 place-items-center rounded-full border-2 ${pos === 0 ? "border-lime" : "border-white/25"} text-xl`}>{pos === 0 ? "👑" : "🐜"}</div>
+                    <div className={`grid h-11 w-11 place-items-center rounded-full border-2 ${pos === 0 ? "border-lime" : "border-brd"} text-xl`}>{pos === 0 ? "👑" : "🐜"}</div>
                     <div className="text-xs font-bold">{c.name}</div>
                     <div className="font-mono text-sm text-cyan">{c.score ?? 0}</div>
-                    <div className={`w-full rounded-t-lg border border-white/10 bg-white/[0.06] ${heights[pos]} ${pos === 0 ? "shadow-[0_0_18px_rgba(182,255,60,0.55)]" : ""}`} />
+                    <div className={`w-full rounded-t-lg border border-brd bg-parch-strong ${heights[pos]} ${pos === 0 ? "shadow-[3px_3px_0_rgba(74,58,30,0.25)]" : ""}`} />
                   </>
                 ) : (
                   <div />
@@ -82,7 +82,7 @@ export default function ResultsPage() {
             <span className="py-5 text-center text-sm text-ink-faint">No colonies yet.</span>
           ) : (
             cols.map((c, i) => (
-              <div key={c.colonyId} className={`glass flex items-center gap-3 px-3.5 py-3 ${c.colonyId === myColonyId ? "!border-lime shadow-[0_0_18px_rgba(182,255,60,0.55)]" : ""}`}>
+              <div key={c.colonyId} className={`glass flex items-center gap-3 px-3.5 py-3 ${c.colonyId === myColonyId ? "!border-lime shadow-[3px_3px_0_rgba(74,58,30,0.25)]" : ""}`}>
                 <span className="w-7 font-display text-[13px] text-ink-soft">#{i + 1}</span>
                 <span className="flex-1 font-bold">{c.name}</span>
                 <span className="font-mono text-xs text-ink-faint">{c.antsAlive ?? 0}🐜</span>

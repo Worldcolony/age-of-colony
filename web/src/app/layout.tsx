@@ -1,11 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Chakra_Petch, JetBrains_Mono } from "next/font/google";
+import { Pixelify_Sans, Press_Start_2P, Silkscreen } from "next/font/google";
 import "./globals.css";
 import WorldColonyBackdrop from "@/three/WorldColonyBackdrop";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
-const chakra = Chakra_Petch({ weight: ["500", "600", "700"], subsets: ["latin"], variable: "--font-chakra" });
-const jetbrains = JetBrains_Mono({ weight: ["400", "500", "700"], subsets: ["latin"], variable: "--font-jetbrains" });
+const pixelify = Pixelify_Sans({ weight: ["400", "500", "600", "700"], subsets: ["latin"], variable: "--font-pixelify" });
+const pressStart = Press_Start_2P({ weight: "400", subsets: ["latin"], variable: "--font-press" });
+const silkscreen = Silkscreen({ weight: ["400", "700"], subsets: ["latin"], variable: "--font-silk" });
 
 export const metadata: Metadata = {
   title: "Age of Colony",
@@ -22,7 +22,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${chakra.variable} ${jetbrains.variable}`}>
+    <html lang="en" className={`${pixelify.variable} ${pressStart.variable} ${silkscreen.variable}`}>
       <body>
         <WorldColonyBackdrop />
         <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-24 pt-4">

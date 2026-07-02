@@ -39,7 +39,7 @@ export default function SetupPage() {
   if (!game?.gameId) {
     return (
       <div className="flex flex-col gap-3">
-        <h1 className="hud-title text-lg">My Colony</h1>
+        <h1 className="hud-title text-[13px]">My Colony</h1>
         <div className="glass p-4 text-center text-sm text-ink-faint">Pick a match and create a room first.</div>
         <button className="btn btn-primary" onClick={() => router.push("/lobby")}>Go to lobby</button>
       </div>
@@ -71,7 +71,7 @@ export default function SetupPage() {
       <button className="text-sm font-semibold text-ink-soft" onClick={() => router.back()}>← Back</button>
       <div>
         <p className="eyebrow">Pre-match</p>
-        <h1 className="hud-title text-lg">Tune your colony</h1>
+        <h1 className="hud-title text-[13px]">Tune your colony</h1>
       </div>
 
       <div className="glass grid place-items-center gap-2 p-4">

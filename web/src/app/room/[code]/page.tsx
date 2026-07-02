@@ -60,7 +60,7 @@ export default function RoomPage() {
       </div>
 
       <div className="glass flex flex-col gap-3 p-4">
-        <h2 className="hud-title text-sm">Room code</h2>
+        <h2 className="hud-title text-[11px]">Room code</h2>
         <div className="flex items-center justify-between">
           <strong className="font-mono text-xl tracking-[0.15em]">{code}</strong>
           <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={copy}>Copy · Share</button>
@@ -69,7 +69,7 @@ export default function RoomPage() {
       </div>
 
       <div className="glass flex flex-col gap-3 p-4">
-        <h2 className="hud-title text-sm">Join as player</h2>
+        <h2 className="hud-title text-[11px]">Join as player</h2>
         <div className="flex gap-2">
           <input className="input" maxLength={32} placeholder={wallet.short || "Your name"} value={name} onChange={(e) => setName(e.target.value)} />
           <button className="btn btn-primary !w-auto shrink-0 px-5" onClick={join}>Join</button>
