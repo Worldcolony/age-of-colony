@@ -49,12 +49,12 @@ body[data-workspace-role="user"] #manualFixture,
 body[data-workspace-role="user"] .panel-detail,
 body[data-workspace-role="user"] .panel-fixtures > .panel-heading,
 body[data-workspace-role="user"] #participateMatch,
-body[data-workspace-role="user"] #startGameLive,
 body[data-workspace-role="user"] #startGameReplay,
 body[data-workspace-role="user"] #setupSteps,
-body[data-workspace-role="user"] #colonyForm,
-body[data-workspace-role="user"] .simulation-panel,
-body[data-workspace-role="user"] .game-grid {
+body[data-workspace-role="user"][data-game-status="created"] .simulation-panel,
+body[data-workspace-role="user"][data-game-status="created"] .game-grid,
+body[data-workspace-role="user"]:not([data-game-status]) .simulation-panel,
+body[data-workspace-role="user"]:not([data-game-status]) .game-grid {
   display: none;
 }
 
@@ -101,7 +101,9 @@ body[data-workspace-role="user"] .button-row {
 }
 
 body[data-workspace-role="user"] #createGame,
-body[data-workspace-role="user"] #joinRoom {
+body[data-workspace-role="user"] #joinRoom,
+body[data-workspace-role="user"] #startGameLive,
+body[data-workspace-role="user"] #addColony {
   min-height: 2.7rem;
   padding-inline: 1rem;
   font-weight: 850;
@@ -120,6 +122,21 @@ body[data-workspace-role="user"] .room-strip {
 
 body[data-workspace-role="user"] .join-form {
   grid-template-columns: minmax(7rem, 0.45fr) minmax(0, 1fr) auto;
+}
+
+body[data-workspace-role="user"] .colony-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0.85rem 0 0;
+}
+
+body[data-workspace-role="user"] .colony-form button {
+  grid-column: 1 / -1;
+}
+
+body[data-workspace-role="user"][data-game-status="waiting_kickoff"] .colony-form,
+body[data-workspace-role="user"][data-game-status="running_live"] .colony-form,
+body[data-workspace-role="user"][data-game-status="finished"] .colony-form {
+  display: none;
 }
 
 body[data-workspace-role="user"] #roomCode,
@@ -440,8 +457,10 @@ p {
 }
 
 .player-pill {
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
+  gap: 0.35rem;
   min-height: 1.8rem;
   border: 1px solid var(--role-border);
   border-radius: 999px;
@@ -450,6 +469,33 @@ p {
   color: var(--brand-dark);
   font-size: 0.78rem;
   font-weight: 850;
+}
+
+.player-pill.ready {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #067647;
+}
+
+.player-pill.pending {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #93370d;
+}
+
+.player-pill .player-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.player-tag {
+  border-radius: 999px;
+  padding: 0.08rem 0.35rem;
+  background: rgba(255, 255, 255, 0.74);
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .live-match-card {
@@ -756,7 +802,8 @@ tbody tr.selected {
 }
 
 .sim-status.running_replay,
-.sim-status.running_live {
+.sim-status.running_live,
+.sim-status.waiting_kickoff {
   background: #dcfae6;
   color: #067647;
 }

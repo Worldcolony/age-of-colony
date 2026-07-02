@@ -178,6 +178,8 @@ class ColonyState:
     favorite_context: str
     info_need: str
     seed: int
+    player_id: str | None = None
+    player_anonymous_id: str | None = None
     ants: list[AntState] = field(default_factory=list)
     food: int = 0
     larvae: int = 0
@@ -212,7 +214,7 @@ class ColonyState:
             "lossPenalty": round(-mortality_rate * 70, 2),
         }
         score = round(sum(score_breakdown.values()), 2)
-        return {
+        state = {
             "colonyId": self.colony_id,
             "name": self.name,
             "size": self.size,
@@ -238,6 +240,11 @@ class ColonyState:
             "infoPurchases": self.memory.info_purchases,
             "archetypes": dict(Counter(ant.archetype for ant in self.ants)),
         }
+        if self.player_id:
+            state["playerId"] = self.player_id
+        if self.player_anonymous_id:
+            state["playerAnonymousId"] = self.player_anonymous_id
+        return state
 
 
 @dataclass(frozen=True)
@@ -395,6 +402,7 @@ class GameRoom:
     def public_state(self) -> dict[str, Any]:
         colonies = [colony.public_state(self.event_index) for colony in self.colonies.values()]
         colonies.sort(key=lambda item: item["score"], reverse=True)
+        player_colonies = self._player_colonies()
         return {
             "gameId": self.game_id,
             "roomCode": self.room_code,
@@ -413,7 +421,7 @@ class GameRoom:
             "status": self.status,
             "mode": self.mode,
             "eventIndex": self.event_index,
-            "players": [player.public_state() for player in self.players],
+            "players": [self._public_player_state(player, player_colonies) for player in self.players],
             "match": {
                 "score": self.match_state.score if self.match_state else None,
                 "possessionLabel": self.match_state.possession_label if self.match_state else None,
@@ -424,13 +432,49 @@ class GameRoom:
             "logCount": len(self.log),
         }
 
+    def _player_colonies(self) -> dict[str, ColonyState]:
+        linked: dict[str, ColonyState] = {}
+        for colony in self.colonies.values():
+            if colony.player_id:
+                linked[f"player:{colony.player_id}"] = colony
+            if colony.player_anonymous_id:
+                linked[f"anonymous:{colony.player_anonymous_id}"] = colony
+        return linked
+
+    def _public_player_state(self, player: PlayerState, player_colonies: dict[str, ColonyState]) -> dict[str, Any]:
+        state = player.public_state()
+        if player.anonymous_id and player.anonymous_id == self.owner_anonymous_id:
+            state["isHost"] = True
+        elif not self.owner_anonymous_id and player.name == self.owner_name:
+            state["isHost"] = True
+        colony = player_colonies.get(f"player:{player.player_id}")
+        if not colony and player.anonymous_id:
+            colony = player_colonies.get(f"anonymous:{player.anonymous_id}")
+        if colony:
+            state["ready"] = True
+            state["colonyId"] = colony.colony_id
+            state["colonyName"] = colony.name
+        return state
+
 
 class GameHarness:
     def __init__(self, room: GameRoom, decision_agent: ColonyDecisionAgent | None = None) -> None:
         self.room = room
         self.decision_agent = decision_agent
 
-    def add_colony(self, name: str, size: int, style: str, favorite_context: str, info_need: str) -> ColonyState:
+    def add_colony(
+        self,
+        name: str,
+        size: int,
+        style: str,
+        favorite_context: str,
+        info_need: str,
+        *,
+        anonymous_id: str | None = None,
+        player_id: str | None = None,
+    ) -> ColonyState:
+        if self.room.status != "created":
+            raise ValueError("room is locked; colonies can no longer be changed")
         if size not in VALID_SIZES:
             raise ValueError("size must be one of 10, 20 or 50")
         style = normalize_style(style)
@@ -443,6 +487,20 @@ class GameHarness:
         if info_need not in VALID_INFO_NEEDS:
             raise ValueError("info_need must be low, medium or high")
 
+        clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
+        clean_player_id = (player_id or "").strip()[:80] or None
+        player = self._find_player(clean_player_id, clean_anonymous_id)
+        if clean_anonymous_id and not player:
+            raise ValueError("join the room before creating a colony")
+        if player:
+            for existing in self.room.colonies.values():
+                if existing.player_id and existing.player_id == player.player_id:
+                    raise ValueError("this player already has a colony")
+                if player.anonymous_id and existing.player_anonymous_id == player.anonymous_id:
+                    raise ValueError("this player already has a colony")
+            clean_player_id = player.player_id
+            clean_anonymous_id = player.anonymous_id
+
         colony_id = f"col_{uuid.uuid4().hex[:10]}"
         seed = stable_seed(self.room.seed, self.room.game_id, colony_id, name)
         colony = ColonyState(
@@ -453,6 +511,8 @@ class GameHarness:
             favorite_context=favorite_context,
             info_need=info_need,
             seed=seed,
+            player_id=clean_player_id,
+            player_anonymous_id=clean_anonymous_id,
             food=size,
         )
         colony.ants = generate_ants(colony)
@@ -465,6 +525,8 @@ class GameHarness:
         return colony
 
     def join_player(self, name: str, anonymous_id: str | None = None) -> PlayerState:
+        if self.room.status != "created":
+            raise ValueError("room is locked; new players can no longer join")
         clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
         clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
         if clean_anonymous_id:
@@ -487,6 +549,14 @@ class GameHarness:
         )
         return player
 
+    def _find_player(self, player_id: str | None = None, anonymous_id: str | None = None) -> PlayerState | None:
+        for player in self.room.players:
+            if player_id and player.player_id == player_id:
+                return player
+            if anonymous_id and player.anonymous_id == anonymous_id:
+                return player
+        return None
+
     def update_colony_strategy(
         self,
         colony_id: str,
@@ -495,6 +565,8 @@ class GameHarness:
         favorite_context: str | None = None,
         info_need: str | None = None,
     ) -> ColonyState:
+        if self.room.status != "created":
+            raise ValueError("room is locked; strategies can no longer be changed")
         colony = self.room.colonies.get(colony_id)
         if not colony:
             raise ValueError("colony not found")
@@ -1034,6 +1106,7 @@ class GameManager:
         self.rooms: dict[str, GameRoom] = {}
         self.room_codes: dict[str, str] = {}
         self.live_tasks: dict[str, Any] = {}
+        self.kickoff_tasks: dict[str, Any] = {}
         self.replay_tasks: dict[str, Any] = {}
         self.decision_agent = decision_agent
 

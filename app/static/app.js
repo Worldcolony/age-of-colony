@@ -13,6 +13,7 @@ const state = {
     events: [],
     colonyCount: 0,
     players: [],
+    colonies: [],
     coloniesById: {},
     strategyDrafts: {},
     status: null,
@@ -112,6 +113,7 @@ function bindEvents() {
     els.roomCodeInput.value = cleanRoomCode(els.roomCodeInput.value);
     updateGameActions();
   });
+  els.playerName.addEventListener("input", updateGameActions);
   els.fixtureDays.addEventListener("change", loadFixtures);
   els.competitionId.addEventListener("change", loadFixtures);
   els.fixtureDate.addEventListener("change", loadFixtures);
@@ -151,6 +153,7 @@ function applyWorkspaceRole(role, options = {}) {
   if (!isAdmin && !els.fixtureDate.value) els.fixtureDate.value = today;
   els.createGame.textContent = isAdmin ? "Create replay room" : "Create room";
   els.joinRoom.textContent = isAdmin ? "Add player" : "Join";
+  els.startGameLive.textContent = "Start game";
   els.startGameLive.hidden = isAdmin;
   els.startGameReplay.hidden = !isAdmin;
 
@@ -373,25 +376,35 @@ async function createGame() {
     els.gameStatus.textContent = state.role === "admin" ? "Select a replay fixture before creating a room." : "Select a live fixture before creating a room.";
     return null;
   }
+  const creatorName = currentPlayerName();
+  if (state.role === "user" && !creatorName) {
+    els.gameStatus.textContent = "Enter your player name before creating a room.";
+    return null;
+  }
 
   closeGameStream();
   els.gameStatus.textContent = state.role === "admin" ? "Creating replay room..." : "Creating live room...";
   try {
-    const game = await postJson("/api/games", {
+    if (creatorName) persistPlayerName(creatorName);
+    const payload = {
       fixtureId: state.selected.fixtureId,
       participant1: state.selected.participant1,
       participant2: state.selected.participant2,
       competition: state.selected.competition,
       startTime: state.selected.startTime,
       startTimeIso: state.selected.startTimeIso,
-      anonymousId: state.identity.anonymousId,
-      creatorName: currentPlayerName() || null,
-    });
+    };
+    if (state.role === "user") {
+      payload.anonymousId = state.identity.anonymousId;
+      payload.creatorName = creatorName;
+    }
+    const game = await postJson("/api/games", payload);
     state.game.id = game.gameId;
     state.game.roomCode = game.roomCode || null;
     state.game.events = [];
     state.game.colonyCount = 0;
     state.game.players = [];
+    state.game.colonies = [];
     state.game.coloniesById = {};
     state.game.strategyDrafts = {};
     state.game.status = game.status;
@@ -468,6 +481,14 @@ async function joinRoom() {
 
 async function addColony() {
   if (!state.game.id) return;
+  if (state.role === "user" && !currentPlayer()) {
+    els.gameStatus.textContent = "Join the room before creating your colony.";
+    return;
+  }
+  if (state.role === "user" && currentPlayerHasColony()) {
+    els.gameStatus.textContent = "You already have a colony in this room.";
+    return;
+  }
   const payload = {
     name: els.colonyName.value.trim() || `Colony ${Date.now().toString().slice(-4)}`,
     size: Number(els.colonySize.value),
@@ -475,6 +496,7 @@ async function addColony() {
     favoriteContext: els.colonyFavorite.value,
     infoNeed: els.colonyInfoNeed.value,
   };
+  if (state.role === "user") payload.anonymousId = state.identity.anonymousId;
   els.gameStatus.textContent = "Adding colony...";
   try {
     const game = await postJson(`/api/games/${state.game.id}/colonies`, payload);
@@ -535,20 +557,29 @@ async function startGameLive() {
     els.gameStatus.textContent = "Live games are available in user mode.";
     return;
   }
-  if (state.game.colonyCount < 1) {
-    els.gameStatus.textContent = "Add at least one colony before starting the live match.";
+  if (!currentPlayer()?.isHost) {
+    els.gameStatus.textContent = "Only the room host can start the game.";
     updateGameActions();
     return;
   }
-  els.gameStatus.textContent = "Connecting live TXLine stream...";
+  if (!allPlayersReady()) {
+    els.gameStatus.textContent = "Every player needs a colony before start.";
+    updateGameActions();
+    return;
+  }
+  els.gameStatus.textContent = "Locking room...";
   try {
     const game = await postJson(`/api/games/${state.game.id}/start`, {
       mode: "live",
       source: "updates",
+      anonymousId: state.identity.anonymousId,
     });
     renderGameState(game);
     openGameStream();
-    els.gameStatus.textContent = "Live room connected. Colony decisions will appear with TXLine events.";
+    els.gameStatus.textContent =
+      game.status === "waiting_kickoff"
+        ? "Room locked. Colony decisions begin at kickoff."
+        : "Live room connected. Colony decisions will appear with TXLine events.";
   } catch (error) {
     els.gameStatus.textContent = error.message;
   }
@@ -596,6 +627,7 @@ function resetGameUi(message = null) {
   state.game.events = [];
   state.game.colonyCount = 0;
   state.game.players = [];
+  state.game.colonies = [];
   state.game.coloniesById = {};
   state.game.strategyDrafts = {};
   state.game.status = null;
@@ -609,6 +641,7 @@ function resetGameUi(message = null) {
   els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
   if (state.role !== "admin") els.roomCodeInput.value = "";
+  delete document.body.dataset.gameStatus;
   renderSimulationSummary(null);
   renderRoomSetup(null);
   updateGameActions();
@@ -621,11 +654,13 @@ function renderGameState(game) {
   state.game.roomCode = game.roomCode || state.game.roomCode;
   state.game.colonyCount = colonies.length;
   state.game.players = game.players || state.game.players || [];
+  state.game.colonies = colonies;
   state.game.coloniesById = colonies.reduce((map, colony) => {
     if (colony.colonyId) map[colony.colonyId] = colony.name;
     return map;
   }, {});
   state.game.status = game.status || null;
+  document.body.dataset.gameStatus = state.game.status || "created";
   state.game.activeOpportunities = game.activeOpportunities || [];
   state.game.agentUsage = game.agentUsage || state.game.agentUsage;
   updateScore(game.match?.score);
@@ -634,9 +669,7 @@ function renderGameState(game) {
   renderSimulationSummary(game);
   els.gameStatus.textContent =
     state.role === "user"
-      ? game.roomCode || state.game.roomCode
-        ? `Room ${game.roomCode || state.game.roomCode} ready. Share this code.`
-        : "Create a room for this match."
+      ? userRoomStatusText(game)
       : [
           game.gameId ? `Room ${game.gameId}` : null,
           game.status ? `status ${game.status}` : null,
@@ -655,7 +688,7 @@ function renderGameState(game) {
       const card = document.createElement("article");
       card.className = "colony-card";
       const scoreTitle = formatScoreBreakdown(colony.scoreBreakdown);
-      const strategyLocked = state.game.status === "finished";
+      const strategyLocked = isRoomLockedStatus(state.game.status);
       const strategyDraft = state.game.strategyDrafts[colony.colonyId] || {};
       const selectedStyle = strategyDraft.style || colony.style;
       const selectedFavorite = strategyDraft.favoriteContext || colony.favoriteContext;
@@ -793,29 +826,81 @@ function readStrategyControls(colonyId) {
   };
 }
 
+function currentPlayer(players = state.game.players) {
+  return (players || []).find((player) => player.anonymousId && player.anonymousId === state.identity.anonymousId) || null;
+}
+
+function playerIsReady(player) {
+  if (!player) return false;
+  if (player.ready || player.colonyId) return true;
+  return (state.game.colonies || []).some((colony) => {
+    if (colony.playerId && colony.playerId === player.playerId) return true;
+    return colony.playerAnonymousId && player.anonymousId && colony.playerAnonymousId === player.anonymousId;
+  });
+}
+
+function currentPlayerHasColony() {
+  return playerIsReady(currentPlayer());
+}
+
+function allPlayersReady(players = state.game.players) {
+  return Boolean(players?.length) && players.every(playerIsReady);
+}
+
+function isRoomLockedStatus(status) {
+  return ["waiting_kickoff", "running_replay", "running_live", "finished"].includes(status);
+}
+
+function userRoomStatusText(game = null) {
+  const status = game?.status || state.game.status || "created";
+  const roomCode = game?.roomCode || state.game.roomCode || "";
+  if (status === "waiting_kickoff") return "Room locked. Waiting for kickoff.";
+  if (status === "running_live") return "Live match running. Colony decisions are active.";
+  if (status === "finished") return "Match finished. Final colony scores are available.";
+  if (!roomCode) return "Create a private room for this match.";
+
+  const players = game?.players || state.game.players || [];
+  const me = currentPlayer(players);
+  if (!me) return `Room ${roomCode} ready. Join with your name.`;
+  if (!playerIsReady(me)) return `Room ${roomCode} ready. Create your colony.`;
+  if (me.isHost && allPlayersReady(players)) return "Everyone is ready. Start game to lock the room.";
+  if (me.isHost) return "You are ready. Waiting for every player to create a colony.";
+  return "You are ready. Waiting for the host to start.";
+}
+
 function renderRoomSetup(game = null) {
   const players = game?.players || state.game.players || [];
   const status = game?.status || state.game.status || "created";
   const hasRoom = Boolean(state.game.id);
   const hasPlayers = players.length > 0;
   const hasColonies = state.game.colonyCount > 0;
-  const liveReady = hasRoom && hasColonies && !["running_replay", "running_live", "finished"].includes(status);
+  const locked = isRoomLockedStatus(status);
+  const liveReady = hasRoom && hasColonies && !locked;
+  const me = currentPlayer(players);
+  const meReady = playerIsReady(me);
+  const readyCount = players.filter(playerIsReady).length;
   const roomCode = game?.roomCode || state.game.roomCode || "";
   els.roomCode.textContent = roomCode || "No code yet";
   if (roomCode && cleanRoomCode(els.roomCodeInput.value) !== roomCode) {
     els.roomCodeInput.value = roomCode;
   }
   renderRoomCountdown(game);
-  els.playerCount.textContent = `${players.length} joined`;
+  els.playerCount.textContent = `${players.length} joined · ${readyCount} ready`;
   const hasJoinCode = cleanRoomCode(els.roomCodeInput.value || roomCode).length === 6;
-  els.joinRoom.disabled = state.role === "user" ? !hasJoinCode || status === "finished" : !hasRoom || status === "finished";
-  els.playerName.disabled = state.role === "admin" ? !hasRoom || status === "finished" : status === "finished";
+  els.joinRoom.textContent = state.role === "admin" ? "Add player" : me ? "Joined" : "Join";
+  els.joinRoom.disabled = state.role === "user" ? Boolean(me) || !hasJoinCode || locked : !hasRoom || locked;
+  els.playerName.disabled = state.role === "admin" ? !hasRoom || locked : locked || Boolean(me);
   els.playerList.replaceChildren(
     ...(hasPlayers
       ? players.map((player) => {
           const item = document.createElement("span");
-          item.className = "player-pill";
-          item.textContent = player.name || "Player";
+          const ready = playerIsReady(player);
+          item.className = `player-pill ${ready ? "ready" : "pending"}`;
+          const tags = [
+            player.isHost ? `<span class="player-tag">Host</span>` : "",
+            ready ? `<span class="player-tag">Ready</span>` : `<span class="player-tag">Needs colony</span>`,
+          ].join("");
+          item.innerHTML = `<span>${escapeHtml(player.name || "Player")}</span><span class="player-tags">${tags}</span>`;
           return item;
         })
       : [
@@ -837,9 +922,10 @@ function renderRoomSetup(game = null) {
           ["Replay", liveReady || ["running_replay", "running_live", "finished"].includes(status)],
         ]
       : [
-          ["Upcoming", Boolean(state.selected?.fixtureId)],
+          ["Match", Boolean(state.selected?.fixtureId)],
           ["Room", hasRoom],
-          ["Join", hasPlayers],
+          ["Colony", meReady],
+          ["Kickoff", ["waiting_kickoff", "running_live", "finished"].includes(status)],
         ];
   els.setupSteps.replaceChildren(
     ...steps.map(([label, done], index) => {
@@ -894,21 +980,27 @@ function updateGameActions() {
   const hasRoom = Boolean(state.game.id);
   const status = state.game.status || "created";
   const running = ["running_replay", "running_live"].includes(status);
-  const locked = running || status === "finished";
+  const locked = isRoomLockedStatus(status);
   const hasColony = state.game.colonyCount > 0;
   const hasJoinCode = cleanRoomCode(els.roomCodeInput.value || state.game.roomCode || "").length === 6;
+  const me = currentPlayer();
+  const meReady = playerIsReady(me);
+  const roomReady = allPlayersReady();
   els.createGame.disabled =
     state.role === "user"
-      ? !state.selected?.fixtureId || status === "finished"
+      ? !state.selected?.fixtureId || hasRoom || !currentPlayerName()
       : !state.selected?.fixtureId || (hasRoom && !["finished", "error", "stopped"].includes(status));
   const firstUpcoming = state.fixtures[0] || null;
   const firstSelected = firstUpcoming?.fixtureId && state.selected?.fixtureId === firstUpcoming.fixtureId;
   els.participateMatch.disabled = !firstUpcoming?.fixtureId || firstSelected || (hasRoom && !["finished", "error", "stopped"].includes(status));
   els.participateMatch.textContent = firstSelected ? "Match selected" : "Select match";
-  els.addColony.disabled = !hasRoom || locked;
-  els.joinRoom.disabled = state.role === "user" ? !hasJoinCode || status === "finished" : !hasRoom || status === "finished";
-  els.startGameLive.disabled = isAdmin || !hasRoom || locked || !hasColony;
-  els.startGameReplay.disabled = !isAdmin || !hasRoom || locked || !hasColony;
+  els.addColony.disabled = state.role === "user" ? !hasRoom || !me || meReady || locked : !hasRoom || locked;
+  els.addColony.textContent = state.role === "user" && meReady ? "Colony ready" : "Add colony";
+  els.joinRoom.textContent = state.role === "admin" ? "Add player" : me ? "Joined" : "Join";
+  els.joinRoom.disabled = state.role === "user" ? Boolean(me) || !hasJoinCode || locked : !hasRoom || locked;
+  els.startGameLive.textContent = !hasRoom || me?.isHost ? "Start game" : "Waiting for host";
+  els.startGameLive.disabled = isAdmin || !hasRoom || locked || !roomReady || !me?.isHost;
+  els.startGameReplay.disabled = !isAdmin || !hasRoom || running || status === "finished" || !hasColony;
 }
 
 function appendGameEvent(event) {
@@ -1171,6 +1263,7 @@ function renderSimulationSummary(game = null) {
   const counts = countGameEvents(events);
   const statusLabels = {
     created: "Room ready",
+    waiting_kickoff: "Waiting for kickoff",
     running_replay: "Simulation running",
     running_live: "Live running",
     finished: "Simulation finished",

@@ -236,7 +236,10 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(len(public["roomCode"]), 6)
         self.assertTrue(public["roomCode"].isdigit())
         self.assertEqual(public["owner"], {"anonymousId": "anon_browser_1", "name": "Tanguy"})
-        self.assertEqual(public["players"], [{"playerId": player.player_id, "name": "Tanguy", "anonymousId": "anon_browser_1"}])
+        self.assertEqual(
+            public["players"],
+            [{"playerId": player.player_id, "name": "Tanguy", "anonymousId": "anon_browser_1", "isHost": True}],
+        )
 
     def test_rooms_get_private_six_digit_codes(self):
         manager = GameManager()
@@ -1395,6 +1398,110 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(joined_again.status_code, 200)
         self.assertEqual(len(joined_again.json()["players"]), 1)
         self.assertEqual(joined_again.json()["players"][0]["name"], "Alice 2")
+
+    def test_creator_auto_joins_and_player_creates_one_colony(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 919191,
+                "participant1": "France",
+                "participant2": "Spain",
+                "creatorName": "Host Alice",
+                "anonymousId": "anon_host_alice",
+            },
+        ).json()
+
+        self.assertEqual(len(created["players"]), 1)
+        self.assertEqual(created["players"][0]["name"], "Host Alice")
+        self.assertTrue(created["players"][0]["isHost"])
+
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Alice Nest",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_host_alice",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+        game = colony_response.json()
+        self.assertTrue(game["players"][0]["ready"])
+        self.assertEqual(game["players"][0]["colonyName"], "Alice Nest")
+        self.assertEqual(game["colonies"][0]["playerAnonymousId"], "anon_host_alice")
+
+        duplicate = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Second Nest",
+                "size": 10,
+                "style": "cautious",
+                "favoriteContext": "penalties",
+                "infoNeed": "high",
+                "anonymousId": "anon_host_alice",
+            },
+        )
+        self.assertEqual(duplicate.status_code, 422)
+        self.assertIn("already has a colony", duplicate.json()["detail"])
+
+    def test_live_start_waits_for_future_kickoff_and_locks_lobby(self):
+        client = TestClient(app)
+        kickoff = datetime.now(timezone.utc) + timedelta(minutes=15)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 929292,
+                "participant1": "USA",
+                "participant2": "Japan",
+                "startTimeIso": kickoff.isoformat(),
+                "creatorName": "Host Alice",
+                "anonymousId": "anon_wait_host",
+            },
+        ).json()
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Kickoff Nest",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_wait_host",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+
+        with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")), patch("app.main._schedule_kickoff_start") as schedule:
+            started = client.post(
+                f"/api/games/{created['gameId']}/start",
+                json={"mode": "live", "source": "updates", "anonymousId": "anon_wait_host"},
+            )
+
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()["status"], "waiting_kickoff")
+        schedule.assert_called_once()
+
+        joined_after_lock = client.post(
+            f"/api/rooms/{created['roomCode']}/players",
+            json={"name": "Late Bob", "anonymousId": "anon_late_bob"},
+        )
+        self.assertEqual(joined_after_lock.status_code, 409)
+
+        colony_after_lock = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Late Nest",
+                "size": 10,
+                "style": "cautious",
+                "favoriteContext": "penalties",
+                "infoNeed": "high",
+                "anonymousId": "anon_wait_host",
+            },
+        )
+        self.assertEqual(colony_after_lock.status_code, 422)
 
     def test_demo_run_requires_deepseek_agent(self):
         client = TestClient(app)

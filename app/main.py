@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
-from .game.harness import GameRoom, PlayerState, normalize_room_code
+from .game.harness import ColonyState, GameRoom, PlayerState, generate_ants, normalize_room_code
 from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .queen_auth import require_wallet_owner
 from .txline import (
@@ -82,6 +82,7 @@ class CreateColonyRequest(BaseModel):
     style: str
     favoriteContext: str
     infoNeed: str
+    anonymousId: str | None = None
 
 
 class JoinRoomRequest(BaseModel):
@@ -104,6 +105,7 @@ class UpdateColonyStrategyRequest(BaseModel):
 class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
+    anonymousId: str | None = None
 
 
 class DemoRunRequest(BaseModel):
@@ -198,6 +200,8 @@ async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
         owner_anonymous_id=payload.anonymousId,
         owner_name=payload.creatorName,
     )
+    if payload.creatorName:
+        game_manager.harness(room.game_id).join_player(payload.creatorName or "Host", anonymous_id=payload.anonymousId)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -212,6 +216,7 @@ async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str,
             style=payload.style,
             favorite_context=payload.favoriteContext,
             info_need=payload.infoNeed,
+            anonymous_id=payload.anonymousId,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -222,7 +227,10 @@ async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str,
 @app.post("/api/games/{game_id}/players")
 async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    game_manager.harness(game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+    try:
+        game_manager.harness(game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -230,13 +238,17 @@ async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, An
 @app.get("/api/rooms/{room_code}")
 async def room_state_by_code(room_code: str) -> dict[str, Any]:
     room = await _get_room_by_code_or_restore_404(room_code)
+    await _ensure_waiting_room_progress(room)
     return room.public_state()
 
 
 @app.post("/api/rooms/{room_code}/players")
 async def join_room_by_code(room_code: str, payload: JoinRoomRequest) -> dict[str, Any]:
     room = await _get_room_by_code_or_restore_404(room_code)
-    game_manager.harness(room.game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+    try:
+        game_manager.harness(room.game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -326,17 +338,119 @@ async def start_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="Add at least one colony before starting the match.")
     if room.status in {"running_replay", "running_live"}:
         raise HTTPException(status_code=409, detail="The game is already running.")
+    if room.status == "waiting_kickoff":
+        await _ensure_waiting_room_progress(room)
+        return room.public_state()
 
     room.mode = mode
     if mode == "replay":
         return await _start_replay_room(room, payload)
 
-    if game_id not in game_manager.live_tasks:
-        game_manager.live_tasks[game_id] = asyncio.create_task(_run_live_game(game_id))
+    _ensure_live_host(room, payload.anonymousId)
+    _ensure_live_room_ready(room)
+    kickoff_at = _room_kickoff_datetime(room)
+    if kickoff_at and kickoff_at > datetime.now(timezone.utc):
+        room.status = "waiting_kickoff"
+        room.add_log(
+            "game_locked",
+            "Room locked. Live game will start at kickoff.",
+            {"mode": "live", "kickoffAt": kickoff_at.isoformat()},
+        )
+        _schedule_kickoff_start(room)
+        await _sync_room_to_supabase_async(room)
+        return room.public_state()
+
+    await _start_live_room_now(room)
+    return room.public_state()
+
+
+def _ensure_live_host(room: GameRoom, anonymous_id: str | None) -> None:
+    if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
+        raise HTTPException(status_code=403, detail="Only the room host can start the game.")
+
+
+def _ensure_live_room_ready(room: GameRoom) -> None:
+    if not room.players:
+        return
+    ready_player_ids = {colony.player_id for colony in room.colonies.values() if colony.player_id}
+    ready_anonymous_ids = {colony.player_anonymous_id for colony in room.colonies.values() if colony.player_anonymous_id}
+    missing = [
+        player.name
+        for player in room.players
+        if player.player_id not in ready_player_ids and (not player.anonymous_id or player.anonymous_id not in ready_anonymous_ids)
+    ]
+    if missing:
+        names = ", ".join(missing[:3])
+        raise HTTPException(status_code=422, detail=f"Every player needs a colony before start. Missing: {names}.")
+
+
+def _room_kickoff_datetime(room: GameRoom) -> datetime | None:
+    return _parse_kickoff_datetime(room.start_time_iso) or _parse_kickoff_datetime(room.start_time)
+
+
+def _parse_kickoff_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 10_000_000_000:
+            timestamp /= 1000
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return _parse_kickoff_datetime(int(text))
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _schedule_kickoff_start(room: GameRoom) -> None:
+    task = getattr(game_manager, "kickoff_tasks", {}).get(room.game_id)
+    if task and not task.done():
+        return
+    game_manager.kickoff_tasks[room.game_id] = asyncio.create_task(_wait_for_kickoff_and_start(room.game_id))
+
+
+async def _wait_for_kickoff_and_start(game_id: str) -> None:
+    room = game_manager.get_room(game_id)
+    if not room:
+        return
+    kickoff_at = _room_kickoff_datetime(room)
+    if kickoff_at:
+        delay = max(0.0, (kickoff_at - datetime.now(timezone.utc)).total_seconds())
+        if delay:
+            await asyncio.sleep(delay)
+    room = game_manager.get_room(game_id)
+    if not room or room.status != "waiting_kickoff":
+        return
+    try:
+        await _start_live_room_now(room)
+    finally:
+        game_manager.kickoff_tasks.pop(game_id, None)
+
+
+async def _ensure_waiting_room_progress(room: GameRoom) -> None:
+    if room.status != "waiting_kickoff":
+        return
+    kickoff_at = _room_kickoff_datetime(room)
+    if kickoff_at and kickoff_at <= datetime.now(timezone.utc):
+        await _start_live_room_now(room)
+        return
+    _schedule_kickoff_start(room)
+
+
+async def _start_live_room_now(room: GameRoom) -> None:
+    if room.game_id not in game_manager.live_tasks:
+        game_manager.live_tasks[room.game_id] = asyncio.create_task(_run_live_game(room.game_id))
     room.status = "running_live"
     room.add_log("game_started", "Live game connected to the TXLine stream.", {"mode": "live"})
     await _sync_room_to_supabase_async(room)
-    return room.public_state()
 
 
 @app.post("/api/games/{game_id}/rerun")
@@ -511,6 +625,7 @@ async def admin_games(limit: int = Query(default=50, ge=1, le=200)) -> dict[str,
 async def game_state(game_id: str) -> dict[str, Any]:
     room = game_manager.get_room(game_id)
     if room:
+        await _ensure_waiting_room_progress(room)
         return room.public_state()
     replay = await _stored_replay_or_none(game_id)
     if replay:
@@ -1026,6 +1141,29 @@ def _restore_room_from_stored_row(row: dict[str, Any]):
                 anonymous_id=str(player.get("anonymousId"))[:80] if player.get("anonymousId") else None,
             )
         )
+    for colony_state in public_state.get("colonies") or []:
+        if not isinstance(colony_state, dict):
+            continue
+        try:
+            size = int(colony_state.get("size") or 20)
+        except (TypeError, ValueError):
+            size = 20
+        size = size if size in {10, 20, 50} else 20
+        colony_id = str(colony_state.get("colonyId") or f"col_{len(room.colonies) + 1}")
+        colony = ColonyState(
+            colony_id=colony_id,
+            name=str(colony_state.get("name") or f"Colony {len(room.colonies) + 1}")[:40],
+            size=size,
+            style=str(colony_state.get("style") or "balanced"),
+            favorite_context=str(colony_state.get("favoriteContext") or "balanced"),
+            info_need=str(colony_state.get("infoNeed") or "medium"),
+            seed=clean_seed,
+            player_id=str(colony_state.get("playerId"))[:80] if colony_state.get("playerId") else None,
+            player_anonymous_id=str(colony_state.get("playerAnonymousId"))[:80] if colony_state.get("playerAnonymousId") else None,
+            food=int(colony_state.get("food") or size),
+        )
+        colony.ants = generate_ants(colony)
+        room.colonies[colony.colony_id] = colony
     return game_manager.register_room(room)
 
 
