@@ -1243,6 +1243,7 @@ function appendGameEvent(event) {
   state.game.events.push(event);
   if (event.kind === "game_finished") {
     state.game.status = "finished";
+    document.body.dataset.gameStatus = "finished";
     state.game.agentUsage = event.data?.agentUsage || state.game.agentUsage;
     if (els.leaderboardTitle) els.leaderboardTitle.textContent = "Final results";
     closeGameStream();
