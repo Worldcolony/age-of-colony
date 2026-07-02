@@ -1275,14 +1275,19 @@ function renderPlainJournalEvent(event) {
 
 function renderMarketGroup(group) {
   const item = document.createElement("li");
-  item.className = "journal-market";
   const lanes = marketColonyLanes(group.events);
   const endings = group.events.filter((event) => ["settlement", "void", "markets_closed"].includes(event.kind));
   const errors = group.events.filter((event) => event.kind === "game_error");
+  const status = marketGroupStatus(group.events);
+  item.className = `journal-market ${status.className}`;
   item.innerHTML = `
     <div class="market-head">
       <span class="event-label opportunity">Market</span>
-      <strong>${escapeHtml(group.event.message || group.opportunity.label || "Market")}</strong>
+      <div class="market-title">
+        <strong>${escapeHtml(group.event.message || group.opportunity.label || "Market")}</strong>
+        <p>${escapeHtml(status.summary)}</p>
+      </div>
+      <span class="market-state ${escapeHtml(status.className)}">${escapeHtml(status.label)}</span>
     </div>
     <div class="market-lanes">
       ${
@@ -1293,12 +1298,83 @@ function renderMarketGroup(group) {
     </div>
     ${
       endings.length
-        ? `<div class="market-end"><span>End market</span>${endings.map((event) => `<p>${escapeHtml(event.message || "")}</p>`).join("")}</div>`
+        ? `<div class="market-end"><span>Market finished</span><div class="market-result-list">${endings.map(renderMarketResult).join("")}</div></div>`
         : ""
     }
     ${errors.map((event) => `<div class="market-error">${escapeHtml(event.message || "")}${formatEventDetails(event) ? `<div>${formatEventDetails(event)}</div>` : ""}</div>`).join("")}
   `;
   return item;
+}
+
+function marketGroupStatus(events) {
+  const hasClosed = events.some((event) => event.kind === "markets_closed");
+  const hasVoid = events.some((event) => event.kind === "void");
+  const hasSettlement = events.some((event) => event.kind === "settlement");
+  const hasPrediction = events.some((event) => event.kind === "prediction");
+  const hasVote = events.some((event) => ["ant_agent_vote", "vote"].includes(event.kind));
+  if (hasClosed) {
+    return { label: "Finished", className: "finished", summary: "Market closed; no more ants are at risk here." };
+  }
+  if (hasSettlement || hasVoid) {
+    return { label: "Settled", className: "settled", summary: "Result received; colony gains or losses are applied." };
+  }
+  if (hasPrediction) {
+    return { label: "Live", className: "live", summary: "Ants are committed; waiting for the match to resolve it." };
+  }
+  if (hasVote) {
+    return { label: "Voting", className: "voting", summary: "Colonies are deciding whether to commit ants." };
+  }
+  return { label: "Open", className: "open", summary: "New market opened from the live match feed." };
+}
+
+function renderMarketResult(event) {
+  const label = marketResultLabel(event);
+  const detail = marketResultDetail(event);
+  const option = event.data?.option?.label;
+  const colony = marketResultColonyName(event);
+  return `
+    <div class="market-result ${escapeHtml(label.className)}">
+      <span class="market-result-label">${escapeHtml(label.text)}</span>
+      <div>
+        <strong>${escapeHtml(colony)}</strong>
+        <p>${escapeHtml(detail)}${option ? ` · ${escapeHtml(option)}` : ""}</p>
+      </div>
+    </div>
+  `;
+}
+
+function marketResultLabel(event) {
+  if (event.kind === "settlement") {
+    return event.data?.win ? { text: "Won", className: "win" } : { text: "Lost", className: "loss" };
+  }
+  if (event.kind === "void") return { text: "Voided", className: "void" };
+  return { text: "Closed", className: "closed" };
+}
+
+function marketResultDetail(event) {
+  if (event.kind === "settlement" && event.data?.win) {
+    return [`+${event.data.food || 0} food`, `+${event.data.larvae || 0} larvae`].join(" · ");
+  }
+  if (event.kind === "settlement") {
+    return [`${event.data?.dead || 0} dead`, `${event.data?.wounded || 0} wounded`].join(" · ");
+  }
+  if (event.kind === "void") {
+    const ants = event.data?.ants == null ? "ants released" : `${event.data.ants} ants released`;
+    return `${ants} · ${event.data?.reason || "void"}`;
+  }
+  return event.message || "Market closed";
+}
+
+function marketResultColonyName(event) {
+  const colonyId = event.data?.colonyId;
+  if (colonyId && state.game.coloniesById[colonyId]) return state.game.coloniesById[colonyId];
+  const message = event.message || "";
+  const resultMatch = message.match(/^Result\s+(.+?):/);
+  if (resultMatch) return resultMatch[1].trim();
+  const voidMatch = message.match(/^(.+?): prediction voided/);
+  if (voidMatch) return voidMatch[1].trim();
+  if (event.kind === "markets_closed") return "All open predictions";
+  return "Colony";
 }
 
 function marketColonyLanes(events) {

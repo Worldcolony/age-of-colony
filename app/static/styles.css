@@ -1028,6 +1028,12 @@ tbody tr.selected {
   background: #fbfdff;
 }
 
+.game-feed li.journal-market.settled,
+.game-feed li.journal-market.finished {
+  border-color: #bbf7d0;
+  background: #f7fef9;
+}
+
 .market-head {
   display: flex;
   flex-wrap: wrap;
@@ -1039,6 +1045,49 @@ tbody tr.selected {
 
 .market-head strong {
   font-size: 0.9rem;
+}
+
+.market-title {
+  display: grid;
+  flex: 1 1 14rem;
+  gap: 0.14rem;
+  min-width: 0;
+}
+
+.market-title p {
+  color: #475467;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.market-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.9rem;
+  border: 1px solid #bae6fd;
+  border-radius: 999px;
+  padding: 0.22rem 0.65rem;
+  background: #f0f9ff;
+  color: #075985;
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.market-state.live,
+.market-state.voting {
+  border-color: #fedf89;
+  background: #fffbeb;
+  color: #93370d;
+}
+
+.market-state.settled,
+.market-state.finished {
+  border-color: #bbf7d0;
+  background: #ecfdf3;
+  color: #067647;
 }
 
 .market-lanes {
@@ -1106,17 +1155,68 @@ tbody tr.selected {
 
 .market-end {
   display: grid;
-  gap: 0.22rem;
-  padding: 0.6rem 0.7rem;
+  gap: 0.5rem;
+  padding: 0.7rem;
   border-radius: 8px;
-  background: #f8fafc;
+  background: #f0fdf4;
 }
 
 .market-end span {
-  color: #475467;
+  color: #067647;
   font-size: 0.74rem;
   font-weight: 900;
   text-transform: uppercase;
+}
+
+.market-result-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.market-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+  padding-left: 0.6rem;
+  border-left: 3px solid #94a3b8;
+}
+
+.market-result.win {
+  border-left-color: #16a34a;
+}
+
+.market-result.loss {
+  border-left-color: #dc2626;
+}
+
+.market-result.void,
+.market-result.closed {
+  border-left-color: #64748b;
+}
+
+.market-result-label {
+  min-width: 4.2rem;
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+  background: #fff;
+  color: #344054;
+  text-align: center;
+  font-size: 0.7rem !important;
+  font-weight: 900 !important;
+}
+
+.market-result.win .market-result-label {
+  color: #067647;
+}
+
+.market-result.loss .market-result-label {
+  color: var(--danger);
+}
+
+.market-result strong {
+  display: block;
+  font-size: 0.84rem;
 }
 
 .market-error {
