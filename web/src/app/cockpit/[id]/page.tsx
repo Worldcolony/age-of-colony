@@ -11,6 +11,13 @@ import { worldBus } from "@/three/worldBus";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
+// feed row left-edge tint by event kind (gold = markets, green = wins, rust = votes, red = trouble)
+const KIND_EDGE: Record<string, string> = {
+  opportunity: "#b07e1c", markets_closed: "#b07e1c",
+  settlement: "#4e7e2a", hatch: "#4e7e2a", info_result: "#4e7e2a",
+  vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
+  game_error: "#b42318", starvation: "#b42318", void: "#b42318",
+};
 
 export default function CockpitPage() {
   const router = useRouter();
@@ -95,22 +102,22 @@ export default function CockpitPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <button className="text-sm font-semibold text-ink-soft" onClick={() => router.push("/lobby")}>← Lobby</button>
-        <span className={`rounded-full border px-3 py-1 text-xs font-bold ${RUNNING.has(status) ? "border-magenta/40 text-magenta" : status === "finished" ? "border-lime/40 text-lime" : "border-brd text-ink-faint"}`}>
-          {status.replace("_", " ") || "…"}
-        </span>
-      </div>
-
-      <div className="glass flex flex-col gap-3 !bg-parch-strong p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-bold"><span className="text-2xl">{flag(p1)}</span>{p1}</div>
-          <span className="font-mono text-xs text-amber">LIVE</span>
-          <div className="flex flex-row-reverse items-center gap-2 font-bold"><span className="text-2xl">{flag(p2)}</span>{p2}</div>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="font-display text-xl tracking-wider">{fmtScore(game?.match?.score)}</span>
-          <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={() => router.push(`/results/${id}`)}>Rankings →</button>
+      {/* sticky score bar — always visible while scrolling the console */}
+      <div className="sticky top-2 z-30 flex flex-col gap-2">
+        <div className="glass bracket flex flex-col gap-2 !bg-parch-strong px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2 font-bold"><span className="text-2xl">{flag(p1)}</span><span className="truncate">{p1}</span></div>
+            <div className="plate px-3 py-1 font-display text-[15px] tracking-wider">{fmtScore(game?.match?.score)}</div>
+            <div className="flex min-w-0 flex-row-reverse items-center gap-2 font-bold"><span className="text-2xl">{flag(p2)}</span><span className="truncate">{p2}</span></div>
+          </div>
+          <div className="flex items-center justify-between">
+            <button className="text-xs font-bold text-ink-soft" onClick={() => router.push("/lobby")}>← Lobby</button>
+            <span className={`flex items-center gap-1.5 rounded-full border-2 px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wide ${RUNNING.has(status) ? "border-rust/50 text-rust" : status === "finished" ? "border-green/50 text-green" : "border-brd text-ink-faint"}`}>
+              {RUNNING.has(status) && <span className="live-dot" />}
+              {status === "created" ? "warming up" : status.replace("_", " ") || "…"}
+            </span>
+            <button className="text-xs font-bold text-gold-deep" onClick={() => router.push(`/results/${id}`)}>Ranks →</button>
+          </div>
         </div>
       </div>
 
@@ -121,7 +128,7 @@ export default function CockpitPage() {
       <RankCard mine={mine} rank={(myIdx < 0 ? 0 : myIdx) + 1} />
 
       {(game?.activeOpportunities ?? []).map((o, i) => (
-        <div key={i} className="glass flex flex-col gap-2.5 border border-brd p-4" style={{ boxShadow: "3px 3px 0 rgba(74,58,30,0.22)" }}>
+        <div key={i} className="glass flex flex-col gap-2.5 border-l-4 border-l-gold p-4">
           <span className="flex w-fit items-center gap-1.5 rounded-full border border-magenta/40 px-3 py-1 text-xs font-bold text-magenta"><span className="live-dot" />{(o.kind || "market").toUpperCase()}</span>
           <div className="font-bold">{o.label || o.question || "New market"}</div>
           <div className="flex flex-wrap gap-2">
@@ -136,13 +143,13 @@ export default function CockpitPage() {
       {mine ? (
         <div className="glass flex flex-col gap-3.5 p-4">
           <SbRow label="Style">
-            <Segmented options={[{ value: "cautious", label: "cautious" }, { value: "balanced", label: "balanced" }, { value: "aggressive", label: "aggressive" }]} value={mine.style} onChange={(v) => patchStrategy({ style: v })} />
+            <Segmented options={[{ value: "cautious", label: "🛡️ cautious" }, { value: "balanced", label: "⚖️ balanced" }, { value: "aggressive", label: "⚔️ aggressive" }]} value={mine.style} onChange={(v) => patchStrategy({ style: v })} />
           </SbRow>
           <SbRow label="Favorite ground">
             <Chips options={["balanced", "penalties", "corners", "momentum", "chaos"] as FavoriteContext[]} value={mine.favoriteContext} onChange={(v) => patchStrategy({ favoriteContext: v })} />
           </SbRow>
           <SbRow label="Info need">
-            <Segmented options={[{ value: "low", label: "low" }, { value: "medium", label: "medium" }, { value: "high", label: "high" }]} value={mine.infoNeed} onChange={(v) => patchStrategy({ infoNeed: v })} />
+            <Segmented options={[{ value: "low", label: "🕯️ low" }, { value: "medium", label: "🔎 medium" }, { value: "high", label: "📡 high" }]} value={mine.infoNeed} onChange={(v) => patchStrategy({ infoNeed: v })} />
           </SbRow>
           <p className="text-[11px] text-ink-faint">{locked ? "Match finished." : "Changes take effect on the next market."}</p>
         </div>
@@ -151,10 +158,10 @@ export default function CockpitPage() {
       )}
 
       <div className="glass flex flex-col gap-3 p-4">
-        <div className="flex gap-2">
+        <div className="seg">
           {(["match", "colony"] as const).map((t) => (
-            <button key={t} className="flex-1 rounded-lg border border-brd bg-slot py-2 text-xs font-bold data-[a=true]:border-cyan/40 data-[a=true]:text-cyan" data-a={feedTab === t} onClick={() => setFeedTab(t)}>
-              {t === "match" ? "Match" : "Colony"}
+            <button key={t} type="button" data-active={feedTab === t} onClick={() => setFeedTab(t)}>
+              {t === "match" ? "⚽ Match" : "🐜 Colony"}
             </button>
           ))}
         </div>
@@ -163,7 +170,11 @@ export default function CockpitPage() {
             <span className="py-5 text-center text-sm text-ink-faint">Waiting for events…</span>
           ) : (
             feedRows.map((e) => (
-              <div key={e.index} className="flex items-start gap-2.5 rounded-xl border-l-2 border-brd bg-slot px-3 py-2.5">
+              <div
+                key={e.index}
+                className="flex items-start gap-2.5 rounded-md border-2 border-brd border-l-4 bg-slot px-3 py-2.5"
+                style={{ borderLeftColor: KIND_EDGE[e.kind] ?? "rgba(74,58,30,0.4)" }}
+              >
                 <span className="text-lg">{kindIcon(e.kind)}</span>
                 <span className="flex-1 text-[13px] leading-snug">{e.message || e.kind}</span>
                 <span className="font-mono text-[10px] text-ink-faint">#{e.index}</span>

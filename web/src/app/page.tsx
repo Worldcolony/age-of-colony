@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/useWallet";
 import { api } from "@/lib/api";
+import { AntMarch } from "@/components/AntMarch";
 
 export default function SplashPage() {
   const router = useRouter();
@@ -37,28 +38,37 @@ export default function SplashPage() {
 
   return (
     <div className="flex min-h-[86dvh] flex-1 flex-col items-center justify-center">
-      <div className="glass bracket w-full max-w-[340px] p-6 text-center">
-        <p className="eyebrow mb-3">Live Colony Engine</p>
-        <h1 className="hud-title glow-lime text-[15px] leading-[1.7]">
-          Age of
-          <br />
-          Colony
-        </h1>
-        <p className="mx-auto mt-4 max-w-[280px] text-sm leading-relaxed text-ink-soft">
-          Command your colony. Predict the match. Rule the lobby.
-        </p>
-        <div className="mt-6 flex flex-col gap-3">
-          <button className="btn btn-primary" disabled={busy} onClick={onConnect}>
-            {wallet.connected ? `Enter · ${wallet.short}` : "Connect Phantom Wallet"}
-          </button>
-          <button className="btn btn-ghost" disabled={busy} onClick={onDemo}>
-            Watch demo
-          </button>
-          {status && <p className="min-h-4 text-xs text-ink-faint">{status}</p>}
+      <div className="glass bracket w-full max-w-[340px] overflow-hidden text-center">
+        <AntMarch className="border-b-2 border-[color:var(--brd-soft)] bg-[color:var(--color-slot)] py-1.5" />
+        <div className="p-6">
+          <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-md border-2 border-[color:var(--brd-strong)] bg-[color:var(--color-slot)] shadow-[2px_2px_0_rgba(90,70,30,0.4)]">
+            <span className="text-3xl">🐜</span>
+          </div>
+          <p className="eyebrow mb-3">Live Colony Engine</p>
+          <h1 className="hud-title text-[16px] leading-[1.7]">
+            Age of
+            <br />
+            Colony
+          </h1>
+          <p className="mx-auto mt-4 max-w-[280px] text-sm leading-relaxed text-ink-soft">
+            Command your colony. Predict the match. Rule the lobby.
+          </p>
+          <div className="mt-6 flex flex-col gap-3">
+            <button className="btn btn-primary" disabled={busy} onClick={onConnect}>
+              {wallet.connected ? `Enter · ${wallet.short}` : "🔗 Connect Phantom Wallet"}
+            </button>
+            <button className="btn btn-ghost" disabled={busy} onClick={onDemo}>
+              ▶ Watch demo
+            </button>
+            {status && <p className="min-h-4 text-xs text-ink-faint">{status}</p>}
+          </div>
+          <p className="blink mt-5 font-mono text-[9px] uppercase tracking-[0.28em] text-ink-faint">
+            ▸ insert wallet to play ◂
+          </p>
         </div>
       </div>
-      <p className="mt-5 font-mono text-[10px] uppercase tracking-[0.3em] text-ink-faint">
-        ▸ Solana · TxODDS World Cup
+      <p className="mt-5 font-mono text-[10px] uppercase tracking-[0.3em] text-ink-faint drop-shadow-[1px_1px_0_rgba(44,40,32,0.6)]">
+        Solana · TxODDS World Cup
       </p>
     </div>
   );

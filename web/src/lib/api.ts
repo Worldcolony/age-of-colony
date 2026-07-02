@@ -59,11 +59,25 @@ export const api = {
     req<FixtureList>(`/api/fixtures/recent${qs(p)}`),
   liveTarget: (p?: { days?: number }) => req<FixtureList>(`/api/fixtures/live-target${qs(p)}`),
 
-  createGame: (body: { fixtureId: number | string; participant1?: string | null; participant2?: string | null; seed?: number }) =>
-    req<GameState>("/api/games", "POST", body),
+  createGame: (body: {
+    fixtureId: number | string;
+    participant1?: string | null;
+    participant2?: string | null;
+    competition?: string | null;
+    startTime?: number | null;
+    startTimeIso?: string | null;
+    seed?: number;
+    anonymousId?: string;
+    creatorName?: string;
+  }) => req<GameState>("/api/games", "POST", body),
   getGame: (id: string) => req<GameState>(`/api/games/${id}`),
   getReplay: (id: string) => req<{ game: GameState; events: import("./types").GameEvent[] }>(`/api/games/${id}/replay`),
-  joinPlayer: (id: string, name: string) => req<GameState>(`/api/games/${id}/players`, "POST", { name }),
+  joinPlayer: (id: string, name: string, anonymousId?: string) => req<GameState>(`/api/games/${id}/players`, "POST", { name, anonymousId }),
+
+  // private 6-digit room codes
+  getRoomByCode: (code: string) => req<GameState>(`/api/rooms/${encodeURIComponent(code)}`),
+  joinRoomByCode: (code: string, name: string, anonymousId?: string) =>
+    req<GameState>(`/api/rooms/${encodeURIComponent(code)}/players`, "POST", { name, anonymousId }),
   addColony: (id: string, body: CreateColonyBody) => req<GameState>(`/api/games/${id}/colonies`, "POST", body),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),

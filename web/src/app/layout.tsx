@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Pixelify_Sans, Press_Start_2P, Silkscreen } from "next/font/google";
 import "./globals.css";
 import WorldColonyBackdrop from "@/three/WorldColonyBackdrop";
+import { BottomNav } from "@/components/BottomNav";
 
 const pixelify = Pixelify_Sans({ weight: ["400", "500", "600", "700"], subsets: ["latin"], variable: "--font-pixelify" });
 const pressStart = Press_Start_2P({ weight: "400", subsets: ["latin"], variable: "--font-press" });
@@ -25,9 +26,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={`${pixelify.variable} ${pressStart.variable} ${silkscreen.variable}`}>
       <body>
         <WorldColonyBackdrop />
-        <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-24 pt-4">
+        <div aria-hidden className="scrim" />
+        <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-[110px] pt-3">
           {children}
         </div>
+        <BottomNav />
       </body>
     </html>
   );

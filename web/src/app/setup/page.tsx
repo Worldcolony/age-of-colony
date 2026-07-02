@@ -12,15 +12,15 @@ const SIZES = [
   { value: "50", label: "50" },
 ];
 const STYLES: { value: Style; label: string }[] = [
-  { value: "cautious", label: "cautious" },
-  { value: "balanced", label: "balanced" },
-  { value: "aggressive", label: "aggressive" },
+  { value: "cautious", label: "🛡️ cautious" },
+  { value: "balanced", label: "⚖️ balanced" },
+  { value: "aggressive", label: "⚔️ aggressive" },
 ];
 const GROUNDS: FavoriteContext[] = ["balanced", "penalties", "corners", "momentum", "chaos"];
 const INFO: { value: InfoNeed; label: string }[] = [
-  { value: "low", label: "low" },
-  { value: "medium", label: "medium" },
-  { value: "high", label: "high" },
+  { value: "low", label: "🕯️ low" },
+  { value: "medium", label: "🔎 medium" },
+  { value: "high", label: "📡 high" },
 ];
 
 export default function SetupPage() {
@@ -92,7 +92,9 @@ export default function SetupPage() {
       <Field label="Info need"><Segmented options={INFO} value={info} onChange={setInfo} /></Field>
 
       {msg && <p className="text-sm text-danger">{msg}</p>}
-      <button className="btn btn-primary mt-1" onClick={deploy}>🚀 DEPLOY COLONY</button>
+      <div className="sticky bottom-[92px] z-20 mt-1">
+        <button className="btn btn-primary" onClick={deploy}>🚀 DEPLOY COLONY</button>
+      </div>
     </div>
   );
 }

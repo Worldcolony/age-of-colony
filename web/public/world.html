@@ -185,5 +185,21 @@
 <script src="/dinasty/supa.js"></script>
 <script src="/dinasty/main.js"></script>
 <script src="/dinasty/databridge.js?v=20260623-lazy-previous-tests"></script>
+<script id="wc-embed-cam">
+(function(){
+  var tries = 0;
+  function tune(){
+    tries++;
+    var C = window.DN && DN.camera;
+    if (!C || !C.controls) { if (tries < 80) setTimeout(tune, 250); return; }
+    try {
+      C.flyTo(new THREE.Vector3(0, 5, 0), 110, 38, 3.2);
+      C.autoRotate(true);
+      C.controls.autoRotateSpeed = 0.55;
+    } catch (e) {}
+  }
+  setTimeout(tune, 2200);
+})();
+</script>
 </body>
 </html>

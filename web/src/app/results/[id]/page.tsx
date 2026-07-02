@@ -60,14 +60,18 @@ export default function ResultsPage() {
           {podium.map((pos) => {
             const c = cols[pos];
             const heights = ["h-14", "h-[76px]", "h-10"];
+            const tints = ["pod-silver", "pod-gold", "pod-bronze"]; // visual order: 2nd, 1st, 3rd
+            const tint = pos === 0 ? tints[1] : pos === 1 ? tints[0] : tints[2];
             return (
               <div key={pos} className="flex max-w-[110px] flex-1 flex-col items-center gap-1.5 text-center">
                 {c ? (
                   <>
-                    <div className={`grid h-11 w-11 place-items-center rounded-full border-2 ${pos === 0 ? "border-lime" : "border-brd"} text-xl`}>{pos === 0 ? "👑" : "🐜"}</div>
-                    <div className="text-xs font-bold">{c.name}</div>
-                    <div className="font-mono text-sm text-cyan">{c.score ?? 0}</div>
-                    <div className={`w-full rounded-t-lg border border-brd bg-parch-strong ${heights[pos]} ${pos === 0 ? "shadow-[3px_3px_0_rgba(74,58,30,0.25)]" : ""}`} />
+                    <div className={`plate grid h-11 w-11 place-items-center text-xl ${pos === 0 ? "!border-gold" : ""}`}>{pos === 0 ? "👑" : "🐜"}</div>
+                    <div className="max-w-full truncate text-xs font-bold">{c.name}</div>
+                    <div className="font-mono text-sm font-bold text-gold-deep">{c.score ?? 0}</div>
+                    <div className={`w-full rounded-t-md border-2 ${heights[pos]} ${tint} shadow-[2px_2px_0_rgba(74,58,30,0.3)]`}>
+                      <span className="hud-title block pt-1 text-[10px] text-[#5a4a20]">{pos + 1}</span>
+                    </div>
                   </>
                 ) : (
                   <div />

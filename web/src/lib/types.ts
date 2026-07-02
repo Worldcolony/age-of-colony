@@ -64,9 +64,14 @@ export interface MatchScore {
 
 export interface GameState {
   gameId: string;
+  roomCode?: string;
   fixtureId?: number | string;
   participant1?: string | null;
   participant2?: string | null;
+  competition?: string | null;
+  startTime?: number | null;
+  startTimeIso?: string | null;
+  owner?: { anonymousId?: string | null; name?: string | null } | null;
   status: GameStatus;
   mode?: string | null;
   eventIndex?: number;
