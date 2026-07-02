@@ -859,18 +859,7 @@ function renderGameState(game) {
             <span>${colony.wins || 0}W / ${colony.losses || 0}L</span>
           </div>
           <p>${escapeHtml(strategyLabel(colony))}</p>
-          <div class="colony-stats">
-            <span><b>${colony.food}</b> food</span>
-            <span><b>${colony.larvae}</b> larvae</span>
-            <span><b>${colony.antsAlive}</b> alive</span>
-            <span><b>${colony.antsActive ?? colony.antsAlive}</b> can vote</span>
-            <span><b>${colony.antsEngaged || 0}</b> at risk</span>
-            <span><b>${colony.antsBorn || 0}</b> born</span>
-            <span><b>${colony.antsWounded}</b> wounded</span>
-            <span><b>${colony.antsDead}</b> dead</span>
-            <span><b>${colony.infoPurchases || 0}</b> infos</span>
-            <span title="${escapeHtml(scoreTitle)}">score <b>${colony.score}</b></span>
-          </div>
+          ${renderColonyEconomy(colony, scoreTitle)}
           <div class="colony-dna">${renderArchetypeSummary(colony.archetypes)}</div>
           <div class="strategy-editor">
             <label>
@@ -1619,6 +1608,127 @@ function countGameEvents(events) {
   }, {});
 }
 
+function renderColonyEconomy(colony, scoreTitle) {
+  const food = Number(colony.food || 0);
+  const brood = Number(colony.larvae || 0);
+  const alive = Number(colony.antsAlive || 0);
+  const active = Number(colony.antsActive ?? colony.antsAlive ?? 0);
+  const atRisk = Number(colony.antsEngaged || 0);
+  const wounded = Number(colony.antsWounded || 0);
+  const dead = Number(colony.antsDead || 0);
+  const born = Number(colony.antsBorn || 0);
+  const foodNet = Number(colony.foodNet || 0);
+  const insight = colonyEconomyInsight(colony);
+  const riskLevel = metricRiskLevel(atRisk, Math.max(active, alive));
+  const deathLevel = metricDeathLevel(dead, colony.size || alive || 1);
+
+  return `
+    <div class="colony-economy-note ${escapeHtml(insight.level)}">${escapeHtml(insight.text)}</div>
+    <div class="colony-economy-grid" aria-label="${escapeHtml(`${colony.name} economy`)}}">
+      <div class="economy-row">
+        <span class="economy-label">Resources</span>
+        <div class="economy-metrics">
+          ${economyMetric(food, "food", "Capital: won from bets, spent on upkeep and hatching brood. If reserves run out, ants can starve.")}
+          ${economyMetric(brood, "brood", "Future ants. Brood hatches after a short delay and costs 1 food per new ant.")}
+          ${economyMetric(formatSignedInteger(foodNet), "net", "Net food earned after upkeep, hatching and info costs.")}
+        </div>
+      </div>
+      <div class="economy-row">
+        <span class="economy-label">Colony</span>
+        <div class="economy-metrics">
+          ${economyMetric(alive, "alive", "Living ants are voting power for future markets.")}
+          ${economyMetric(active, "can vote", "Ants available right now: alive and not wounded.")}
+          ${economyMetric(born, "born", "New ants hatched from brood during this match.")}
+        </div>
+      </div>
+      <div class="economy-row">
+        <span class="economy-label">Risk</span>
+        <div class="economy-metrics">
+          ${economyMetric(atRisk, "at risk", "Ants committed to unresolved markets. They can win food or take losses.", riskLevel)}
+          ${economyMetric(wounded, "wounded", "Temporary losses. Wounded ants cannot vote until they recover.", wounded ? "warning" : "")}
+          ${economyMetric(dead, "dead", "Permanent losses. Dead ants lower voting power and hurt score.", deathLevel)}
+        </div>
+      </div>
+      <div class="economy-row">
+        <span class="economy-label">Result</span>
+        <div class="economy-metrics">
+          ${economyMetric(`${colony.wins || 0}W/${colony.losses || 0}L`, "bets", "Resolved betting record for this colony.")}
+          ${economyMetric(colony.score, "score", scoreTitle)}
+          ${colony.infoPurchases ? economyMetric(colony.infoPurchases, "info buys", "Paid info packets bought by this colony.") : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function economyMetric(value, label, hint, level = "") {
+  const levelClass = level ? ` ${escapeHtml(level)}` : "";
+  return `
+    <span class="economy-metric${levelClass}" title="${escapeHtml(hint)}">
+      <b>${escapeHtml(value)}</b>
+      <small>${escapeHtml(label)}</small>
+    </span>
+  `;
+}
+
+function colonyEconomyInsight(colony) {
+  const food = Number(colony.food || 0);
+  const alive = Number(colony.antsAlive || 0);
+  const active = Number(colony.antsActive ?? colony.antsAlive ?? 0);
+  const atRisk = Number(colony.antsEngaged || 0);
+  const dead = Number(colony.antsDead || 0);
+  const brood = Number(colony.larvae || 0);
+  const baseSize = Number(colony.size || alive || 1);
+  const foodPerAlive = alive > 0 ? food / alive : 0;
+  const riskShare = active > 0 ? atRisk / active : 0;
+  const deathShare = baseSize > 0 ? dead / baseSize : 0;
+
+  if (alive <= 0) {
+    return { level: "danger", text: "Colony wiped out: no ants left to vote." };
+  }
+  if (riskShare >= 0.65) {
+    return { level: "danger", text: "Overexposed: most available ants are committed in open markets." };
+  }
+  if (deathShare >= 0.5 && foodPerAlive >= 8) {
+    return { level: "danger", text: "Rich but bleeding: food is high, population is collapsing." };
+  }
+  if (foodPerAlive < 0.5) {
+    return { level: "danger", text: "Low reserve: the colony needs food soon or starvation can kill ants." };
+  }
+  if (riskShare >= 0.35) {
+    return { level: "warning", text: "High exposure: several ants are waiting on unresolved markets." };
+  }
+  if (deathShare >= 0.25) {
+    return { level: "warning", text: "Population damaged: future voting power is getting weaker." };
+  }
+  if (brood > 0) {
+    return { level: "growth", text: "Growth pending: brood can become new ants if food reserves hold." };
+  }
+  if (foodPerAlive >= 8) {
+    return { level: "stable", text: "Strong bank: enough food to survive and fund future growth." };
+  }
+  if (atRisk > 0) {
+    return { level: "active", text: "Active exposure: committed ants can still win food or take losses." };
+  }
+  return { level: "stable", text: "Ready: food fuels survival, brood becomes ants, alive ants vote." };
+}
+
+function metricRiskLevel(atRisk, active) {
+  if (!atRisk || !active) return "";
+  const share = atRisk / active;
+  if (share >= 0.65) return "danger";
+  if (share >= 0.35) return "warning";
+  return "active";
+}
+
+function metricDeathLevel(dead, baseSize) {
+  if (!dead || !baseSize) return "";
+  const share = dead / baseSize;
+  if (share >= 0.5) return "danger";
+  if (share >= 0.25) return "warning";
+  return "";
+}
+
 function renderArchetypeSummary(archetypes) {
   if (!archetypes || typeof archetypes !== "object") return "";
   return Object.entries(archetypes)
@@ -1711,6 +1821,11 @@ function strategyOptions(options, selected) {
 
 function formatInteger(value) {
   return Math.round(value).toLocaleString("en-US");
+}
+
+function formatSignedInteger(value) {
+  const numeric = Number(value) || 0;
+  return numeric > 0 ? `+${formatInteger(numeric)}` : formatInteger(numeric);
 }
 
 function formatUsd(value) {

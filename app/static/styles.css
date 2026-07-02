@@ -1363,6 +1363,125 @@ tbody tr.selected {
   font-size: 0.78rem;
 }
 
+.colony-economy-note {
+  margin-top: 0.45rem;
+  border-left: 3px solid #14b8a6;
+  border-radius: 6px;
+  padding: 0.38rem 0.5rem;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.colony-economy-note.warning {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.colony-economy-note.danger {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.colony-economy-note.active {
+  border-left-color: #0ea5e9;
+  background: #f0f9ff;
+  color: #075985;
+}
+
+.colony-economy-note.growth {
+  border-left-color: #8b5cf6;
+  background: #f5f3ff;
+  color: #5b21b6;
+}
+
+.colony-economy-grid {
+  display: grid;
+  gap: 0.34rem;
+  margin-top: 0.5rem;
+}
+
+.economy-row {
+  display: grid;
+  grid-template-columns: 4.4rem minmax(0, 1fr);
+  gap: 0.45rem;
+  align-items: start;
+}
+
+.economy-label {
+  padding-top: 0.28rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.economy-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  min-width: 0;
+}
+
+.economy-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.24rem;
+  min-height: 1.58rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.economy-metric b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.economy-metric small {
+  font-size: 0.68rem;
+}
+
+.economy-metric.warning {
+  border-color: #fbbf24;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.economy-metric.warning b {
+  color: #78350f;
+}
+
+.economy-metric.danger {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.economy-metric.danger b {
+  color: #7f1d1d;
+}
+
+.economy-metric.active {
+  border-color: #7dd3fc;
+  background: #f0f9ff;
+  color: #075985;
+}
+
+.economy-metric.active b {
+  color: #0c4a6e;
+}
+
 .colony-stats {
   display: flex;
   flex-wrap: wrap;
@@ -1609,6 +1728,15 @@ tbody tr.selected {
   .setup-steps,
   .strategy-editor {
     grid-template-columns: 1fr;
+  }
+
+  .economy-row {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+
+  .economy-label {
+    padding-top: 0;
   }
 
   .table-wrap {
