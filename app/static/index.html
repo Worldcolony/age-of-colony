@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-44" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-45" />
   </head>
   <body>
     <header class="topbar">
@@ -175,23 +175,19 @@
             </label>
             <div class="colony-profile-card" aria-live="polite">
               <span>Profile</span>
-              <strong id="colonyProfileTitle">Balanced match squad</strong>
-              <p id="colonyProfileMeta">20 ants · Balanced · Medium info</p>
+              <strong id="colonyProfileTitle">Balanced colony</strong>
+              <p id="colonyProfileMeta">20 ants + 20 food · Balanced · Medium info</p>
             </div>
           </div>
 
           <div class="colony-tuning-grid">
             <label class="tuning-card">
               <span class="tuning-head">
-                <span>Size</span>
-                <strong id="colonySizeValue">20 ants</strong>
+                <span>Fair start</span>
+                <strong id="colonySizeValue">20 ants + 20 food</strong>
               </span>
-              <input id="colonySize" class="range-control" type="range" min="0" max="2" step="1" value="1" />
-              <span class="range-scale" aria-hidden="true">
-                <span>10</span>
-                <span>20</span>
-                <span>50</span>
-              </span>
+              <input id="colonySize" type="hidden" value="0" />
+              <p class="tuning-note">Every colony starts equal.</p>
             </label>
 
             <label class="tuning-card">
@@ -278,6 +274,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-44" type="module"></script>
+    <script src="/static/app.js?v=colony-45" type="module"></script>
   </body>
 </html>

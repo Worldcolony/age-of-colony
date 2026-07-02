@@ -369,6 +369,17 @@ body[data-workspace-role="user"] .player-list {
   font-size: 0.92rem;
 }
 
+.tuning-note {
+  margin: 0;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 0.58rem 0.65rem;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 0.82rem;
+  font-weight: 820;
+}
+
 .range-control {
   appearance: none;
   width: 100%;

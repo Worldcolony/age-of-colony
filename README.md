@@ -164,7 +164,7 @@ V0 colony resources:
 
 Starting configuration:
 
-- size: `10`, `20`, `50`
+- fair start: every colony begins with `20` ants and `20` food
 - dominant style: `cautious`, `balanced`, `aggressive`
 - favorite ground: `penalties`, `corners`, `momentum`, `chaos`, `balanced`
 - info need: `low`, `medium`, `high`

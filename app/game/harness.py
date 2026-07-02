@@ -16,6 +16,8 @@ VALID_SIZES = {10, 20, 50}
 VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
+STARTING_COLONY_ANTS = 20
+STARTING_COLONY_FOOD = 20
 STYLE_ALIASES = {
     "prudent": "cautious",
     "cautious": "cautious",
@@ -89,7 +91,7 @@ def food_drain_for_colony(colony: "ColonyState") -> int:
 
 
 def info_cost_for_colony(colony: "ColonyState", opportunity: "Opportunity") -> int:
-    base = {10: 1, 20: 2, 50: 5}.get(colony.size, max(1, math.ceil(colony.size / 25)))
+    base = 2
     if any(option.risk in {"wild", "chaos"} for option in opportunity.options):
         return math.ceil(base * 1.5)
     return base
@@ -506,21 +508,29 @@ class GameHarness:
         colony = ColonyState(
             colony_id=colony_id,
             name=name.strip() or f"Colony {len(self.room.colonies) + 1}",
-            size=size,
+            size=STARTING_COLONY_ANTS,
             style=style,
             favorite_context=favorite_context,
             info_need=info_need,
             seed=seed,
             player_id=clean_player_id,
             player_anonymous_id=clean_anonymous_id,
-            food=size,
+            food=STARTING_COLONY_FOOD,
         )
         colony.ants = generate_ants(colony)
         self.room.colonies[colony_id] = colony
         self.room.add_log(
             "colony_created",
-            f"{colony.name} enters the game with {size} ants.",
-            {"colonyId": colony_id, "size": size, "style": style, "favoriteContext": favorite_context, "infoNeed": info_need},
+            f"{colony.name} enters the game with {STARTING_COLONY_ANTS} ants and {STARTING_COLONY_FOOD} food.",
+            {
+                "colonyId": colony_id,
+                "size": STARTING_COLONY_ANTS,
+                "requestedSize": size,
+                "startingFood": STARTING_COLONY_FOOD,
+                "style": style,
+                "favoriteContext": favorite_context,
+                "infoNeed": info_need,
+            },
         )
         return colony
 
@@ -603,11 +613,16 @@ class GameHarness:
         self.room.status = "running_replay"
         for event in events:
             self.process_event(event)
+        self.finish_game(mode="replay")
+
+    def finish_game(self, *, mode: str = "replay") -> None:
+        if self.room.status == "finished":
+            return
         self._finish_open_markets()
         self._sync_agent_usage()
         self.room.status = "finished"
         cost_message = describe_agent_usage_cost(self.room.agent_usage)
-        final_message = "Replay finished, final leaderboard available."
+        final_message = "Live match finished, final leaderboard available." if mode == "live" else "Replay finished, final leaderboard available."
         if cost_message:
             final_message = f"{final_message} {cost_message}"
         self.room.add_log(

@@ -29,10 +29,9 @@ const USER_LIVE_DAYS = "14";
 const USER_LIVE_LIMIT = "100";
 const ANON_ID_STORAGE_KEY = "aocAnonymousId";
 const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
+const FIXED_COLONY_SIZE = 20;
 const COLONY_SIZE_CHOICES = [
-  { value: 10, label: "10 ants", profile: "Scout squad" },
-  { value: 20, label: "20 ants", profile: "Match squad" },
-  { value: 50, label: "50 ants", profile: "Full squad" },
+  { value: FIXED_COLONY_SIZE, label: "20 ants + 20 food", profile: "Fair start" },
 ];
 const COLONY_STYLE_CHOICES = [
   { value: "cautious", label: "Cautious" },
@@ -165,7 +164,7 @@ function bindEvents() {
     event.preventDefault();
     addColony();
   });
-  [els.colonySize, els.colonyStyle, els.colonyInfoNeed].forEach((control) => {
+  [els.colonyStyle, els.colonyInfoNeed].forEach((control) => {
     control.addEventListener("input", updateColonyBuilder);
   });
   els.colonyFavoriteOptions.forEach((control) => {
@@ -617,12 +616,11 @@ async function addColony() {
     return;
   }
   const fallbackName = state.role === "user" ? defaultColonyName() : `Colony ${Date.now().toString().slice(-4)}`;
-  const sizeChoice = sliderChoice(els.colonySize, COLONY_SIZE_CHOICES);
   const styleChoice = sliderChoice(els.colonyStyle, COLONY_STYLE_CHOICES);
   const infoChoice = sliderChoice(els.colonyInfoNeed, COLONY_INFO_CHOICES);
   const payload = {
     name: els.colonyName.value.trim() || fallbackName,
-    size: sizeChoice.value,
+    size: FIXED_COLONY_SIZE,
     style: styleChoice.value,
     favoriteContext: selectedColonyFavorite(),
     infoNeed: infoChoice.value,
@@ -647,7 +645,7 @@ function updateColonyBuilder() {
   els.colonySizeValue.textContent = sizeChoice.label;
   els.colonyStyleValue.textContent = styleChoice.label;
   els.colonyInfoNeedValue.textContent = infoChoice.label;
-  els.colonyProfileTitle.textContent = `${styleChoice.label} ${sizeChoice.profile.toLowerCase()}`;
+  els.colonyProfileTitle.textContent = `${styleChoice.label} colony`;
   els.colonyProfileMeta.textContent = `${sizeChoice.label} · ${favoriteLabel} · ${infoChoice.label} info`;
 }
 

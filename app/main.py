@@ -17,7 +17,15 @@ from pydantic import BaseModel
 from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
-from .game.harness import ColonyState, GameRoom, PlayerState, generate_ants, normalize_room_code
+from .game.harness import (
+    STARTING_COLONY_ANTS,
+    STARTING_COLONY_FOOD,
+    ColonyState,
+    GameRoom,
+    PlayerState,
+    generate_ants,
+    normalize_room_code,
+)
 from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .queen_auth import require_wallet_owner
 from .txline import (
@@ -63,6 +71,17 @@ AUTORUN_COLONIES = (
     ("Black Rush", 50, "aggressive", "chaos", "low"),
 )
 LIVE_SCORE_POLL_SECONDS = 2.5
+LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+LIVE_AUTO_FINISH_AFTER_SECONDS = max(0.0, _env_float("LIVE_AUTO_FINISH_AFTER_SECONDS", 9000.0))
 
 
 class CreateGameRequest(BaseModel):
@@ -1175,23 +1194,22 @@ def _restore_room_from_stored_row(row: dict[str, Any]):
     for colony_state in public_state.get("colonies") or []:
         if not isinstance(colony_state, dict):
             continue
-        try:
-            size = int(colony_state.get("size") or 20)
-        except (TypeError, ValueError):
-            size = 20
-        size = size if size in {10, 20, 50} else 20
         colony_id = str(colony_state.get("colonyId") or f"col_{len(room.colonies) + 1}")
+        try:
+            food = int(colony_state["food"]) if colony_state.get("food") is not None else STARTING_COLONY_FOOD
+        except (TypeError, ValueError):
+            food = STARTING_COLONY_FOOD
         colony = ColonyState(
             colony_id=colony_id,
             name=str(colony_state.get("name") or f"Colony {len(room.colonies) + 1}")[:40],
-            size=size,
+            size=STARTING_COLONY_ANTS,
             style=str(colony_state.get("style") or "balanced"),
             favorite_context=str(colony_state.get("favoriteContext") or "balanced"),
             info_need=str(colony_state.get("infoNeed") or "medium"),
             seed=clean_seed,
             player_id=str(colony_state.get("playerId"))[:80] if colony_state.get("playerId") else None,
             player_anonymous_id=str(colony_state.get("playerAnonymousId"))[:80] if colony_state.get("playerAnonymousId") else None,
-            food=int(colony_state.get("food") or size),
+            food=food,
         )
         colony.ants = generate_ants(colony)
         room.colonies[colony.colony_id] = colony
@@ -1331,6 +1349,10 @@ async def _run_live_game(game_id: str) -> None:
                 await asyncio.to_thread(_process_live_events, harness, new_events)
                 _sync_room_agent_usage(game_id)
                 await _sync_room_to_supabase_async(room)
+            if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
+                await asyncio.to_thread(_finish_live_game, harness)
+                await _sync_room_to_supabase_async(room)
+                break
             first_batch = False
             await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
     except asyncio.CancelledError:
@@ -1397,6 +1419,82 @@ def _live_event_key(event: dict[str, Any]) -> tuple[Any, ...]:
 def _process_live_events(harness: Any, events: list[dict[str, Any]]) -> None:
     for event in events:
         harness.process_event(event)
+
+
+def _finish_live_game(harness: Any) -> None:
+    harness.finish_game(mode="live")
+
+
+def _live_auto_finish_reached(room: GameRoom) -> bool:
+    if LIVE_AUTO_FINISH_AFTER_SECONDS <= 0:
+        return False
+    kickoff_at = _room_kickoff_datetime(room)
+    if not kickoff_at:
+        return False
+    return datetime.now(timezone.utc) >= kickoff_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS)
+
+
+def _live_timeline_finished(timeline: dict[str, Any]) -> bool:
+    return any(_live_event_finished(event) for event in timeline.get("events") or [])
+
+
+def _live_event_finished(event: dict[str, Any]) -> bool:
+    raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+    status_id = _status_id_value(
+        event.get("statusId")
+        or event.get("status")
+        or raw.get("StatusId")
+        or raw.get("statusId")
+        or raw.get("Status")
+        or raw.get("status")
+    )
+    if status_id in LIVE_FINAL_STATUS_IDS:
+        return True
+
+    text = " ".join(
+        str(value or "")
+        for value in (
+            event.get("gameState"),
+            event.get("action"),
+            event.get("type"),
+            event.get("description"),
+            raw.get("GameState"),
+            raw.get("gameState"),
+            raw.get("Status"),
+            raw.get("status"),
+            raw.get("Action"),
+            raw.get("action"),
+            raw.get("Type"),
+            raw.get("type"),
+        )
+    ).casefold()
+    normalized = text.replace("_", " ").replace("-", " ")
+    return any(
+        marker in normalized
+        for marker in (
+            "full time",
+            "fulltime",
+            "final whistle",
+            "match finished",
+            "game finished",
+            "fixture finished",
+            "match ended",
+            "game ended",
+            "after penalties",
+            "cancelled",
+            "abandoned",
+            "coverage cancelled",
+        )
+    )
+
+
+def _status_id_value(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sync_room_agent_usage(game_id: str) -> None:

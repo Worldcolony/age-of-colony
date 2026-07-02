@@ -6,11 +6,13 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
-from app.main import app, _pick_live_target_fixture
+from app.main import app, _finish_live_game, _live_timeline_finished, _pick_live_target_fixture, _process_live_events
 from app.game.harness import (
     GameHarness,
     GameManager,
     LARVAE_INCUBATION_EVENTS,
+    STARTING_COLONY_ANTS,
+    STARTING_COLONY_FOOD,
     build_info_packet,
     build_opportunity,
     build_opportunities,
@@ -152,9 +154,11 @@ class GameHarnessTest(unittest.TestCase):
 
         archetypes = {ant.archetype for ant in colony.ants}
 
-        self.assertEqual(len(colony.ants), 50)
+        self.assertEqual(colony.size, STARTING_COLONY_ANTS)
+        self.assertEqual(colony.food, STARTING_COLONY_FOOD)
+        self.assertEqual(len(colony.ants), STARTING_COLONY_ANTS)
         self.assertEqual(colony.ants[0].ant_id, "ant_0000")
-        self.assertEqual(colony.ants[-1].ant_id, "ant_0049")
+        self.assertEqual(colony.ants[-1].ant_id, "ant_0019")
         self.assertTrue(all(not ant.ant_id.startswith(colony.colony_id) for ant in colony.ants))
         self.assertIn("cautious", archetypes)
         self.assertIn("data_first", archetypes)
@@ -180,8 +184,8 @@ class GameHarnessTest(unittest.TestCase):
         self.assertIn("ant_0000", active_ids)
         self.assertNotIn("ant_0001", active_ids)
         self.assertNotIn("ant_0002", active_ids)
-        self.assertEqual(public["antsAlive"], 9)
-        self.assertEqual(public["antsActive"], 8)
+        self.assertEqual(public["antsAlive"], STARTING_COLONY_ANTS - 1)
+        self.assertEqual(public["antsActive"], STARTING_COLONY_ANTS - 2)
         self.assertEqual(public["antsEngaged"], 1)
         self.assertEqual(public["antsWounded"], 1)
 
@@ -278,21 +282,27 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertTrue(should_buy_info(colony, opportunity, vote))
         packet = build_info_packet(opportunity, colony, room.match_state)
-        self.assertEqual(packet.cost, 8)
+        self.assertEqual(packet.cost, 3)
         self.assertIn("involved player: Mbappe", packet.facts)
         opportunity.info_bought_by.add(colony.colony_id)
         self.assertFalse(should_buy_info(colony, opportunity, vote))
 
-    def test_info_cost_scales_with_colony_size(self):
+    def test_info_cost_is_same_for_every_starting_colony(self):
         _, harness = self.make_room()
         opportunity = build_opportunity(penalty_event(player={"name": "Mbappe"}), 1)
         small = harness.add_colony("Small", 10, "cautious", "penalties", "high")
         medium = harness.add_colony("Medium", 20, "cautious", "penalties", "high")
         large = harness.add_colony("Large", 50, "cautious", "penalties", "high")
 
-        self.assertEqual(info_cost_for_colony(small, opportunity), 2)
+        self.assertEqual(small.size, STARTING_COLONY_ANTS)
+        self.assertEqual(medium.size, STARTING_COLONY_ANTS)
+        self.assertEqual(large.size, STARTING_COLONY_ANTS)
+        self.assertEqual(small.food, STARTING_COLONY_FOOD)
+        self.assertEqual(medium.food, STARTING_COLONY_FOOD)
+        self.assertEqual(large.food, STARTING_COLONY_FOOD)
+        self.assertEqual(info_cost_for_colony(small, opportunity), 3)
         self.assertEqual(info_cost_for_colony(medium, opportunity), 3)
-        self.assertEqual(info_cost_for_colony(large, opportunity), 8)
+        self.assertEqual(info_cost_for_colony(large, opportunity), 3)
 
     def test_colony_style_changes_default_stake_size(self):
         room, harness = self.make_room()
@@ -318,7 +328,7 @@ class GameHarnessTest(unittest.TestCase):
         def vote_for(colony):
             votes = [{"antId": ant.ant_id, "vote": "yes", "weight": 1.0} for ant in colony.active_ants(1)[:20]]
             return {
-                "activeCount": 50,
+                "activeCount": STARTING_COLONY_ANTS,
                 "predictions": {
                     "goal_next_10_yes": votes,
                     "goal_next_10_no": [],
@@ -336,7 +346,7 @@ class GameHarnessTest(unittest.TestCase):
     def test_food_drain_uses_alive_ants_not_starting_size(self):
         _, harness = self.make_room()
         colony = harness.add_colony("Large", 50, "aggressive", "chaos", "low")
-        for ant in colony.ants[:40]:
+        for ant in colony.ants[:10]:
             ant.alive = False
 
         self.assertEqual(len(colony.alive_ants), 10)
@@ -747,6 +757,42 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(room.opportunities, {})
         self.assertFalse([prediction for prediction in room.predictions.values() if not prediction.resolved])
         self.assertTrue(any(event.kind == "void" for event in room.log))
+
+    def test_live_finish_closes_open_predictions_and_finishes_room(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Live Nest", 50, "aggressive", "momentum", "low")
+        room.status = "running_live"
+
+        _process_live_events(
+            harness,
+            [
+                {
+                    "fixtureId": 42,
+                    "seq": 1,
+                    "action": "high_danger_possession",
+                    "highlights": [],
+                    "minute": 88,
+                    "clockSeconds": 5280,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "possession": 1,
+                    "possessionLabel": "France",
+                    "description": "High danger possession - France",
+                }
+            ],
+        )
+        self.assertTrue([prediction for prediction in room.predictions.values() if not prediction.resolved])
+
+        final_timeline = {"events": [{"fixtureId": 42, "seq": 2, "action": "full_time", "raw": {"StatusId": 13}}]}
+        self.assertTrue(_live_timeline_finished(final_timeline))
+        _process_live_events(harness, final_timeline["events"])
+        _finish_live_game(harness)
+
+        self.assertEqual(room.status, "finished")
+        self.assertFalse([prediction for prediction in room.predictions.values() if not prediction.resolved])
+        self.assertTrue(any(event.kind == "game_finished" for event in room.log))
 
     def test_deepseek_ant_agent_vote_drives_prediction(self):
         class FakeAntAgent:
