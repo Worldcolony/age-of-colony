@@ -29,6 +29,21 @@ const USER_LIVE_DAYS = "14";
 const USER_LIVE_LIMIT = "100";
 const ANON_ID_STORAGE_KEY = "aocAnonymousId";
 const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
+const COLONY_SIZE_CHOICES = [
+  { value: 10, label: "10 ants", profile: "Scout squad" },
+  { value: 20, label: "20 ants", profile: "Match squad" },
+  { value: 50, label: "50 ants", profile: "Full squad" },
+];
+const COLONY_STYLE_CHOICES = [
+  { value: "cautious", label: "Cautious" },
+  { value: "balanced", label: "Balanced" },
+  { value: "aggressive", label: "Aggressive" },
+];
+const COLONY_INFO_CHOICES = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
 let countdownTimer = null;
 let copyRoomCodeTimer = null;
 
@@ -80,9 +95,14 @@ const els = {
   colonyForm: document.querySelector("#colonyForm"),
   colonyName: document.querySelector("#colonyName"),
   colonySize: document.querySelector("#colonySize"),
+  colonySizeValue: document.querySelector("#colonySizeValue"),
   colonyStyle: document.querySelector("#colonyStyle"),
-  colonyFavorite: document.querySelector("#colonyFavorite"),
+  colonyStyleValue: document.querySelector("#colonyStyleValue"),
+  colonyFavoriteOptions: document.querySelectorAll('input[name="colonyFavorite"]'),
   colonyInfoNeed: document.querySelector("#colonyInfoNeed"),
+  colonyInfoNeedValue: document.querySelector("#colonyInfoNeedValue"),
+  colonyProfileTitle: document.querySelector("#colonyProfileTitle"),
+  colonyProfileMeta: document.querySelector("#colonyProfileMeta"),
   addColony: document.querySelector("#addColony"),
   gameLeaderboard: document.querySelector("#gameLeaderboard"),
   gameFeed: document.querySelector("#gameFeed"),
@@ -145,6 +165,13 @@ function bindEvents() {
     event.preventDefault();
     addColony();
   });
+  [els.colonySize, els.colonyStyle, els.colonyInfoNeed].forEach((control) => {
+    control.addEventListener("input", updateColonyBuilder);
+  });
+  els.colonyFavoriteOptions.forEach((control) => {
+    control.addEventListener("change", updateColonyBuilder);
+  });
+  updateColonyBuilder();
 }
 
 function applyWorkspaceRole(role, options = {}) {
@@ -590,12 +617,15 @@ async function addColony() {
     return;
   }
   const fallbackName = state.role === "user" ? defaultColonyName() : `Colony ${Date.now().toString().slice(-4)}`;
+  const sizeChoice = sliderChoice(els.colonySize, COLONY_SIZE_CHOICES);
+  const styleChoice = sliderChoice(els.colonyStyle, COLONY_STYLE_CHOICES);
+  const infoChoice = sliderChoice(els.colonyInfoNeed, COLONY_INFO_CHOICES);
   const payload = {
     name: els.colonyName.value.trim() || fallbackName,
-    size: Number(els.colonySize.value),
-    style: els.colonyStyle.value,
-    favoriteContext: els.colonyFavorite.value,
-    infoNeed: els.colonyInfoNeed.value,
+    size: sizeChoice.value,
+    style: styleChoice.value,
+    favoriteContext: selectedColonyFavorite(),
+    infoNeed: infoChoice.value,
   };
   if (state.role === "user") payload.anonymousId = state.identity.anonymousId;
   els.gameStatus.textContent = "Adding colony...";
@@ -607,6 +637,33 @@ async function addColony() {
   } catch (error) {
     els.gameStatus.textContent = error.message;
   }
+}
+
+function updateColonyBuilder() {
+  const sizeChoice = sliderChoice(els.colonySize, COLONY_SIZE_CHOICES);
+  const styleChoice = sliderChoice(els.colonyStyle, COLONY_STYLE_CHOICES);
+  const infoChoice = sliderChoice(els.colonyInfoNeed, COLONY_INFO_CHOICES);
+  const favoriteLabel = selectedColonyFavoriteLabel();
+  els.colonySizeValue.textContent = sizeChoice.label;
+  els.colonyStyleValue.textContent = styleChoice.label;
+  els.colonyInfoNeedValue.textContent = infoChoice.label;
+  els.colonyProfileTitle.textContent = `${styleChoice.label} ${sizeChoice.profile.toLowerCase()}`;
+  els.colonyProfileMeta.textContent = `${sizeChoice.label} · ${favoriteLabel} · ${infoChoice.label} info`;
+}
+
+function sliderChoice(control, choices) {
+  const index = Math.max(0, Math.min(choices.length - 1, Number(control.value) || 0));
+  return choices[index] || choices[0];
+}
+
+function selectedColonyFavorite() {
+  return Array.from(els.colonyFavoriteOptions).find((control) => control.checked)?.value || "balanced";
+}
+
+function selectedColonyFavoriteLabel() {
+  const value = selectedColonyFavorite();
+  const option = Array.from(els.colonyFavoriteOptions).find((control) => control.value === value);
+  return option?.nextElementSibling?.textContent?.trim() || "Balanced";
 }
 
 async function updateColonyStrategy(colonyId) {

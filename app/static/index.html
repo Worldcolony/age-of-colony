@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-38" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-39" />
   </head>
   <body>
     <header class="topbar">
@@ -167,45 +167,86 @@
           </div>
         </section>
 
-        <form id="colonyForm" class="filters colony-form">
-          <label>
-            Colony name
-            <input id="colonyName" type="text" maxlength="40" placeholder="Your name" autocomplete="off" />
-          </label>
-          <label>
-            Size
-            <select id="colonySize">
-              <option value="10">10 ants</option>
-              <option value="20" selected>20 ants</option>
-              <option value="50">50 ants</option>
-            </select>
-          </label>
-          <label>
-            Dominant style
-            <select id="colonyStyle">
-              <option value="cautious">Cautious</option>
-              <option value="balanced" selected>Balanced</option>
-              <option value="aggressive">Aggressive</option>
-            </select>
-          </label>
-          <label>
-            Favorite ground
-            <select id="colonyFavorite">
-              <option value="balanced" selected>Balanced</option>
-              <option value="penalties">Penalties</option>
-              <option value="corners">Corners</option>
-              <option value="momentum">Momentum</option>
-              <option value="chaos">Chaos</option>
-            </select>
-          </label>
-          <label>
-            Info need
-            <select id="colonyInfoNeed">
-              <option value="low">Low</option>
-              <option value="medium" selected>Medium</option>
-              <option value="high">High</option>
-            </select>
-          </label>
+        <form id="colonyForm" class="colony-form colony-builder">
+          <div class="colony-builder-head">
+            <label class="colony-name-field">
+              Colony name
+              <input id="colonyName" type="text" maxlength="40" placeholder="Your name" autocomplete="off" />
+            </label>
+            <div class="colony-profile-card" aria-live="polite">
+              <span>Profile</span>
+              <strong id="colonyProfileTitle">Balanced match squad</strong>
+              <p id="colonyProfileMeta">20 ants · Balanced · Medium info</p>
+            </div>
+          </div>
+
+          <div class="colony-tuning-grid">
+            <label class="tuning-card">
+              <span class="tuning-head">
+                <span>Size</span>
+                <strong id="colonySizeValue">20 ants</strong>
+              </span>
+              <input id="colonySize" class="range-control" type="range" min="0" max="2" step="1" value="1" />
+              <span class="range-scale" aria-hidden="true">
+                <span>10</span>
+                <span>20</span>
+                <span>50</span>
+              </span>
+            </label>
+
+            <label class="tuning-card">
+              <span class="tuning-head">
+                <span>Temper</span>
+                <strong id="colonyStyleValue">Balanced</strong>
+              </span>
+              <input id="colonyStyle" class="range-control" type="range" min="0" max="2" step="1" value="1" />
+              <span class="range-scale" aria-hidden="true">
+                <span>Cautious</span>
+                <span>Balanced</span>
+                <span>Aggressive</span>
+              </span>
+            </label>
+
+            <label class="tuning-card">
+              <span class="tuning-head">
+                <span>Info</span>
+                <strong id="colonyInfoNeedValue">Medium</strong>
+              </span>
+              <input id="colonyInfoNeed" class="range-control" type="range" min="0" max="2" step="1" value="1" />
+              <span class="range-scale" aria-hidden="true">
+                <span>Low</span>
+                <span>Medium</span>
+                <span>High</span>
+              </span>
+            </label>
+          </div>
+
+          <fieldset class="ground-picker">
+            <legend>Favorite ground</legend>
+            <div class="ground-options">
+              <label>
+                <input type="radio" name="colonyFavorite" value="balanced" checked />
+                <span>Balanced</span>
+              </label>
+              <label>
+                <input type="radio" name="colonyFavorite" value="penalties" />
+                <span>Penalties</span>
+              </label>
+              <label>
+                <input type="radio" name="colonyFavorite" value="corners" />
+                <span>Corners</span>
+              </label>
+              <label>
+                <input type="radio" name="colonyFavorite" value="momentum" />
+                <span>Momentum</span>
+              </label>
+              <label>
+                <input type="radio" name="colonyFavorite" value="chaos" />
+                <span>Chaos</span>
+              </label>
+            </div>
+          </fieldset>
+
           <button id="addColony" type="submit" disabled>Add colony</button>
         </form>
 
@@ -237,6 +278,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-38" type="module"></script>
+    <script src="/static/app.js?v=colony-39" type="module"></script>
   </body>
 </html>
