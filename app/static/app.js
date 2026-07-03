@@ -7,6 +7,7 @@ const state = {
   },
   fixtures: [],
   selected: null,
+  selectedStatus: null,
   game: {
     id: null,
     roomCode: null,
@@ -31,6 +32,7 @@ const ADMIN_REPLAY_DAYS = "14";
 const ADMIN_REPLAY_LIMIT = "150";
 const USER_LIVE_DAYS = "14";
 const USER_LIVE_LIMIT = "100";
+const LIVE_MATCH_WINDOW_MINUTES = 150;
 const ANON_ID_STORAGE_KEY = "aocAnonymousId";
 const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
 const FIXED_COLONY_SIZE = 20;
@@ -351,11 +353,13 @@ function fixtureCountLabel(mode, data) {
 
 async function applyNextFixture(data) {
   const target = data.fixture || state.fixtures[0] || null;
+  const targetStatus = data.status || fixtureLiveStatus(target) || (target ? "next" : "empty");
   state.fixtures = target ? [target] : [];
-  renderLiveMatchTarget(target, data.status || (target ? "next" : "empty"));
+  renderLiveMatchTarget(target, targetStatus);
   if (!target) {
     if (!state.game.id) {
       state.selected = null;
+      state.selectedStatus = null;
       paintSelectedFixture(null);
     }
     setFixtureRows([]);
@@ -364,8 +368,12 @@ async function applyNextFixture(data) {
   }
 
   if (!state.game.id && state.selected?.fixtureId !== target.fixtureId) {
-    setSelectedFixture(target, { reset: false });
+    setSelectedFixture(target, { reset: false, status: targetStatus });
   } else {
+    if (state.selected?.fixtureId === target.fixtureId) {
+      state.selectedStatus = targetStatus;
+      paintSelectedFixture(target);
+    }
     updateGameActions();
   }
 }
@@ -418,11 +426,24 @@ function selectFixture(fixture) {
 }
 
 function setSelectedFixture(fixture, options = {}) {
-  const { reset = true } = options;
+  const { reset = true, status = null } = options;
   if (reset) resetGameUi();
+  state.selectedStatus = fixture ? status || fixtureLiveStatus(fixture) : null;
   paintSelectedFixture(fixture);
   renderFixtures();
   updateGameActions();
+}
+
+function fixtureLiveStatus(fixture) {
+  if (!fixture) return null;
+  const value = fixture.startTimeIso || fixture.startTime;
+  if (!value) return null;
+  const start = new Date(normalizeDateInput(value));
+  if (Number.isNaN(start.getTime())) return null;
+  const diffMs = Date.now() - start.getTime();
+  if (diffMs >= 0 && diffMs <= LIVE_MATCH_WINDOW_MINUTES * 60 * 1000) return "current";
+  if (diffMs < 0) return "next";
+  return null;
 }
 
 function renderLiveMatchTarget(fixture, status = "empty", message = "") {
@@ -439,8 +460,14 @@ function renderLiveMatchTarget(fixture, status = "empty", message = "") {
   els.liveMatchTitle.textContent = hasFixture
     ? `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`
     : "No match available";
+  const liveHint =
+    status === "current"
+      ? "Live now - rooms can still be created."
+      : status === "next"
+        ? "Next kickoff - room can be prepared."
+        : "";
   els.liveMatchMeta.textContent = hasFixture
-    ? [formatDate(fixture.startTimeIso || fixture.startTime), fixture.competition || "Unknown competition", `Fixture ${fixture.fixtureId}`]
+    ? [liveHint, formatDate(fixture.startTimeIso || fixture.startTime), fixture.competition || "Unknown competition", `Fixture ${fixture.fixtureId}`]
         .filter(Boolean)
         .join(" - ")
     : message || "Refresh when the next TXLine fixture is available.";
@@ -460,12 +487,19 @@ function paintSelectedFixture(fixture) {
 
   els.manualFixtureId.value = fixture.fixtureId || "";
   els.selectedTitle.textContent = `${fixture.participant1 || "Participant 1"} - ${fixture.participant2 || "Participant 2"}`;
-  els.selectedMeta.textContent = `${fixture.competition || "Unknown competition"} - Fixture ${fixture.fixtureId}`;
+  const liveNote =
+    state.selectedStatus === "current"
+      ? "Match in progress - you can create a live room now."
+      : state.selectedStatus === "next"
+        ? "Next match - create a room before kickoff."
+        : "Fixture selected.";
+  els.selectedMeta.textContent = `${fixture.competition || "Unknown competition"} - Fixture ${fixture.fixtureId} - ${liveNote}`;
   updateScore(fixture.score);
 }
 
 function clearSelection() {
   state.selected = null;
+  state.selectedStatus = null;
   paintSelectedFixture(null);
   renderFixtures();
   updateGameActions();
@@ -479,7 +513,12 @@ async function createGame() {
   const creatorName = state.role === "user" ? currentPlayerName() || "Host" : currentPlayerName();
 
   closeGameStream();
-  els.gameStatus.textContent = state.role === "admin" ? "Creating replay room..." : "Creating live room...";
+  els.gameStatus.textContent =
+    state.role === "admin"
+      ? "Creating replay room..."
+      : state.selectedStatus === "current"
+        ? "Creating live room for the match in progress..."
+        : "Creating live room...";
   try {
     if (creatorName) persistPlayerName(creatorName);
     const payload = {
@@ -529,8 +568,12 @@ async function participateInMatch() {
     els.gameStatus.textContent = "No match is available yet.";
     return;
   }
-  setSelectedFixture(target, { reset: !state.game.id && state.selected?.fixtureId !== target.fixtureId });
-  els.gameStatus.textContent = "Upcoming match selected. Create a room, then join with your name.";
+  const status = state.selectedStatus || "next";
+  setSelectedFixture(target, { reset: !state.game.id && state.selected?.fixtureId !== target.fixtureId, status });
+  els.gameStatus.textContent =
+    status === "current"
+      ? "Match in progress selected. Create a live room, then add your colony."
+      : "Next match selected. Create a room, then join with your name.";
 }
 
 async function loadRoomByCode(roomCode) {
@@ -1686,7 +1729,9 @@ function userRoomStatusText(game = null) {
   const me = currentPlayer(players);
   if (!me) return `Room ${roomCode} ready. Join with your name.`;
   if (!playerIsReady(me)) return `Room ${roomCode} ready. Create your colony.`;
-  if (me.isHost && allPlayersReady(players)) return "Everyone is ready. Start game to lock the room.";
+  if (me.isHost && allPlayersReady(players)) {
+    return state.selectedStatus === "current" ? "Everyone is ready. Connect to the live match now." : "Everyone is ready. Start game to lock the room.";
+  }
   if (me.isHost) return "You are ready. Waiting for every player to create a colony.";
   return "You are ready. Waiting for the host to start.";
 }
@@ -1789,8 +1834,7 @@ function matchStartValue(game = null) {
 }
 
 function formatCountdown(value) {
-  const normalizedValue = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
-  const start = new Date(normalizedValue);
+  const start = new Date(normalizeDateInput(value));
   if (Number.isNaN(start.getTime())) return "Time unavailable";
   const diffMs = start.getTime() - Date.now();
   if (diffMs <= 0) return "Match started";
@@ -1816,6 +1860,8 @@ function updateGameActions() {
   const me = currentPlayer();
   const meReady = playerIsReady(me);
   const roomReady = allPlayersReady();
+  const selectedMatchIsCurrent = state.role === "user" && state.selectedStatus === "current";
+  els.createGame.textContent = isAdmin ? "Create replay room" : selectedMatchIsCurrent ? "Create live room" : "Create room";
   els.createGame.disabled =
     state.role === "user"
       ? state.userView !== "home" || !state.selected?.fixtureId || hasRoom
@@ -1831,7 +1877,7 @@ function updateGameActions() {
   els.addColony.textContent = state.role === "user" && meReady ? "Colony ready" : "Add colony";
   els.joinRoom.textContent = state.role === "admin" ? "Add player" : me ? "Joined" : "Join";
   els.joinRoom.disabled = state.role === "user" ? Boolean(me) || !hasJoinCode || locked : !hasRoom || locked;
-  els.startGameLive.textContent = !hasRoom || me?.isHost ? "Start game" : "Waiting for host";
+  els.startGameLive.textContent = !hasRoom || me?.isHost ? (selectedMatchIsCurrent ? "Connect live" : "Start game") : "Waiting for host";
   els.startGameLive.disabled = isAdmin || !hasRoom || locked || !roomReady || !me?.isHost;
   if (els.finishGameLive) {
     const canFinishLive = state.role === "user" && hasRoom && me?.isHost && ["waiting_kickoff", "running_live"].includes(status);
@@ -2516,7 +2562,7 @@ function formatUsd(value) {
 
 function formatDate(value) {
   if (!value) return "-";
-  const date = new Date(value);
+  const date = new Date(normalizeDateInput(value));
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString("en-US", {
     day: "2-digit",
@@ -2524,6 +2570,12 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function normalizeDateInput(value) {
+  const numericValue = typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value;
+  if (typeof numericValue === "number" && numericValue > 0 && numericValue < 100_000_000_000) return numericValue * 1000;
+  return numericValue;
 }
 
 function gameKindLabel(kind) {

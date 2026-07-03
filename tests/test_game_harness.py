@@ -1549,6 +1549,43 @@ class DemoRunApiTest(unittest.TestCase):
         )
         self.assertEqual(colony_after_lock.status_code, 422)
 
+    def test_live_start_for_match_in_progress_runs_immediately(self):
+        client = TestClient(app)
+        kickoff = datetime.now(timezone.utc) - timedelta(minutes=25)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 939393,
+                "participant1": "Australia",
+                "participant2": "Egypt",
+                "startTimeIso": kickoff.isoformat(),
+                "creatorName": "Host Alice",
+                "anonymousId": "anon_live_host",
+            },
+        ).json()
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Live Nest",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_live_host",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+
+        with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")), patch("app.main._ensure_live_task") as live_task:
+            started = client.post(
+                f"/api/games/{created['gameId']}/start",
+                json={"mode": "live", "source": "updates", "anonymousId": "anon_live_host"},
+            )
+
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()["status"], "running_live")
+        live_task.assert_called_once()
+
     def test_live_host_can_manually_finish_stuck_room(self):
         client = TestClient(app)
         created = client.post(
