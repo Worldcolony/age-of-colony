@@ -63,8 +63,11 @@ body[data-workspace-role="user"] #colonyForm,
 body[data-workspace-role="user"] #startGameLive,
 body[data-workspace-role="user"] #exitGame,
 body[data-workspace-role="user"][data-game-status="created"] .simulation-panel,
+body[data-workspace-role="user"][data-game-status="created"] .bet-board,
 body[data-workspace-role="user"][data-game-status="created"] .game-grid,
 body[data-workspace-role="user"]:not([data-game-status]) .simulation-panel,
+body[data-workspace-role="user"]:not([data-game-status]) .my-colony-panel,
+body[data-workspace-role="user"]:not([data-game-status]) .bet-board,
 body[data-workspace-role="user"]:not([data-game-status]) .game-grid {
   display: none;
 }
@@ -88,7 +91,6 @@ body[data-workspace-role="user"][data-user-view="room"][data-game-status="finish
 body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] #finishGameLive,
 body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .room-setup,
 body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] #colonyForm,
-body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .simulation-panel,
 body[data-workspace-role="user"][data-user-view="room"][data-game-status="finished"] .game-grid section:last-child {
   display: none;
 }
@@ -551,7 +553,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  min-height: 2.25rem;
+  min-height: 2.75rem;
   border: 0;
   border-radius: 6px;
   padding: 0.62rem 0.85rem;
@@ -657,7 +659,7 @@ label {
 }
 
 button.role-button {
-  min-height: 2rem;
+  min-height: 2.75rem;
   border-radius: 6px;
   padding: 0.42rem 0.62rem;
   background: transparent;
@@ -1321,20 +1323,521 @@ tbody tr.selected {
 }
 
 .active-markets {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.4rem;
+  display: grid;
+  gap: 0.55rem;
 }
 
 .market-pill {
+  display: grid;
+  gap: 0.55rem;
   border: 1px solid #bae6fd;
-  border-radius: 999px;
-  padding: 0.25rem 0.6rem;
-  background: #f0f9ff;
+  border-radius: 8px;
+  padding: 0.72rem;
+  background: linear-gradient(180deg, #ffffff 0%, #f0f9ff 100%);
   color: #075985;
+}
+
+.market-pill span {
+  display: block;
+  margin-bottom: 0.18rem;
+  color: #0369a1;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.market-pill strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.3;
+}
+
+.market-pill-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.market-pill-options b {
+  border-radius: 999px;
+  padding: 0.18rem 0.5rem;
+  background: #ffffff;
+  color: #075985;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.my-colony-panel {
+  display: grid;
+  gap: 0.82rem;
+  margin: 0.9rem 0;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  padding: 0.95rem;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fffc 100%);
+  box-shadow: var(--shadow);
+}
+
+.my-colony-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.my-colony-head h3,
+.my-colony-head p,
+.my-colony-empty p {
+  margin: 0;
+}
+
+.my-colony-head h3 {
+  font-size: clamp(1.08rem, 2vw, 1.35rem);
+  line-height: 1.15;
+}
+
+.my-colony-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.6rem;
+  margin-top: 0.38rem !important;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0.22rem 0.58rem;
+  background: #f8fafc;
+  color: #344054;
   font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.my-colony-status.stable,
+.my-colony-status.growth {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.my-colony-status.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.my-colony-status.warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #b54708;
+}
+
+.my-colony-status.danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+
+.my-colony-rank {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 4.2rem;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  padding: 0.54rem 0.7rem;
+  background: #ecfdf5;
+  text-align: center;
+}
+
+.my-colony-rank span {
+  color: #0f766e;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.my-colony-rank strong {
+  color: #115e59;
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.my-colony-primary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.my-colony-metric {
+  display: grid;
+  gap: 0.08rem;
+  min-height: 5rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.64rem;
+  background: #ffffff;
+}
+
+.my-colony-metric b {
+  color: var(--text);
+  font-size: clamp(1.02rem, 2vw, 1.28rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.my-colony-metric > span {
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.my-colony-metric small {
+  color: var(--muted);
+  font-size: 0.7rem;
   font-weight: 800;
+  line-height: 1.25;
+}
+
+.my-colony-metric.good {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.my-colony-metric.good b,
+.my-colony-metric.good > span {
+  color: #166534;
+}
+
+.my-colony-metric.warning,
+.my-colony-metric.active {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.my-colony-metric.warning b,
+.my-colony-metric.warning > span,
+.my-colony-metric.active b,
+.my-colony-metric.active > span {
+  color: #b54708;
+}
+
+.my-colony-metric.danger {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.my-colony-metric.danger b,
+.my-colony-metric.danger > span {
+  color: #b42318;
+}
+
+.my-colony-secondary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.my-colony-pill {
+  display: grid;
+  gap: 0.08rem;
+  border-radius: 8px;
+  padding: 0.46rem 0.56rem;
+  background: #f8fafc;
+}
+
+.my-colony-pill b {
+  color: var(--text);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.my-colony-pill small {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.my-colony-pill.warning {
+  background: #fff7ed;
+}
+
+.my-colony-pill.warning b {
+  color: #b54708;
+}
+
+.my-colony-pill.danger {
+  background: #fef2f2;
+}
+
+.my-colony-pill.danger b {
+  color: #b42318;
+}
+
+.my-colony-open-bets {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  padding: 0.65rem;
+  background: #f8fbff;
+}
+
+.my-colony-open-bets.empty-state {
+  border-color: var(--panel-border);
+  background: #f8fafc;
+}
+
+.my-colony-open-bets.empty-state strong,
+.my-colony-open-bets.empty-state span {
+  display: block;
+}
+
+.my-colony-open-bets.empty-state strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.my-colony-open-bets.empty-state span {
+  margin-top: 0.12rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.my-colony-open-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.my-colony-open-head strong {
+  color: #1d4ed8;
+  font-size: 0.86rem;
+}
+
+.my-colony-open-head span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.my-colony-open-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.my-colony-open-bet,
+.my-colony-more {
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  padding: 0.44rem 0.56rem;
+  background: #ffffff;
+}
+
+.my-colony-open-bet {
+  display: grid;
+  gap: 0.1rem;
+  min-width: min(100%, 13rem);
+}
+
+.my-colony-open-bet b {
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.my-colony-open-bet small,
+.my-colony-more {
+  color: #475467;
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.my-colony-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 0.8rem;
+  background: #f8fafc;
+}
+
+.my-colony-empty p {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.bet-board {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0.9rem 0;
+  border: 1px solid #bfd7ff;
+  border-radius: 8px;
+  padding: 0.9rem;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.95) 0%, rgba(255, 255, 255, 0.98) 42%, rgba(236, 253, 245, 0.9) 100%);
+}
+
+.bet-board-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.section-kicker {
+  display: block;
+  margin-bottom: 0.16rem;
+  color: var(--brand-dark);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.bet-board h3,
+.bet-board p {
+  margin: 0;
+}
+
+.bet-board h3 {
+  font-size: 1rem;
+}
+
+.bet-board-head p {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.bet-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(4.4rem, 1fr));
+  gap: 0.25rem;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  padding: 0.25rem;
+  background: #ffffff;
+}
+
+.bet-tabs button {
+  min-height: 2.75rem;
+  border-radius: 6px;
+  padding: 0.35rem 0.55rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.bet-tabs button.active {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.bet-board-list {
+  display: grid;
+  gap: 0.58rem;
+}
+
+.bet-card {
+  display: grid;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: stretch;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.bet-card-status {
+  display: grid;
+  place-items: center;
+  min-height: 5.2rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.bet-card.won {
+  border-color: #bbf7d0;
+}
+
+.bet-card.won .bet-card-status {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.bet-card.lost {
+  border-color: #fecaca;
+}
+
+.bet-card.lost .bet-card-status {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.bet-card-body {
+  display: grid;
+  gap: 0.42rem;
+  min-width: 0;
+  padding: 0.7rem 0.75rem 0.75rem 0;
+}
+
+.bet-card-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.bet-card-topline strong,
+.bet-card-topline b {
+  display: block;
+  line-height: 1.25;
+}
+
+.bet-card-topline strong {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.bet-card-topline b {
+  color: var(--brand-dark);
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.bet-card.lost .bet-card-topline b {
+  color: var(--danger);
+}
+
+.bet-card-body p {
+  color: #344054;
+  font-size: 0.8rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.bet-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+}
+
+.bet-card-meta span {
+  border-radius: 999px;
+  padding: 0.16rem 0.46rem;
+  background: #f2f4f7;
+  color: #475467;
+  font-size: 0.68rem;
+  font-weight: 850;
 }
 
 .game-grid h3 {
@@ -2001,6 +2504,11 @@ tbody tr.selected {
     grid-template-columns: 1fr;
   }
 
+  .my-colony-primary,
+  .my-colony-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .colony-result-columns {
     grid-template-columns: 1fr;
   }
@@ -2080,6 +2588,43 @@ tbody tr.selected {
   .colony-detail-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .my-colony-head,
+  .my-colony-open-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .my-colony-rank {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .bet-board-head,
+  .bet-card-topline {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bet-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .bet-card {
+    grid-template-columns: 1fr;
+  }
+
+  .bet-card-status {
+    min-height: 2.25rem;
+  }
+
+  .bet-card-body {
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .bet-card-topline b {
+    white-space: normal;
   }
 
   .colony-detail-metrics {

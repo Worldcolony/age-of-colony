@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-49" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-50" />
   </head>
   <body>
     <header class="topbar">
@@ -259,6 +259,28 @@
           </div>
         </div>
 
+        <section id="myColonyPanel" class="my-colony-panel" aria-label="My colony" aria-live="polite">
+          <p class="empty">Create or join a room to see your colony stats.</p>
+        </section>
+
+        <section class="bet-board" aria-label="Bets">
+          <div class="bet-board-head">
+            <div>
+              <span class="section-kicker">Bet board</span>
+              <h3>Colony bets</h3>
+              <p id="betBoardSummary">Open bets, rewards and losses will appear here.</p>
+            </div>
+            <div class="bet-tabs" role="tablist" aria-label="Bet status">
+              <button type="button" class="active" data-bet-tab="open" aria-pressed="true">Open</button>
+              <button type="button" data-bet-tab="won" aria-pressed="false">Won</button>
+              <button type="button" data-bet-tab="lost" aria-pressed="false">Lost</button>
+            </div>
+          </div>
+          <div id="betBoard" class="bet-board-list">
+            <p class="empty">No bet yet.</p>
+          </div>
+        </section>
+
         <div class="game-grid">
           <section>
             <h3 id="leaderboardTitle">Leaderboard</h3>
@@ -279,6 +301,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-49" type="module"></script>
+    <script src="/static/app.js?v=colony-51" type="module"></script>
   </body>
 </html>

@@ -18,6 +18,7 @@ const state = {
     coloniesById: {},
     strategyDrafts: {},
     selectedColonyId: null,
+    betTab: "open",
     status: null,
     activeOpportunities: [],
     agentUsage: null,
@@ -96,6 +97,10 @@ const els = {
   simulationStats: document.querySelector("#simulationStats"),
   agentCost: document.querySelector("#agentCost"),
   activeMarkets: document.querySelector("#activeMarkets"),
+  myColonyPanel: document.querySelector("#myColonyPanel"),
+  betBoardSummary: document.querySelector("#betBoardSummary"),
+  betBoard: document.querySelector("#betBoard"),
+  betTabs: document.querySelectorAll("[data-bet-tab]"),
   colonyForm: document.querySelector("#colonyForm"),
   colonyName: document.querySelector("#colonyName"),
   colonySize: document.querySelector("#colonySize"),
@@ -178,6 +183,9 @@ function bindEvents() {
   });
   els.colonyFavoriteOptions.forEach((control) => {
     control.addEventListener("change", updateColonyBuilder);
+  });
+  els.betTabs.forEach((button) => {
+    button.addEventListener("click", () => selectBetTab(button.dataset.betTab));
   });
   updateColonyBuilder();
 }
@@ -822,6 +830,8 @@ async function loadGameReplay() {
   (data.events || []).forEach(appendGameEvent);
   state.game.logCount = Math.max(state.game.logCount || 0, state.game.events.length);
   renderSelectedColonyDetail();
+  renderMyColonyPanel();
+  renderBetBoard();
 }
 
 function resetGameUi(message = null) {
@@ -835,6 +845,7 @@ function resetGameUi(message = null) {
   state.game.coloniesById = {};
   state.game.strategyDrafts = {};
   state.game.selectedColonyId = null;
+  state.game.betTab = "open";
   state.game.status = null;
   state.game.activeOpportunities = [];
   state.game.agentUsage = null;
@@ -849,6 +860,8 @@ function resetGameUi(message = null) {
   if (els.leaderboardTitle) els.leaderboardTitle.textContent = "Leaderboard";
   els.gameFeed.innerHTML = `<li class="empty">Automatic decisions will appear here.</li>`;
   renderSelectedColonyDetail();
+  renderMyColonyPanel();
+  renderBetBoard();
   if (state.role !== "admin") els.roomCodeInput.value = "";
   delete document.body.dataset.gameStatus;
   renderSimulationSummary(null);
@@ -873,10 +886,15 @@ function renderGameState(game) {
   document.body.dataset.gameStatus = state.game.status || "created";
   state.game.activeOpportunities = game.activeOpportunities || [];
   state.game.agentUsage = game.agentUsage || state.game.agentUsage;
+  if (!state.game.selectedColonyId && colonies.length) {
+    const ownColony = currentUserColony(colonies);
+    state.game.selectedColonyId = ownColony?.colonyId || colonies[0]?.colonyId || null;
+  }
   updateScore(game.match?.score);
   updateGameActions();
   renderRoomSetup(game);
   renderSimulationSummary(game);
+  renderMyColonyPanel();
   if (els.leaderboardTitle) {
     els.leaderboardTitle.textContent = state.role === "user" && state.game.status === "finished" ? "Final results" : "Leaderboard";
   }
@@ -895,6 +913,7 @@ function renderGameState(game) {
     els.gameLeaderboard.innerHTML = `<p class="empty">No colony.</p>`;
     state.game.selectedColonyId = null;
     renderSelectedColonyDetail();
+    renderBetBoard();
     return;
   }
 
@@ -967,15 +986,21 @@ function renderGameState(game) {
     }),
   );
   renderSelectedColonyDetail();
+  renderMyColonyPanel();
+  renderBetBoard();
 }
 
 async function selectColonyDetail(colonyId) {
   if (!colonyId) return;
   state.game.selectedColonyId = colonyId;
   updateColonyCardSelection();
+  renderMyColonyPanel();
+  renderBetBoard();
   renderSelectedColonyDetail({ loading: shouldLoadReplayEvents() });
   await ensureReplayEventsLoadedForAudit();
   updateColonyCardSelection();
+  renderMyColonyPanel();
+  renderBetBoard();
   renderSelectedColonyDetail();
 }
 
@@ -1008,6 +1033,8 @@ async function ensureReplayEventsLoadedForAudit() {
     if (data.game) renderGameState(data.game);
     renderGameJournal();
     renderSimulationSummary(data.game);
+    renderMyColonyPanel();
+    renderBetBoard();
   } catch (error) {
     els.gameStatus.textContent = `Could not load colony results: ${error.message}`;
   }
@@ -1061,8 +1088,367 @@ function renderSelectedColonyDetail(options = {}) {
   els.colonyDetail.querySelector("[data-close-colony-detail]")?.addEventListener("click", () => {
     state.game.selectedColonyId = null;
     updateColonyCardSelection();
+    renderMyColonyPanel();
+    renderBetBoard();
     renderSelectedColonyDetail();
   });
+}
+
+function renderMyColonyPanel() {
+  if (!els.myColonyPanel) return;
+
+  if (!state.game.id) {
+    renderMyColonyEmpty("My colony", "Create or join a room to see your colony stats.");
+    return;
+  }
+
+  const colony = myColonyForView();
+  if (!colony) {
+    const message =
+      state.role === "user"
+        ? "Join the room and deploy your colony to follow food, ants and bets here."
+        : "Select a colony to inspect its live stats.";
+    renderMyColonyEmpty("My colony", message);
+    return;
+  }
+
+  const rank = colonyRank(colony);
+  const insight = colonyEconomyInsight(colony);
+  const food = Number(colony.food || 0);
+  const alive = Number(colony.antsAlive || 0);
+  const active = Number(colony.antsActive ?? colony.antsAlive ?? 0);
+  const atStake = Number(colony.antsEngaged || 0);
+  const wounded = Number(colony.antsWounded || 0);
+  const dead = Number(colony.antsDead || 0);
+  const wins = Number(colony.wins || 0);
+  const losses = Number(colony.losses || 0);
+  const settled = wins + losses;
+  const accuracy = settled ? `${Math.round((wins / settled) * 100)}%` : "No result";
+  const records = collectBetRecords(colony.colonyId);
+  const openBets = records.filter((record) => record.status === "open");
+  const potentialFood = openBets.reduce((total, record) => total + Math.round(Number(record.ants || 0) * Number(record.multiplier || 0)), 0);
+  const subtitle = state.role === "user" ? "Your live colony status" : "Selected colony status";
+  const netFoodLevel = Number(colony.foodNet || 0) >= 0 ? "good" : "danger";
+  const stakeLevel = metricRiskLevel(atStake, Math.max(active, alive));
+  const lossLevel = metricDeathLevel(dead, Number(colony.size || alive || 1));
+
+  els.myColonyPanel.innerHTML = `
+    <div class="my-colony-head">
+      <div>
+        <span class="section-kicker">${escapeHtml(subtitle)}</span>
+        <h3>${escapeHtml(colony.name)}</h3>
+        <p class="my-colony-status ${escapeHtml(insight.level)}">${escapeHtml(insight.text)}</p>
+      </div>
+      <div class="my-colony-rank" aria-label="${escapeHtml(rank ? `Rank ${rank}` : "Rank unavailable")}">
+        <span>Rank</span>
+        <strong>${rank ? `#${rank}` : "-"}</strong>
+      </div>
+    </div>
+    <div class="my-colony-primary" aria-label="${escapeHtml(`${colony.name} main stats`)}">
+      ${myColonyMetric(formatScoreValue(colony.score), "Score", "ranking power")}
+      ${myColonyMetric(formatInteger(food), "Food", formatSignedNumber(colony.foodNet || 0), netFoodLevel)}
+      ${myColonyMetric(formatInteger(alive), "Alive", `${formatInteger(active)} ready`)}
+      ${myColonyMetric(formatInteger(atStake), "At stake", openBets.length ? `${openBets.length} open bets` : "no open bet", stakeLevel)}
+    </div>
+    <div class="my-colony-secondary" aria-label="${escapeHtml(`${colony.name} bet record`)}">
+      ${myColonyPill(`${wins}W / ${losses}L`, "Record")}
+      ${myColonyPill(accuracy, "Accuracy")}
+      ${myColonyPill(`${formatInteger(wounded)} wounded`, "Recovery", wounded ? "warning" : "")}
+      ${myColonyPill(`${formatInteger(dead)} dead`, "Losses", lossLevel)}
+    </div>
+    ${renderMyColonyOpenBets(openBets, potentialFood)}
+  `;
+}
+
+function renderMyColonyEmpty(title, message) {
+  if (!els.myColonyPanel) return;
+  els.myColonyPanel.innerHTML = `
+    <div class="my-colony-empty">
+      <span class="section-kicker">${escapeHtml(title)}</span>
+      <p>${escapeHtml(message)}</p>
+    </div>
+  `;
+}
+
+function myColonyForView() {
+  const colonies = state.game.colonies || [];
+  if (!colonies.length) return null;
+  if (state.role === "user") return currentUserColony(colonies);
+  return colonies.find((colony) => colony.colonyId === state.game.selectedColonyId) || colonies[0] || null;
+}
+
+function colonyRank(colony) {
+  if (!colony?.colonyId) return null;
+  const ranked = [...(state.game.colonies || [])].sort((left, right) => Number(right.score || 0) - Number(left.score || 0));
+  const index = ranked.findIndex((item) => item.colonyId === colony.colonyId);
+  return index >= 0 ? index + 1 : null;
+}
+
+function myColonyMetric(value, label, caption, level = "") {
+  const className = ["my-colony-metric", level].filter(Boolean).map((item) => escapeHtml(item)).join(" ");
+  return `
+    <span class="${className}">
+      <b>${escapeHtml(value)}</b>
+      <span>${escapeHtml(label)}</span>
+      <small>${escapeHtml(caption)}</small>
+    </span>
+  `;
+}
+
+function myColonyPill(value, label, level = "") {
+  const className = ["my-colony-pill", level].filter(Boolean).map((item) => escapeHtml(item)).join(" ");
+  return `
+    <span class="${className}">
+      <b>${escapeHtml(value)}</b>
+      <small>${escapeHtml(label)}</small>
+    </span>
+  `;
+}
+
+function renderMyColonyOpenBets(openBets, potentialFood) {
+  if (!openBets.length) {
+    return `
+      <div class="my-colony-open-bets empty-state">
+        <strong>No open bet right now</strong>
+        <span>Your ants are free for the next live market.</span>
+      </div>
+    `;
+  }
+
+  const items = openBets
+    .slice(0, 2)
+    .map((record) => {
+      const ants = Number(record.ants || 0);
+      const possibleReward = Math.round(ants * Number(record.multiplier || 0));
+      return `
+        <span class="my-colony-open-bet">
+          <b>${escapeHtml(record.optionLabel || "Prediction")}</b>
+          <small>${formatInteger(ants)} ants · ${possibleReward ? `${formatInteger(possibleReward)} possible food` : "reward pending"}</small>
+        </span>
+      `;
+    })
+    .join("");
+  const more = openBets.length > 2 ? `<span class="my-colony-more">+${openBets.length - 2} more</span>` : "";
+
+  return `
+    <div class="my-colony-open-bets">
+      <div class="my-colony-open-head">
+        <strong>${openBets.length} open ${openBets.length === 1 ? "bet" : "bets"}</strong>
+        <span>${formatInteger(potentialFood)} possible food</span>
+      </div>
+      <div class="my-colony-open-list">
+        ${items}
+        ${more}
+      </div>
+    </div>
+  `;
+}
+
+async function selectBetTab(tab) {
+  const next = ["open", "won", "lost"].includes(tab) ? tab : "open";
+  state.game.betTab = next;
+  renderBetBoard();
+  if (next !== "open" && shouldLoadReplayEvents()) {
+    await ensureReplayEventsLoadedForAudit();
+    renderBetBoard();
+  }
+}
+
+function renderBetBoard() {
+  if (!els.betBoard || !els.betBoardSummary) return;
+  const tab = ["open", "won", "lost"].includes(state.game.betTab) ? state.game.betTab : "open";
+  state.game.betTab = tab;
+  els.betTabs.forEach((button) => {
+    const active = button.dataset.betTab === tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+
+  const scopeColony = betBoardColony();
+  const records = collectBetRecords(scopeColony?.colonyId || null);
+  const visible = records.filter((record) => record.status === tab);
+  const counts = {
+    open: records.filter((record) => record.status === "open").length,
+    won: records.filter((record) => record.status === "won").length,
+    lost: records.filter((record) => record.status === "lost").length,
+    void: records.filter((record) => record.status === "void").length,
+  };
+
+  const scopeLabel =
+    state.role === "user"
+      ? scopeColony
+        ? `${scopeColony.name}'s bets`
+        : "Create your colony to see your bets"
+      : scopeColony
+        ? `${scopeColony.name}'s bets`
+        : "All colony bets";
+  els.betBoardSummary.textContent = `${scopeLabel} · ${counts.open} open · ${counts.won} won · ${counts.lost} lost`;
+
+  if (!state.game.id) {
+    els.betBoard.innerHTML = `<p class="empty">Create a room to track bets.</p>`;
+    return;
+  }
+  if (!scopeColony && state.role === "user") {
+    els.betBoard.innerHTML = `<p class="empty">Join the room and deploy a colony first.</p>`;
+    return;
+  }
+  if (!visible.length) {
+    const message =
+      tab === "open"
+        ? "No open bet right now."
+        : tab === "won"
+          ? "No winning bet yet."
+          : "No losing bet yet.";
+    els.betBoard.innerHTML = `<p class="empty">${escapeHtml(message)}</p>`;
+    return;
+  }
+  els.betBoard.replaceChildren(...visible.slice(0, 12).map(renderBetRecordCard));
+}
+
+function betBoardColony() {
+  const colonies = state.game.colonies || [];
+  if (!colonies.length) return null;
+  const selected = colonies.find((colony) => colony.colonyId === state.game.selectedColonyId) || null;
+  if (state.role === "user") return currentUserColony(colonies) || selected || null;
+  return selected;
+}
+
+function collectBetRecords(colonyId = null) {
+  const marketLabels = new Map();
+  const records = new Map();
+
+  (state.game.events || []).forEach((event) => {
+    if (event.kind === "opportunity") {
+      const opportunity = event.data?.opportunity || {};
+      const marketId = opportunity.opportunityId;
+      if (marketId) {
+        marketLabels.set(marketId, {
+          label: event.message || opportunity.label || "Market",
+          context: opportunity.context || opportunity.kind || "",
+          minute: opportunity.minute,
+        });
+      }
+      return;
+    }
+
+    if (event.kind === "prediction") {
+      const predictionId = event.data?.predictionId || `prediction-${event.index}`;
+      const opportunityId = event.data?.opportunityId || null;
+      const option = event.data?.option || {};
+      const record = {
+        id: predictionId,
+        predictionId,
+        status: "open",
+        colonyId: event.data?.colonyId || "",
+        colonyName: eventColonyName(event) || marketResultColonyName(event),
+        marketId: opportunityId,
+        marketLabel: marketLabels.get(opportunityId)?.label || "Live market",
+        marketContext: marketLabels.get(opportunityId)?.context || "",
+        minute: marketLabels.get(opportunityId)?.minute,
+        optionLabel: option.label || "Prediction",
+        optionRisk: option.risk || "",
+        multiplier: Number(option.multiplier || 0),
+        ants: Number(event.data?.ants || 0),
+        infoBought: Boolean(event.data?.infoBought),
+        eventIndex: Number(event.index || 0),
+        message: event.message || "",
+      };
+      records.set(predictionId, record);
+      return;
+    }
+
+    if (!["settlement", "void"].includes(event.kind)) return;
+    const predictionId = event.data?.predictionId || `result-${event.index}`;
+    const existing = records.get(predictionId) || {
+      id: predictionId,
+      predictionId,
+      status: "open",
+      colonyId: event.data?.colonyId || "",
+      colonyName: marketResultColonyName(event),
+      marketId: event.data?.opportunityId || null,
+      marketLabel: marketLabels.get(event.data?.opportunityId)?.label || "Resolved market",
+      marketContext: marketLabels.get(event.data?.opportunityId)?.context || "",
+      minute: marketLabels.get(event.data?.opportunityId)?.minute,
+      optionLabel: event.data?.option?.label || "Prediction",
+      optionRisk: event.data?.option?.risk || "",
+      multiplier: Number(event.data?.option?.multiplier || 0),
+      ants: Number(event.data?.ants || 0),
+      infoBought: false,
+      eventIndex: Number(event.index || 0),
+      message: event.message || "",
+    };
+    const win = Boolean(event.kind === "settlement" && event.data?.win);
+    records.set(predictionId, {
+      ...existing,
+      status: event.kind === "void" ? "void" : win ? "won" : "lost",
+      colonyId: event.data?.colonyId || existing.colonyId,
+      colonyName: marketResultColonyName(event) || existing.colonyName,
+      optionLabel: event.data?.option?.label || existing.optionLabel,
+      optionRisk: event.data?.option?.risk || existing.optionRisk,
+      multiplier: Number(event.data?.option?.multiplier || existing.multiplier || 0),
+      rewardFood: Number(event.data?.food || 0),
+      rewardLarvae: Number(event.data?.larvae || 0),
+      dead: Number(event.data?.dead || 0),
+      wounded: Number(event.data?.wounded || 0),
+      voidReason: event.data?.reason || "",
+      resultIndex: Number(event.index || existing.eventIndex || 0),
+      resultMessage: event.message || "",
+    });
+  });
+
+  return Array.from(records.values())
+    .filter((record) => !colonyId || record.colonyId === colonyId)
+    .sort((left, right) => Number(right.resultIndex ?? right.eventIndex ?? 0) - Number(left.resultIndex ?? left.eventIndex ?? 0));
+}
+
+function renderBetRecordCard(record) {
+  const item = document.createElement("article");
+  item.className = `bet-card ${record.status}`;
+  const headline =
+    record.status === "open"
+      ? `${formatInteger(record.ants)} ants at stake`
+      : record.status === "won"
+        ? `+${formatInteger(record.rewardFood || 0)} food · +${formatInteger(record.rewardLarvae || 0)} larvae`
+        : `${formatInteger(record.dead || 0)} dead · ${formatInteger(record.wounded || 0)} wounded`;
+  const potential =
+    record.status === "open" && record.multiplier && record.ants
+      ? `<span>Possible reward ${formatInteger(Math.round(record.ants * record.multiplier))} food</span>`
+      : "";
+  const meta = [
+    record.colonyName,
+    record.marketContext ? contextLabel(record.marketContext) : "",
+    record.minute != null ? `minute ${record.minute}` : "",
+    record.optionRisk ? `risk ${record.optionRisk}` : "",
+    record.infoBought ? "info bought" : "",
+  ].filter(Boolean);
+  item.innerHTML = `
+    <div class="bet-card-status">${escapeHtml(betStatusLabel(record.status))}</div>
+    <div class="bet-card-body">
+      <div class="bet-card-topline">
+        <strong>${escapeHtml(record.optionLabel || "Prediction")}</strong>
+        <b>${escapeHtml(headline)}</b>
+      </div>
+      <p>${escapeHtml(record.marketLabel || "Live market")}</p>
+      <div class="bet-card-meta">
+        ${meta.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
+        ${potential}
+      </div>
+    </div>
+  `;
+  return item;
+}
+
+function betStatusLabel(status) {
+  return {
+    open: "Open",
+    won: "Won",
+    lost: "Lost",
+    void: "Void",
+  }[status] || "Bet";
+}
+
+function contextLabel(value) {
+  return String(value || "").replaceAll("_", " ");
 }
 
 function colonyResultEvents(colony) {
@@ -1254,6 +1640,17 @@ function readStrategyControls(colonyId) {
 
 function currentPlayer(players = state.game.players) {
   return (players || []).find((player) => player.anonymousId && player.anonymousId === state.identity.anonymousId) || null;
+}
+
+function currentUserColony(colonies = state.game.colonies) {
+  const me = currentPlayer();
+  const anonymousId = me?.anonymousId || state.identity.anonymousId;
+  const playerId = me?.playerId || "";
+  return (
+    (colonies || []).find((colony) => colony.playerId && playerId && colony.playerId === playerId) ||
+    (colonies || []).find((colony) => colony.playerAnonymousId && anonymousId && colony.playerAnonymousId === anonymousId) ||
+    null
+  );
 }
 
 function playerIsReady(player) {
@@ -1470,6 +1867,8 @@ function appendGameEvent(event) {
   els.gameFeed.scrollTop = els.gameFeed.scrollHeight;
   renderSimulationSummary();
   renderSelectedColonyDetail();
+  renderMyColonyPanel();
+  renderBetBoard();
 }
 
 function renderGameJournal() {
@@ -1830,13 +2229,26 @@ function renderSimulationSummary(game = null) {
     return;
   }
   els.activeMarkets.replaceChildren(
-    ...markets.slice(0, 4).map((market) => {
-      const item = document.createElement("span");
-      item.className = "market-pill";
-      item.textContent = market.label || market.context || "Market";
-      return item;
-    }),
+    ...markets.slice(0, 3).map(renderActiveMarketCard),
   );
+}
+
+function renderActiveMarketCard(market) {
+  const item = document.createElement("article");
+  item.className = "market-pill";
+  const options = Array.isArray(market.options) ? market.options : [];
+  item.innerHTML = `
+    <div>
+      <span>${escapeHtml(contextLabel(market.context || market.kind || "market"))}</span>
+      <strong>${escapeHtml(market.label || market.question || "Live market")}</strong>
+    </div>
+    ${
+      options.length
+        ? `<div class="market-pill-options">${options.slice(0, 4).map((option) => `<b>${escapeHtml(option.label || option.value || "Option")}</b>`).join("")}</div>`
+        : ""
+    }
+  `;
+  return item;
 }
 
 function renderAgentCost(status, usage) {
