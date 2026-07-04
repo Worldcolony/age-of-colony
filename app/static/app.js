@@ -210,7 +210,7 @@ function applyWorkspaceRole(role, options = {}) {
   els.joinRoom.textContent = isAdmin ? "Add player" : "Join";
   els.startGameLive.textContent = "Start game";
   els.startGameLive.hidden = isAdmin;
-  els.finishGameLive.hidden = isAdmin;
+  els.finishGameLive.hidden = true;
   els.exitGame.hidden = true;
   els.startGameReplay.hidden = !isAdmin;
 
