@@ -53,9 +53,9 @@ export default function ResultsPage() {
           </div>
         )}
       </div>
-      <h1 className="hud-title text-[13px]">{finished ? "Final standings" : "Live rankings"}</h1>
+      <h1 className="hud-title text-[28px]">{finished ? "Final standings" : "Live rankings"}</h1>
 
-      <div className="glass p-4">
+      <div className="glass tunnel-map p-4">
         <div className="mb-3 flex items-end justify-center gap-2.5">
           {podium.map((pos) => {
             const c = cols[pos];
@@ -68,8 +68,8 @@ export default function ResultsPage() {
                   <>
                     <div className={`plate grid h-11 w-11 place-items-center text-xl ${pos === 0 ? "!border-gold" : ""}`}>{pos === 0 ? "👑" : "🐜"}</div>
                     <div className="max-w-full truncate text-xs font-bold">{c.name}</div>
-                    <div className="font-mono text-sm font-bold text-gold-deep">{c.score ?? 0}</div>
-                    <div className={`w-full rounded-t-md border-2 ${heights[pos]} ${tint} shadow-[2px_2px_0_rgba(74,58,30,0.3)]`}>
+                    <div className="font-mono text-sm font-bold text-amber">{c.score ?? 0}</div>
+                    <div className={`w-full rounded-t-md border ${heights[pos]} ${tint}`}>
                       <span className="hud-title block pt-1 text-[10px] text-[#5a4a20]">{pos + 1}</span>
                     </div>
                   </>
@@ -86,7 +86,7 @@ export default function ResultsPage() {
             <span className="py-5 text-center text-sm text-ink-faint">No colonies yet.</span>
           ) : (
             cols.map((c, i) => (
-              <div key={c.colonyId} className={`glass flex items-center gap-3 px-3.5 py-3 ${c.colonyId === myColonyId ? "!border-lime shadow-[3px_3px_0_rgba(74,58,30,0.25)]" : ""}`}>
+              <div key={c.colonyId} className={`plate flex items-center gap-3 px-3.5 py-3 ${c.colonyId === myColonyId ? "!border-lime" : ""}`}>
                 <span className="w-7 font-display text-[13px] text-ink-soft">#{i + 1}</span>
                 <span className="flex-1 font-bold">{c.name}</span>
                 <span className="font-mono text-xs text-ink-faint">{c.antsAlive ?? 0}🐜</span>

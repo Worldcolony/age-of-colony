@@ -1,9 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Pixelify_Sans, Press_Start_2P, Silkscreen } from "next/font/google";
 import "./globals.css";
-import WorldColonyBackdrop from "@/three/WorldColonyBackdrop";
 import { BottomNav } from "@/components/BottomNav";
-import { QueenSync } from "@/lib/queen";
 
 const pixelify = Pixelify_Sans({ weight: ["400", "500", "600", "700"], subsets: ["latin"], variable: "--font-pixelify" });
 const pressStart = Press_Start_2P({ weight: "400", subsets: ["latin"], variable: "--font-press" });
@@ -15,7 +13,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#08090C",
+  themeColor: "#111713",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -26,13 +24,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${pixelify.variable} ${pressStart.variable} ${silkscreen.variable}`}>
       <body>
-        <WorldColonyBackdrop />
-        <div aria-hidden className="scrim" />
-        <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-[110px] pt-3">
+        <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-[520px] flex-col gap-3 px-4 pb-[112px] pt-3 sm:px-5 sm:pt-4">
           {children}
         </div>
         <BottomNav />
-        <QueenSync />
       </body>
     </html>
   );
