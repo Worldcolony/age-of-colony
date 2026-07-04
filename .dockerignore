@@ -14,5 +14,7 @@ __pycache__
 .DS_Store
 *.log
 node_modules
+.next
 dist
 build
+docs/design

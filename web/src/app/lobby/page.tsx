@@ -1,11 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API_BASE } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fixtureId, fmtWhen } from "@/lib/format";
-import { AntMarch } from "@/components/AntMarch";
 import type { Fixture } from "@/lib/types";
 
 export default function LobbyPage() {
@@ -17,14 +16,31 @@ export default function LobbyPage() {
   const [featured, setFeatured] = useState<{ f: Fixture; status?: string } | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showJoin, setShowJoin] = useState(false);
   const [code, setCode] = useState("");
-  const [err, setErr] = useState(""); // action errors (create/join)
-  const [loadErr, setLoadErr] = useState(""); // engine-unreachable / fixtures fetch errors
+  const [err, setErr] = useState("");
+  const [loadErr, setLoadErr] = useState("");
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const matches = useMemo(() => {
+    const seen = new Set<string>();
+    const list: Array<{ f: Fixture; featured?: boolean; status?: string }> = [];
+    if (featured) {
+      const key = String(fixtureId(featured.f));
+      seen.add(key);
+      list.push({ f: featured.f, featured: true, status: featured.status });
+    }
+    for (const f of fixtures) {
+      const key = String(fixtureId(f));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push({ f });
+    }
+    return list;
+  }, [featured, fixtures]);
 
   async function load() {
     setLoading(true);
@@ -37,11 +53,10 @@ export default function LobbyPage() {
     } else {
       setFixtures([]);
       const reason = up.reason as Error & { status?: number };
-      // fetch TypeError = engine unreachable; anything else = engine said no (e.g. TXLine creds)
       setLoadErr(
         reason?.status
           ? `Engine error: ${reason.message}`
-          : `Game engine offline at ${API_BASE} — start it with: uvicorn app.main:app --port 8000`,
+          : `Game engine offline at ${API_BASE} - start it with: uvicorn app.main:app --port 8000`,
       );
     }
     setLoading(false);
@@ -82,37 +97,41 @@ export default function LobbyPage() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* brand plate */}
-      <div className="glass flex items-center justify-between gap-3 px-4 py-3">
+    <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
+      <header className="page-top">
         <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-md border-2 border-[color:var(--brd-strong)] bg-[color:var(--color-slot)]">
-            <span className="text-xl">🐜</span>
+          <div className="grid h-9 w-9 place-items-center rounded-xl border border-[color:var(--brd-strong)] bg-[rgba(230,161,58,0.08)] text-lg">
+            🐜
           </div>
           <div>
-            <h1 className="hud-title text-[11px]">Age of Colony</h1>
-            <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-ink-faint">TXLine · World Cup</p>
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-ink-soft">Age of Colony</p>
+            <p className="text-xs text-ink-faint">{wallet.connected ? wallet.short : "guest"}</p>
           </div>
         </div>
-        <span className="plate px-3 py-1.5 font-mono text-[11px] font-bold text-ink-soft">
-          {wallet.connected ? wallet.short : "guest"}
-        </span>
-      </div>
+        <button className="quiet-link text-sm" onClick={() => router.push("/queen")}>
+          Queen
+        </button>
+      </header>
 
-      {featured && <MatchCard f={featured.f} featured status={featured.status} onCreate={createRoom} />}
+      <section className="mt-6">
+        <h1 className="text-3xl font-bold leading-tight text-ink">Choose a match</h1>
+        <p className="mt-2 text-base text-ink-soft">Start a room or join your friends.</p>
+      </section>
 
-      <div className="glass overflow-hidden">
-        <div className="flex flex-col gap-3 p-4">
+      {err && <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
+
+      {showJoin && (
+        <div className="glass flex flex-col gap-3 p-4">
           <div className="flex items-center justify-between">
-            <h2 className="hud-title text-[11px]">🎟️ Join with code</h2>
-            <span className="font-mono text-[9px] uppercase tracking-widest text-ink-faint">6 digits</span>
+            <h2 className="font-bold">Join with code</h2>
+            <span className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">6 digits</span>
           </div>
           <div className="flex gap-2">
             <input
-              className="input plate text-center font-mono text-xl tracking-[0.45em]"
+              className="input text-center font-mono text-xl tracking-[0.45em]"
               inputMode="numeric"
               maxLength={6}
-              placeholder="······"
+              placeholder="------"
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
             />
@@ -121,34 +140,36 @@ export default function LobbyPage() {
             </button>
           </div>
         </div>
-        <AntMarch className="border-t-2 border-[color:var(--brd-soft)] bg-[color:var(--color-slot)] py-1" />
-      </div>
-
-      <div className="mt-1 flex items-center justify-between">
-        <h2 className="hud-title text-[11px] drop-shadow-[1px_1px_0_rgba(255,250,235,0.5)]">Upcoming matches</h2>
-        <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={load}>
-          ↻
-        </button>
-      </div>
-
-      {err && <p className="text-sm font-bold text-danger">{err}</p>}
-      {loading ? (
-        <div className="glass grid h-24 place-items-center p-4 text-ink-faint">Loading…</div>
-      ) : loadErr ? (
-        <div className="glass flex flex-col gap-3 border-l-4 border-l-danger p-4">
-          <p className="font-bold">🔌 Can&apos;t reach the game engine</p>
-          <p className="break-all font-mono text-xs text-ink-soft">{loadErr}</p>
-          <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={load}>↻ Retry</button>
-        </div>
-      ) : fixtures.length === 0 ? (
-        <div className="glass p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days. Try Admin → replay a past match.</div>
-      ) : (
-        fixtures.slice(0, 20).map((f) => <MatchCard key={String(fixtureId(f))} f={f} onCreate={createRoom} />)
       )}
 
-      <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={() => router.push("/admin")}>
-        Admin · replay a past match
-      </button>
+      {loading ? (
+        <div className="glass grid h-28 place-items-center p-4 text-ink-faint">Loading matches...</div>
+      ) : loadErr ? (
+        <div className="glass flex flex-col gap-3 border-l-4 border-l-danger p-4">
+          <p className="font-bold">Can&apos;t reach the game engine</p>
+          <p className="break-all font-mono text-xs text-ink-soft">{loadErr}</p>
+          <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={load}>Retry</button>
+        </div>
+      ) : matches.length === 0 ? (
+        <div className="glass p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days. Try an admin replay.</div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {matches.slice(0, 8).map((item) => (
+            <MatchCard key={String(fixtureId(item.f))} {...item} onCreate={createRoom} />
+          ))}
+        </div>
+      )}
+
+      <div className="bottom-action">
+        <div className="bottom-action-inner">
+          <button className="quiet-link py-2 text-base" onClick={() => setShowJoin((v) => !v)}>
+            {showJoin ? "Hide code entry" : "Join with code"}
+          </button>
+          <button className="quiet-link py-2 text-xs text-ink-faint" onClick={() => router.push("/admin")}>
+            Admin replay
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -158,39 +179,34 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
   const p2 = teamName(f.participant2);
   const live = status === "current";
   return (
-    <div className={`glass flex flex-col gap-3 p-4 ${featured ? "bracket !bg-parch-strong" : ""}`}>
-      {featured && (
-        <div className="flex items-center justify-between">
-          <p className="eyebrow">⚽ Featured match</p>
-          {live ? (
-            <span className="flex items-center gap-1.5 rounded-full border-2 border-rust/50 px-3 py-0.5 font-mono text-[10px] font-bold text-rust">
-              <span className="live-dot" /> LIVE
-            </span>
-          ) : (
-            <span className="rounded-full border-2 border-brd px-3 py-0.5 font-mono text-[10px] font-bold uppercase text-ink-faint">{status === "next" ? "Next up" : "Upcoming"}</span>
-          )}
+    <div className={`glass match-card-media flex flex-col gap-4 p-4 ${featured ? "pheromone-line" : ""}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3 font-bold">
+          <span className="plate grid h-12 w-14 shrink-0 place-items-center text-2xl">{flag(p1)}</span>
+          <span className="truncate text-2xl">{p1}</span>
         </div>
+        <span className="font-mono text-sm font-bold uppercase text-gold">vs</span>
+        <div className="flex min-w-0 flex-1 flex-row-reverse items-center gap-3 text-right font-bold">
+          <span className="plate grid h-12 w-14 shrink-0 place-items-center text-2xl">{flag(p2)}</span>
+          <span className="truncate text-2xl">{p2}</span>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 text-sm text-ink-soft">
+        <span className="truncate">{f.competition ?? (featured ? "Featured match" : "Upcoming")}</span>
+        <span className={`status-pill ${live ? "!border-rust/50 !text-rust" : ""}`}>
+          {live && <span className="live-dot" />}
+          {live ? "Live" : f.startTime ? fmtWhen(f.startTime) : "Live starts soon"}
+        </span>
+      </div>
+      {featured ? (
+        <button className="btn btn-primary" onClick={() => onCreate(f)}>
+          Create room
+        </button>
+      ) : (
+        <button className="btn btn-ghost !min-h-0 py-2.5 text-sm" onClick={() => onCreate(f)}>
+          Create room
+        </button>
       )}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 font-bold">
-          <span className="plate grid h-11 w-11 shrink-0 place-items-center text-2xl">{flag(p1)}</span>
-          <span className="truncate text-[15px]">{p1}</span>
-        </div>
-        <span className="hud-title shrink-0 text-[9px] text-ink-faint">vs</span>
-        <div className="flex min-w-0 flex-1 flex-row-reverse items-center gap-2.5 text-right font-bold">
-          <span className="plate grid h-11 w-11 shrink-0 place-items-center text-2xl">{flag(p2)}</span>
-          <span className="truncate text-[15px]">{p2}</span>
-        </div>
-      </div>
-      <div className="flex items-center justify-between text-xs text-ink-faint">
-        <span className="truncate">{f.competition ?? ""}</span>
-        {f.startTime ? (
-          <span className="plate shrink-0 px-2.5 py-0.5 font-mono text-[11px] font-bold text-gold-deep">⏱ {fmtWhen(f.startTime)}</span>
-        ) : null}
-      </div>
-      <button className={`btn ${featured ? "btn-primary" : "btn-ghost"}`} onClick={() => onCreate(f)}>
-        {featured ? "🏟️ Create room & play" : "Create room"}
-      </button>
     </div>
   );
 }

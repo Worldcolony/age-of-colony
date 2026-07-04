@@ -19,6 +19,8 @@ export interface Colony {
   colonyId: string;
   name: string;
   size: number;
+  playerId?: string;
+  playerAnonymousId?: string;
   style: Style;
   favoriteContext: FavoriteContext;
   infoNeed: InfoNeed;
@@ -42,19 +44,29 @@ export interface Colony {
 export interface Player {
   playerId: string;
   name: string;
+  anonymousId?: string;
+  isHost?: boolean;
+  ready?: boolean;
+  colonyId?: string;
+  colonyName?: string;
 }
 
 export interface OpportunityOption {
+  optionId?: string;
   value?: string;
   label?: string;
+  risk?: string;
+  multiplier?: number;
 }
 
 export interface Opportunity {
+  opportunityId?: string;
   label?: string;
   question?: string;
   kind?: string; // safe | precision | chaos | hero
   options?: OpportunityOption[];
   deadlineLabel?: string;
+  infoCost?: number;
 }
 
 export interface MatchScore {
@@ -97,6 +109,7 @@ export interface CreateColonyBody {
   style: Style;
   favoriteContext: FavoriteContext;
   infoNeed: InfoNeed;
+  anonymousId?: string;
 }
 
 export interface StrategyPatch {

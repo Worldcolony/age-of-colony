@@ -1,4 +1,4 @@
-// Age of Colony — typed API client for the FastAPI engine (separate origin).
+// Age of Colony — typed API client for the FastAPI engine.
 import type {
   CreateColonyBody,
   Fixture,
@@ -6,7 +6,7 @@ import type {
   StrategyPatch,
 } from "./types";
 
-export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
 export class ApiError extends Error {
   status: number;
@@ -111,8 +111,12 @@ export const api = {
   addColony: (id: string, body: CreateColonyBody) => req<GameState>(`/api/games/${id}/colonies`, "POST", body),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),
-  startGame: (id: string, mode: "replay" | "live" = "live") =>
-    req<GameState>(`/api/games/${id}/start`, "POST", { mode, source: mode === "replay" ? "historical" : "updates" }),
+  startGame: (id: string, mode: "replay" | "live" = "live", opts?: { anonymousId?: string }) =>
+    req<GameState>(`/api/games/${id}/start`, "POST", {
+      mode,
+      source: mode === "replay" ? "historical" : "updates",
+      anonymousId: opts?.anonymousId,
+    }),
   rerun: (id: string) => req<GameState>(`/api/games/${id}/rerun`, "POST", { mode: "replay", source: "historical" }),
 
   demoMatches: () => req<FixtureList>("/api/demo/matches"),

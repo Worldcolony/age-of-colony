@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
@@ -7,6 +7,8 @@ import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName } from "@/lib/format";
 import type { Player } from "@/lib/types";
+
+const RUNNING = new Set(["running_replay", "running_live", "waiting_kickoff"]);
 
 export default function RoomPage() {
   const router = useRouter();
@@ -20,10 +22,12 @@ export default function RoomPage() {
   const [name, setName] = useState(wallet.name || wallet.short || "");
   const [msg, setMsg] = useState("");
   const [joined, setJoined] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
   const anonId = typeof window !== "undefined" ? getAnonId() : "";
+  const roomCode = game?.roomCode || code;
 
   useEffect(() => {
     api
@@ -31,27 +35,45 @@ export default function RoomPage() {
       .then((g) => {
         setGame(g);
         setPlayers(g.players || []);
-        if (g.players?.some((p) => (p as Player & { anonymousId?: string }).anonymousId === anonId)) setJoined(true);
+        if (g.players?.some((p) => p.anonymousId === anonId)) setJoined(true);
       })
       .catch((e) => setMsg((e as Error).message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  // live presence via the game's SSE stream (keyed by gameId, not room code)
   useGameStream(game?.gameId ?? null, {
-    onState: (g) => setPlayers(g.players || []),
+    onState: (g) => {
+      setGame(g);
+      setPlayers(g.players || []);
+      if (g.status && RUNNING.has(g.status)) router.push(`/cockpit/${g.gameId}`);
+    },
     onEvent: (e) => { if (e.kind === "player_joined") setMsg(e.message); },
   });
+
+  const me = useMemo(() => players.find((p) => p.anonymousId === anonId), [players, anonId]);
+  const isJoined = joined || Boolean(me);
+  const isHost = Boolean(me?.isHost || (game?.owner?.anonymousId && game.owner.anonymousId === anonId));
+  const myReady = Boolean(me?.ready);
+  const missingPlayers = players.filter((p) => !p.ready);
+  const hasColony = Boolean(game?.colonies?.length);
+  const canStart = Boolean(isHost && hasColony && missingPlayers.length === 0 && game?.status === "created");
+  const startHelper = !isHost
+    ? "Waiting for the host to start."
+    : !hasColony
+      ? "Create at least one colony before start."
+      : missingPlayers.length
+        ? `Waiting for ${missingPlayers[0].name}'s colony`
+        : "Everyone is ready.";
 
   async function join() {
     if (!name.trim()) return setMsg("Enter a name.");
     try {
-      const g = await api.joinRoomByCode(code, name.trim(), anonId);
+      const g = await api.joinRoomByCode(roomCode, name.trim(), anonId);
       setGame(g);
       setPlayers(g.players || []);
       useStore.getState().setWallet({ name: name.trim() });
       setJoined(true);
-      setMsg(`${name} joined.`);
+      setMsg(`${name.trim()} joined.`);
     } catch (e) {
       setMsg((e as Error).message);
     }
@@ -59,67 +81,127 @@ export default function RoomPage() {
 
   async function copyCode() {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(roomCode);
       setMsg("Code copied.");
     } catch {
-      setMsg(code);
+      setMsg(roomCode);
     }
   }
 
   async function share() {
-    const text = `Join my Age of Colony room — code ${code} (${p1} vs ${p2})`;
+    const text = `Join my Age of Colony room - code ${roomCode} (${p1} vs ${p2})`;
+    const url = typeof location !== "undefined" ? location.href : undefined;
     try {
-      if (navigator.share) await navigator.share({ title: "Age of Colony", text });
-      else { await navigator.clipboard.writeText(text); setMsg("Invite copied."); }
+      if (navigator.share) await navigator.share({ title: "Age of Colony", text, url });
+      else { await navigator.clipboard.writeText(url ? `${text} ${url}` : text); setMsg("Invite copied."); }
     } catch { /* cancelled */ }
   }
 
+  async function start() {
+    if (!game?.gameId || !canStart) return;
+    setStarting(true);
+    setMsg("");
+    try {
+      const g = await api.startGame(game.gameId, "live", { anonymousId: anonId });
+      setGame(g);
+      router.push(`/cockpit/${g.gameId}`);
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
   return (
-    <div className="flex flex-col gap-3">
-      <button className="text-sm font-semibold text-ink-soft" onClick={() => router.push("/lobby")}>← Lobby</button>
+    <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
+      <header className="page-top">
+        <button className="icon-btn" aria-label="Back to lobby" onClick={() => router.push("/lobby")}>←</button>
+        <h1 className="text-xl font-bold">Room</h1>
+        <span className="status-pill">{game?.status === "created" ? "Pre-match" : game?.status?.replace("_", " ") || "Room"}</span>
+      </header>
 
-      <div className="glass p-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-bold"><span className="text-2xl">{flag(p1)}</span>{p1}</div>
-          <span className="font-mono text-xs text-ink-faint">VS</span>
-          <div className="flex flex-row-reverse items-center gap-2 font-bold"><span className="text-2xl">{flag(p2)}</span>{p2}</div>
+      <section className="glass match-card-media flex items-center justify-between gap-3 p-4">
+        <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p1)}</span>
+        <div className="min-w-0 flex-1 text-center">
+          <p className="truncate text-2xl font-bold">{p1} <span className="text-base text-gold">vs</span> {p2}</p>
+          <p className="text-sm text-gold">Live starts soon</p>
         </div>
-      </div>
+        <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p2)}</span>
+      </section>
 
-      <div className="glass bracket flex flex-col items-center gap-2 p-4">
-        <p className="eyebrow">Room code</p>
-        <strong className="font-mono text-3xl tracking-[0.35em] text-ink">{code}</strong>
-        <div className="mt-1 flex w-full gap-2">
+      <section className="glass pheromone-line flex flex-col items-center gap-4 p-5 text-center">
+        <div>
+          <p className="text-sm font-bold text-ink-soft">Room code</p>
+          <strong className="font-mono text-5xl tracking-[0.08em] text-gold">{roomCode}</strong>
+          <p className="mt-1 text-sm text-ink-faint">Share this code with your friends.</p>
+        </div>
+        <div className="grid w-full grid-cols-2 gap-3">
           <button className="btn btn-ghost" onClick={copyCode}>Copy</button>
-          <button className="btn btn-ghost" onClick={share}>Share invite</button>
+          <button className="btn btn-ghost !border-cyan/50 !text-cyan" onClick={share}>Share</button>
         </div>
-        <p className="text-center text-xs text-ink-faint">Friends join with this 6-digit code from the lobby.</p>
-      </div>
+      </section>
 
-      <div className="glass flex flex-col gap-3 p-4">
-        <h2 className="hud-title text-[11px]">Players</h2>
-        <div className="flex gap-2">
-          <input className="input" maxLength={32} placeholder={wallet.short || "Your name"} value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="btn btn-primary !w-auto shrink-0 px-5" onClick={join}>{joined ? "Update" : "Join"}</button>
+      <section className="glass flex flex-col gap-3 p-4">
+        <div className="flex items-center justify-between">
+          <h2 className="font-bold">Players {players.length ? `(${players.filter((p) => p.ready).length}/${players.length})` : ""}</h2>
+          {isHost && <span className="status-pill">Host</span>}
         </div>
-        <div className="flex flex-col gap-2">
+
+        {!isJoined && (
+          <div className="flex gap-2">
+            <input className="input" maxLength={32} placeholder={wallet.short || "Your name"} value={name} onChange={(e) => setName(e.target.value)} />
+            <button className="btn btn-primary !w-auto shrink-0 px-5" onClick={join}>Join</button>
+          </div>
+        )}
+
+        <div className="flex flex-col divide-y divide-[color:var(--brd-soft)]">
           {players.length === 0 ? (
-            <span className="text-center text-sm text-ink-faint">No players yet — you go first.</span>
+            <span className="py-5 text-center text-sm text-ink-faint">No players yet.</span>
           ) : (
             players.map((p) => (
-              <div key={p.playerId || p.name} className="flex items-center justify-between rounded-md border-2 border-brd bg-slot px-4 py-2.5">
-                <strong>{p.name}</strong>
-                <span className="rounded-full border-2 border-green/50 px-3 py-0.5 text-xs font-bold text-green">ready</span>
+              <div key={p.playerId || p.name} className="flex items-center gap-3 py-3">
+                <span className={`grid h-10 w-10 place-items-center rounded-full border ${p.ready ? "border-green/70 text-green" : "border-rust/70 text-rust"}`}>🐜</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <strong className="truncate">{p.name}</strong>
+                    {p.isHost && <span className="rounded-md border border-gold/50 px-2 py-0.5 text-xs font-bold text-gold">Host</span>}
+                  </div>
+                  {p.colonyName && <p className="truncate text-xs text-ink-faint">{p.colonyName}</p>}
+                </div>
+                <span className={`text-sm font-bold ${p.ready ? "text-green" : "text-rust"}`}>
+                  {p.ready ? "ready" : "needs colony"}
+                </span>
               </div>
             ))
           )}
         </div>
-      </div>
+      </section>
 
-      {msg && <p className="text-center text-sm text-ink-soft">{msg}</p>}
-      <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push("/setup")}>
-        Set up my colony →
-      </button>
+      {msg && <p className="rounded-lg border border-[color:var(--brd-soft)] bg-black/20 px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
+
+      <div className="bottom-action">
+        <div className="bottom-action-inner">
+          {!isJoined ? (
+            <button className="btn btn-primary" onClick={join}>Join room</button>
+          ) : !myReady ? (
+            <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push("/setup")}>
+              Create my colony
+            </button>
+          ) : isHost ? (
+            <>
+              <button className="btn btn-primary" disabled={!canStart || starting} onClick={start}>
+                {starting ? "Starting..." : "Start match"}
+              </button>
+              <p className="text-center text-sm text-ink-faint">{startHelper}</p>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-ghost" disabled>Waiting for host</button>
+              <p className="text-center text-sm text-ink-faint">{startHelper}</p>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

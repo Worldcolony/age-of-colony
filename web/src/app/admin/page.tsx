@@ -50,7 +50,7 @@ export default function AdminPage() {
     setMatchFixture(f);
     try {
       const g = await api.createGame({ fixtureId: id, participant1: f.participant1 ?? null, participant2: f.participant2 ?? null });
-      router.push(`/room/${g.gameId}`);
+      router.push(`/room/${g.roomCode || g.gameId}`);
     } catch (e) { setMsg((e as Error).message); }
   }
 
