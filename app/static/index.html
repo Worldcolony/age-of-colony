@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Age of Colony</title>
-    <link rel="stylesheet" href="/static/styles.css?v=colony-54" />
+    <link rel="stylesheet" href="/static/styles.css?v=colony-55" />
   </head>
   <body>
     <header class="topbar">
@@ -312,6 +312,25 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=colony-54" type="module"></script>
+    <nav id="footerNav" class="tabbar" aria-label="Main">
+      <button type="button" data-footer-tab="play" data-active="true" data-disabled="false">
+        <span class="ic">▶</span>
+        <span>Play</span>
+      </button>
+      <button type="button" data-footer-tab="room" data-active="false" data-disabled="false">
+        <span class="ic">🎟️</span>
+        <span>Room</span>
+      </button>
+      <button type="button" data-footer-tab="colony" data-active="false" data-disabled="true" disabled>
+        <span class="ic">🐜</span>
+        <span>Colony</span>
+      </button>
+      <button type="button" data-footer-tab="ranks" data-active="false" data-disabled="true" disabled>
+        <span class="ic">🏆</span>
+        <span>Ranks</span>
+      </button>
+    </nav>
+
+    <script src="/static/app.js?v=colony-55" type="module"></script>
   </body>
 </html>
