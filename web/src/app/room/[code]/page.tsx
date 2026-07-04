@@ -42,11 +42,17 @@ export default function RoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
+  useEffect(() => {
+    if (game?.gameId && game.status && RUNNING.has(game.status)) {
+      router.replace(`/cockpit/${game.gameId}`);
+    }
+  }, [game?.gameId, game?.status, router]);
+
   useGameStream(game?.gameId ?? null, {
     onState: (g) => {
       setGame(g);
       setPlayers(g.players || []);
-      if (g.status && RUNNING.has(g.status)) router.push(`/cockpit/${g.gameId}`);
+      if (g.gameId && g.status && RUNNING.has(g.status)) router.replace(`/cockpit/${g.gameId}`);
     },
     onEvent: (e) => { if (e.kind === "player_joined") setMsg(e.message); },
   });
@@ -182,7 +188,14 @@ export default function RoomPage() {
 
       <div className="bottom-action">
         <div className="bottom-action-inner">
-          {!isJoined ? (
+          {game?.gameId && game.status && RUNNING.has(game.status) ? (
+            <>
+              <button className="btn btn-primary" onClick={() => router.replace(`/cockpit/${game.gameId}`)}>
+                Enter live cockpit
+              </button>
+              <p className="text-center text-sm text-ink-faint">Match is running.</p>
+            </>
+          ) : !isJoined ? (
             <button className="btn btn-primary" onClick={join}>Join room</button>
           ) : !myReady ? (
             <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push("/setup")}>
