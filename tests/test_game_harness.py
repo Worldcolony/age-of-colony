@@ -6,7 +6,15 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
-from app.main import app, _finish_live_game, _live_timeline_finished, _pick_live_target_fixture, _process_live_events, game_manager
+from app.main import (
+    app,
+    _finish_live_game,
+    _live_timeline_finished,
+    _merge_restored_events,
+    _pick_live_target_fixture,
+    _process_live_events,
+    game_manager,
+)
 from app.game.harness import (
     GameHarness,
     GameManager,
@@ -222,6 +230,24 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(public["colonies"][0]["infoNeed"], "low")
         self.assertTrue(any(event.kind == "player_joined" for event in room.log))
         self.assertTrue(any(event.kind == "strategy_updated" for event in room.log))
+
+    def test_restored_event_log_merges_supabase_events_once(self):
+        room, _ = self.make_room()
+        room.log.clear()
+
+        _merge_restored_events(
+            room,
+            [
+                {"index": 1, "kind": "game_started", "message": "Started", "data": {"mode": "live"}, "createdAt": 10},
+                {"index": 0, "kind": "game_created", "message": "Created", "data": {"roomCode": room.room_code}},
+                {"index": 1, "kind": "game_started", "message": "Duplicate", "data": {}},
+            ],
+        )
+        room.add_log("live_sync", "Next live update.")
+
+        self.assertEqual([event.index for event in room.log], [0, 1, 2])
+        self.assertEqual(room.log[1].message, "Started")
+        self.assertEqual(room.log[2].kind, "live_sync")
 
     def test_anonymous_owner_and_player_identity_are_public(self):
         manager = GameManager()

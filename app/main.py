@@ -21,6 +21,7 @@ from .game.harness import (
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     ColonyState,
+    GameLogEvent,
     GameRoom,
     PlayerState,
     generate_ants,
@@ -681,7 +682,8 @@ async def game_state(game_id: str) -> dict[str, Any]:
         stored_game = replay["game"]
         if stored_game.get("status") in {"waiting_kickoff", "running_live"}:
             room = _restore_room_from_stored_row(
-                {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game}
+                {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
+                events=replay.get("events") or [],
             )
             await _ensure_room_progress(room)
             return room.public_state()
@@ -697,6 +699,7 @@ async def game_replay(game_id: str) -> dict[str, Any]:
         if replay:
             return replay
         raise HTTPException(status_code=404, detail="Game not found.")
+    await _ensure_room_log_hydrated(room)
     return {
         "game": room.public_state(),
         "events": [event.public_state() for event in room.log],
@@ -714,8 +717,10 @@ async def game_events(game_id: str) -> StreamingResponse:
         if stored_game.get("status") not in {"waiting_kickoff", "running_live"}:
             raise HTTPException(status_code=404, detail="Live event stream not available for stored replay.")
         room = _restore_room_from_stored_row(
-            {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game}
+            {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
+            events=replay.get("events") or [],
         )
+    await _ensure_room_log_hydrated(room)
     await _ensure_room_progress(room)
 
     async def generate() -> AsyncIterator[str]:
@@ -1159,17 +1164,23 @@ async def _get_game_or_restore_404(game_id: str):
     replay = await _stored_replay_or_none(game_id)
     if replay:
         stored_row = (replay.get("stored") or {}).get("game") or {}
-        return _restore_room_from_stored_row({**stored_row, "public_state": replay.get("game") or stored_row.get("public_state")})
+        return _restore_room_from_stored_row(
+            {**stored_row, "public_state": replay.get("game") or stored_row.get("public_state")},
+            events=replay.get("events") or [],
+        )
     raise HTTPException(status_code=404, detail="Game not found.")
 
 
-def _restore_room_from_stored_row(row: dict[str, Any]):
+def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str, Any]] | None = None):
     public_state = row.get("public_state") or row
     game_id = public_state.get("gameId") or row.get("game_id")
     if not game_id:
         raise HTTPException(status_code=404, detail="Game not found.")
     existing = game_manager.get_room(str(game_id))
     if existing:
+        _merge_restored_events(existing, events or [])
+        if events is not None:
+            setattr(existing, "_aoc_log_hydrated", True)
         return existing
 
     owner = public_state.get("owner") or {}
@@ -1230,7 +1241,59 @@ def _restore_room_from_stored_row(row: dict[str, Any]):
         )
         colony.ants = generate_ants(colony)
         room.colonies[colony.colony_id] = colony
+    _merge_restored_events(room, events or [])
+    if events is not None:
+        setattr(room, "_aoc_log_hydrated", True)
     return game_manager.register_room(room)
+
+
+async def _ensure_room_log_hydrated(room: GameRoom) -> None:
+    if getattr(room, "_aoc_log_hydrated", False):
+        return
+    if not supabase_store.configured:
+        setattr(room, "_aoc_log_hydrated", True)
+        return
+    replay = await _stored_replay_or_none(room.game_id)
+    if replay:
+        _merge_restored_events(room, replay.get("events") or [])
+    setattr(room, "_aoc_log_hydrated", True)
+
+
+def _merge_restored_events(room: GameRoom, events: list[dict[str, Any]]) -> None:
+    if not events:
+        return
+    existing_indexes = {event.index for event in room.log}
+    restored: list[GameLogEvent] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        try:
+            clean_index = int(event.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if clean_index in existing_indexes:
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        kwargs: dict[str, Any] = {}
+        try:
+            created_at = event.get("createdAt")
+            if created_at is not None:
+                kwargs["created_at"] = float(created_at)
+        except (TypeError, ValueError):
+            pass
+        restored.append(
+            GameLogEvent(
+                clean_index,
+                str(event.get("kind") or "event"),
+                str(event.get("message") or ""),
+                data,
+                **kwargs,
+            )
+        )
+        existing_indexes.add(clean_index)
+    if not restored:
+        return
+    room.log = sorted([*room.log, *restored], key=lambda event: event.index)
 
 
 async def _stored_room_by_code_or_none(room_code: str) -> dict[str, Any] | None:

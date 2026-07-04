@@ -4,8 +4,9 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
+import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
-import type { GameEvent, Colony, Opportunity } from "@/lib/types";
+import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldBus } from "@/three/worldBus";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
@@ -56,6 +57,7 @@ export default function CockpitPage() {
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const seen = useRef<Set<number>>(new Set());
+  const anonId = useMemo(() => getAnonId(), []);
 
   function addEvent(e: GameEvent) {
     addEvents([e]);
@@ -81,7 +83,8 @@ export default function CockpitPage() {
         const replay = await api.getReplay(id);
         if (cancelled) return;
         setGame(replay.game);
-        if (!myColonyId && replay.game.colonies[0]) setMyColonyId(replay.game.colonies[0].colonyId);
+        const ownColony = findOwnColony(replay.game, anonId);
+        if (ownColony) setMyColonyId(ownColony.colonyId);
         addEvents(replay.events ?? []);
         setLastSyncAt(Date.now());
       } catch {
@@ -89,7 +92,8 @@ export default function CockpitPage() {
           const g = await api.getGame(id);
           if (cancelled) return;
           setGame(g);
-          if (!myColonyId && g.colonies[0]) setMyColonyId(g.colonies[0].colonyId);
+          const ownColony = findOwnColony(g, anonId);
+          if (ownColony) setMyColonyId(ownColony.colonyId);
           setLastSyncAt(Date.now());
         } catch { /* keep current screen */ }
       }
@@ -127,11 +131,13 @@ export default function CockpitPage() {
   }, [game?.status]);
 
   const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => (b.score || 0) - (a.score || 0)), [game?.colonies]);
-  const myIdx = sorted.findIndex((c) => c.colonyId === myColonyId);
-  const mine = myIdx >= 0 ? sorted[myIdx] : sorted[0];
-  const rank = (myIdx < 0 ? 0 : myIdx) + 1;
-  const p1 = teamName(mf?.participant1 ?? game?.participant1);
-  const p2 = teamName(mf?.participant2 ?? game?.participant2);
+  const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
+  const spectatorFallback = (game?.players?.length ?? 0) === 0 ? sorted[0] : undefined;
+  const mine = ownColony ?? spectatorFallback;
+  const myIdx = mine ? sorted.findIndex((c) => c.colonyId === mine.colonyId) : -1;
+  const rank = myIdx >= 0 ? myIdx + 1 : 0;
+  const p1 = teamName(game?.participant1 ?? mf?.participant1);
+  const p2 = teamName(game?.participant2 ?? mf?.participant2);
   const status = game?.status ?? "";
   const markets = useMemo(() => buildMarkets(game?.activeOpportunities ?? [], events), [game?.activeOpportunities, events]);
   const openMarkets = markets.filter((market) => market.status === "open");
@@ -141,6 +147,12 @@ export default function CockpitPage() {
   const visibleSettled = settledMarkets.slice(0, 5);
   const olderSettled = settledMarkets.slice(5);
   const feedRows = events.filter((e) => isUsefulLiveEvent(e)).slice(0, 5);
+
+  useEffect(() => {
+    if (ownColony?.colonyId && myColonyId !== ownColony.colonyId) {
+      setMyColonyId(ownColony.colonyId);
+    }
+  }, [myColonyId, ownColony?.colonyId, setMyColonyId]);
 
   return (
     <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-3">
@@ -265,6 +277,16 @@ function SectionTitle({ title, count, accent }: { title: string; count: number; 
       <span className="status-pill">{count}</span>
     </div>
   );
+}
+
+function findOwnColony(game: GameState | null | undefined, anonId: string): Colony | undefined {
+  if (!game || !anonId) return undefined;
+  const player = (game.players ?? []).find((candidate) => candidate.anonymousId === anonId);
+  return (game.colonies ?? []).find((colony) => (
+    Boolean(player?.colonyId && colony.colonyId === player.colonyId)
+    || colony.playerAnonymousId === anonId
+    || Boolean(player?.playerId && colony.playerId === player.playerId)
+  ));
 }
 
 function PulseMetric({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
