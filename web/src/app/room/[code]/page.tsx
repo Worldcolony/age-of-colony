@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
-import { flag, teamName } from "@/lib/format";
+import { flag, fmtKickoffLine, teamName } from "@/lib/format";
 import type { Player } from "@/lib/types";
 
 const RUNNING = new Set(["running_replay", "running_live", "waiting_kickoff"]);
@@ -26,6 +26,7 @@ export default function RoomPage() {
 
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
+  const kickoffLine = fmtKickoffLine(game?.startTime ?? mf?.startTime, game?.startTimeIso ?? mf?.startTimeIso);
   const anonId = typeof window !== "undefined" ? getAnonId() : "";
   const roomCode = game?.roomCode || code;
 
@@ -124,7 +125,7 @@ export default function RoomPage() {
         <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p1)}</span>
         <div className="min-w-0 flex-1 text-center">
           <p className="truncate text-2xl font-bold">{p1} <span className="text-base text-gold">vs</span> {p2}</p>
-          <p className="text-sm text-gold">Live starts soon</p>
+          <p className="truncate text-sm font-bold text-gold">{kickoffLine}</p>
         </div>
         <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p2)}</span>
       </section>

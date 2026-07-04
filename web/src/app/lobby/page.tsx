@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { api, API_BASE } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { getAnonId } from "@/lib/anon";
-import { flag, teamName, fixtureId, fmtWhen } from "@/lib/format";
+import { flag, teamName, fixtureId, fmtKickoffLine } from "@/lib/format";
 import type { Fixture } from "@/lib/types";
 
 export default function LobbyPage() {
@@ -195,7 +195,7 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
         <span className="truncate">{f.competition ?? (featured ? "Featured match" : "Upcoming")}</span>
         <span className={`status-pill ${live ? "!border-rust/50 !text-rust" : ""}`}>
           {live && <span className="live-dot" />}
-          {live ? "Live" : f.startTime ? fmtWhen(f.startTime) : "Live starts soon"}
+          {live ? "Live" : fmtKickoffLine(f.startTime, f.startTimeIso)}
         </span>
       </div>
       {featured ? (
