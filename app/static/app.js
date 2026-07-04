@@ -341,6 +341,7 @@ function updateFooterNav() {
   if (!hasRoom && ["colony", "ranks"].includes(state.footerTab)) state.footerTab = state.userView === "join" ? "room" : "play";
   if (!hasGame && state.footerTab === "ranks") state.footerTab = hasRoom ? "room" : "play";
   const activeTab = state.footerTab || (state.userView === "home" ? "play" : "room");
+  document.body.dataset.footerTab = activeTab;
 
   els.footerTabs.forEach((button) => {
     const tab = button.dataset.footerTab;

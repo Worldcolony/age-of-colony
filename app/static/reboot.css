@@ -1101,3 +1101,548 @@ body[data-workspace-role="user"][data-user-view="join"] .join-page {
 body[data-workspace-role="user"][data-user-view="join"] .join-form {
   gap: 0.7rem !important;
 }
+
+/* Responsive recovery pass guided by ui-ux-pro-max:
+   mobile-first, no fixed footer overlap, adaptive tablet/desktop widths. */
+:root {
+  --aoc-page-inset: clamp(1rem, 4vw, 2rem);
+  --aoc-phone-max: 32.5rem;
+  --aoc-form-max: 38rem;
+  --aoc-room-max: 62rem;
+  --aoc-home-max: 64rem;
+  --aoc-footer-height: 4.75rem;
+  --aoc-footer-space: 6.4rem;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 0;
+}
+
+body {
+  min-height: 100dvh;
+  padding-bottom: calc(var(--aoc-footer-space) + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+.topbar,
+.layout {
+  width: min(calc(100% - var(--aoc-page-inset)), var(--aoc-phone-max)) !important;
+  max-width: var(--aoc-phone-max) !important;
+}
+
+.topbar {
+  gap: clamp(0.32rem, 1.2vw, 0.55rem) !important;
+  padding-inline: 0 !important;
+}
+
+.topbar > div:first-child {
+  min-width: 0;
+}
+
+.topbar h1,
+.eyebrow,
+.badge {
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 0.6rem !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.layout,
+body[data-workspace-role="user"] .layout {
+  padding-inline: 0 !important;
+  padding-bottom: calc(var(--aoc-footer-space) + 1rem + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+.panel {
+  overflow: clip;
+}
+
+@supports not (overflow: clip) {
+  .panel {
+    overflow: hidden;
+  }
+}
+
+.panel-heading {
+  min-width: 0;
+}
+
+.panel-heading > *,
+.live-match-card > *,
+.room-code-row > *,
+.colony-builder-banner > * {
+  min-width: 0;
+}
+
+input,
+select,
+button {
+  min-height: 44px !important;
+  max-width: 100%;
+  font-size: max(0.95rem, 16px);
+}
+
+.range-control {
+  min-height: 44px !important;
+}
+
+.tabbar {
+  width: min(calc(100% - var(--aoc-page-inset)), var(--aoc-phone-max)) !important;
+  min-height: var(--aoc-footer-height);
+  bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px)) !important;
+  align-items: stretch;
+}
+
+.tabbar button {
+  min-height: 3.55rem !important;
+  display: grid !important;
+  place-items: center;
+  align-content: center;
+  gap: 0.12rem;
+  font-size: clamp(0.66rem, 2.45vw, 0.78rem) !important;
+  line-height: 1.05;
+}
+
+.tabbar button .ic {
+  position: relative;
+  display: grid;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0 auto 0.08rem;
+  place-items: center;
+  color: currentColor;
+  filter: none;
+}
+
+.tabbar button .ic::before,
+.tabbar button .ic::after {
+  content: "";
+  position: absolute;
+  display: block;
+}
+
+.ic-play::before {
+  width: 0;
+  height: 0;
+  margin-left: 0.14rem;
+  border-top: 0.34rem solid transparent;
+  border-bottom: 0.34rem solid transparent;
+  border-left: 0.54rem solid currentColor;
+}
+
+.ic-room::before {
+  width: 1.08rem;
+  height: 0.72rem;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+}
+
+.ic-room::after {
+  width: 0.16rem;
+  height: 0.16rem;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: -0.42rem 0 0 currentColor, 0.42rem 0 0 currentColor;
+}
+
+.ic-colony::before {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: -0.4rem 0.05rem 0 -0.04rem currentColor, 0.4rem 0.05rem 0 -0.04rem currentColor;
+}
+
+.ic-colony::after {
+  width: 1.1rem;
+  height: 0.62rem;
+  border-top: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  opacity: 0.55;
+  transform: skewX(-18deg);
+}
+
+.ic-ranks::before {
+  width: 0.92rem;
+  height: 0.64rem;
+  border: 2px solid currentColor;
+  border-top: 0;
+  border-radius: 0 0 0.45rem 0.45rem;
+}
+
+.ic-ranks::after {
+  width: 0.54rem;
+  height: 0.28rem;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  transform: translateY(0.48rem);
+}
+
+body[data-workspace-role="user"][data-user-view="join"] .topbar,
+body[data-workspace-role="user"][data-user-view="join"] .layout {
+  width: min(calc(100% - var(--aoc-page-inset)), var(--aoc-form-max)) !important;
+  max-width: var(--aoc-form-max) !important;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] .panel-game > .panel-heading {
+  display: none !important;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] .panel-game {
+  gap: 0 !important;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] .join-page {
+  min-height: 0 !important;
+  align-content: start;
+  gap: clamp(0.68rem, 2.5vw, 1rem) !important;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] .join-page h3 {
+  font-size: clamp(1.75rem, 9vw, 2.7rem) !important;
+}
+
+body[data-workspace-role="user"][data-user-view="join"] #backToHome {
+  width: 100%;
+}
+
+body[data-workspace-role="user"][data-user-view="room"] .topbar,
+body[data-workspace-role="user"][data-user-view="room"] .layout {
+  width: min(calc(100% - var(--aoc-page-inset)), var(--aoc-room-max)) !important;
+  max-width: var(--aoc-room-max) !important;
+}
+
+.setup-steps {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.setup-step {
+  min-width: 0;
+  white-space: normal;
+  text-align: center;
+}
+
+.room-code-row {
+  grid-template-columns: minmax(0, 1fr) minmax(5.5rem, auto) !important;
+}
+
+body[data-workspace-role="user"] #roomCode,
+#roomCode {
+  overflow-wrap: anywhere;
+  font-size: clamp(1.75rem, 10vw, 3rem) !important;
+}
+
+.colony-builder-banner {
+  grid-template-columns: 1fr !important;
+}
+
+.ground-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+@media (max-width: 360px) {
+  :root {
+    --aoc-page-inset: 0.8rem;
+    --aoc-footer-height: 4.4rem;
+    --aoc-footer-space: 5.9rem;
+  }
+
+  .topbar > div:first-child {
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    min-height: 3rem;
+    gap: 0.12rem 0.5rem !important;
+  }
+
+  .topbar > div:first-child::before {
+    width: 2.1rem;
+    height: 2.1rem;
+    font-size: 0.58rem;
+  }
+
+  .topbar h1 {
+    font-size: 1.05rem !important;
+  }
+
+  .eyebrow,
+  .badge {
+    font-size: 0.58rem !important;
+  }
+
+  .panel-fixtures,
+  .panel-detail,
+  .panel-game,
+  .join-page,
+  .room-setup,
+  .colony-form,
+  .simulation-panel,
+  .my-colony-panel,
+  .bet-board,
+  .game-grid > section {
+    padding: 0.68rem !important;
+  }
+
+  .room-lobby,
+  .room-code-row,
+  .ground-options {
+    grid-template-columns: 1fr !important;
+  }
+
+  #copyRoomCode {
+    width: 100%;
+  }
+}
+
+@media (max-height: 640px) and (max-width: 560px) {
+  :root {
+    --aoc-footer-height: 4.25rem;
+    --aoc-footer-space: 5.55rem;
+  }
+
+  .topbar {
+    position: relative;
+    gap: 0.25rem !important;
+    padding-top: calc(0.35rem + env(safe-area-inset-top, 0px)) !important;
+  }
+
+  .topbar > div:first-child {
+    min-height: 2.8rem;
+    padding-block: 0.28rem;
+  }
+
+  .badge {
+    min-height: 1.42rem;
+    font-size: 0.55rem !important;
+  }
+
+  .layout,
+  body[data-workspace-role="user"] .layout {
+    gap: 0.42rem !important;
+    padding-top: 0.2rem !important;
+  }
+
+  .panel-heading h2,
+  .join-page h3,
+  .bet-board h3,
+  .game-grid h3,
+  .my-colony-head h3 {
+    font-size: 1.35rem !important;
+  }
+
+  .live-match-card h3 {
+    font-size: clamp(1.42rem, 8vw, 1.95rem) !important;
+  }
+
+  .live-match-card p {
+    font-size: 0.74rem !important;
+  }
+
+  body[data-workspace-role="user"][data-user-view="join"] .join-page {
+    gap: 0.5rem !important;
+  }
+
+  body[data-workspace-role="user"][data-user-view="join"] .join-page h3 {
+    font-size: 1.55rem !important;
+  }
+
+  label {
+    gap: 0.22rem;
+    font-size: 0.78rem;
+  }
+
+  input,
+  select,
+  button {
+    min-height: 44px !important;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  .tabbar {
+    min-height: var(--aoc-footer-height);
+    padding: 0.28rem;
+  }
+
+  .tabbar button {
+    min-height: 3.05rem !important;
+  }
+}
+
+@media (min-width: 640px) {
+  .setup-steps {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  .colony-builder-banner {
+    grid-template-columns: minmax(0, 1fr) auto !important;
+  }
+
+  .ground-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (min-width: 900px) {
+  body[data-workspace-role="user"][data-user-view="home"] .topbar,
+  body[data-workspace-role="user"][data-user-view="home"] .layout {
+    width: min(calc(100% - var(--aoc-page-inset)), var(--aoc-home-max)) !important;
+    max-width: var(--aoc-home-max) !important;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .topbar,
+  body[data-workspace-role="user"][data-user-view="room"] .topbar {
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem);
+    align-items: start;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .layout {
+    grid-template-columns: minmax(0, 1.05fr) minmax(20rem, 0.82fr) !important;
+    align-items: start;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .panel-fixtures,
+  body[data-workspace-role="user"][data-user-view="home"] .panel-game {
+    grid-column: auto;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .live-match-card {
+    min-height: 19rem !important;
+    align-content: center;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .live-match-card h3 {
+    font-size: clamp(2.35rem, 4.8vw, 4.4rem) !important;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .panel-game .panel-heading {
+    min-height: 19rem;
+    align-content: center;
+  }
+
+  body[data-workspace-role="user"][data-user-view="room"] .panel-game {
+    grid-template-columns: minmax(18rem, 0.82fr) minmax(24rem, 1.18fr);
+    align-items: start;
+  }
+
+  body[data-workspace-role="user"][data-user-view="room"] .panel-game > .panel-heading,
+  body[data-workspace-role="user"][data-user-view="room"] .my-colony-panel,
+  body[data-workspace-role="user"][data-user-view="room"] .simulation-panel,
+  body[data-workspace-role="user"][data-user-view="room"] .bet-board,
+  body[data-workspace-role="user"][data-user-view="room"] .game-grid {
+    grid-column: 1 / -1;
+  }
+
+  body[data-workspace-role="user"][data-user-view="room"] .room-setup,
+  body[data-workspace-role="user"][data-user-view="room"] #colonyForm {
+    margin-top: 0 !important;
+  }
+
+  body[data-workspace-role="user"][data-user-view="room"] .colony-tuning-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)) !important;
+  }
+
+  .ground-options {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+
+  .tabbar {
+    width: min(calc(100% - var(--aoc-page-inset)), 34rem) !important;
+    min-height: 4.2rem;
+  }
+
+  .tabbar button {
+    min-height: 3.1rem !important;
+  }
+}
+
+@media (min-width: 1180px) {
+  :root {
+    --aoc-page-inset: 3rem;
+  }
+
+  body[data-workspace-role="user"][data-user-view="home"] .layout {
+    grid-template-columns: minmax(0, 1.12fr) minmax(22rem, 0.88fr) !important;
+  }
+}
+
+.tuning-head {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.tuning-head strong {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.range-scale {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.range-scale span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="room"] #colonyForm {
+  display: none !important;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="room"] .room-setup {
+  display: grid !important;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="colony"] .room-setup {
+  display: none !important;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="colony"] #colonyForm {
+  display: grid !important;
+  width: 100%;
+  max-width: min(100%, 46rem);
+  justify-self: center;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="colony"] .panel-game {
+  grid-template-columns: 1fr !important;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="colony"] .panel-game > .panel-heading,
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="colony"] .my-colony-panel {
+  display: none !important;
+}
+
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="ranks"] .room-setup,
+body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="ranks"] #colonyForm {
+  display: none !important;
+}
+
+@media (min-width: 900px) {
+  body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="room"] .room-setup {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="room"] .my-colony-panel {
+    display: grid !important;
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    margin-top: 0 !important;
+  }
+}
