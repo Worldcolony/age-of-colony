@@ -10,7 +10,7 @@ import type { Fixture } from "@/lib/types";
 
 export default function LobbyPage() {
   const router = useRouter();
-  const playerName = useStore((s) => s.player.name);
+  const wallet = useStore((s) => s.wallet);
   const setMatchFixture = useStore((s) => s.setMatchFixture);
   const resetGame = useStore((s) => s.resetGame);
 
@@ -23,6 +23,7 @@ export default function LobbyPage() {
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function load() {
@@ -60,7 +61,7 @@ export default function LobbyPage() {
         startTime: f.startTime ?? null,
         startTimeIso: f.startTimeIso ?? null,
         anonymousId: getAnonId(),
-        creatorName: playerName || undefined,
+        creatorName: wallet.name || wallet.short || undefined,
       });
       router.push(`/room/${game.roomCode || game.gameId}`);
     } catch (e) {
@@ -82,32 +83,33 @@ export default function LobbyPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="glass signal-brand flex items-center justify-between gap-3 px-4 py-3">
+      {/* brand plate */}
+      <div className="glass flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-3">
-          <div className="nest-emblem h-11 w-11 text-xl">
+          <div className="grid h-10 w-10 place-items-center rounded-md border-2 border-[color:var(--brd-strong)] bg-[color:var(--color-slot)]">
             <span className="text-xl">🐜</span>
           </div>
           <div>
-            <h1 className="hud-title text-[18px]">Age of Colony</h1>
-            <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-ink-faint">TXLine · match rooms</p>
+            <h1 className="hud-title text-[11px]">Age of Colony</h1>
+            <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-ink-faint">TXLine · World Cup</p>
           </div>
         </div>
         <span className="plate px-3 py-1.5 font-mono text-[11px] font-bold text-ink-soft">
-          {playerName || "operator"}
+          {wallet.connected ? wallet.short : "guest"}
         </span>
       </div>
 
       {featured && <MatchCard f={featured.f} featured status={featured.status} onCreate={createRoom} />}
 
-      <div className="glass tunnel-map overflow-hidden">
+      <div className="glass overflow-hidden">
         <div className="flex flex-col gap-3 p-4">
           <div className="flex items-center justify-between">
-            <h2 className="hud-title text-[18px]">Join with code</h2>
-            <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-ink-faint">6 digits</span>
+            <h2 className="hud-title text-[11px]">🎟️ Join with code</h2>
+            <span className="font-mono text-[9px] uppercase tracking-widest text-ink-faint">6 digits</span>
           </div>
           <div className="flex gap-2">
             <input
-              className="input plate text-center font-mono text-xl tracking-[0.32em]"
+              className="input plate text-center font-mono text-xl tracking-[0.45em]"
               inputMode="numeric"
               maxLength={6}
               placeholder="······"
@@ -119,11 +121,11 @@ export default function LobbyPage() {
             </button>
           </div>
         </div>
-        <AntMarch className="border-t border-[color:var(--brd-soft)] bg-[rgba(5,12,11,0.62)] py-1" />
+        <AntMarch className="border-t-2 border-[color:var(--brd-soft)] bg-[color:var(--color-slot)] py-1" />
       </div>
 
       <div className="mt-1 flex items-center justify-between">
-        <h2 className="hud-title text-[18px]">Upcoming matches</h2>
+        <h2 className="hud-title text-[11px] drop-shadow-[1px_1px_0_rgba(255,250,235,0.5)]">Upcoming matches</h2>
         <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={load}>
           ↻
         </button>
@@ -156,16 +158,16 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
   const p2 = teamName(f.participant2);
   const live = status === "current";
   return (
-    <div className={`glass flex flex-col gap-3 p-4 ${featured ? "bracket signal-brand" : ""}`}>
+    <div className={`glass flex flex-col gap-3 p-4 ${featured ? "bracket !bg-parch-strong" : ""}`}>
       {featured && (
         <div className="flex items-center justify-between">
-          <p className="eyebrow">Featured match</p>
+          <p className="eyebrow">⚽ Featured match</p>
           {live ? (
-            <span className="flex items-center gap-1.5 rounded-md border border-lime/40 px-3 py-0.5 font-mono text-[10px] font-bold text-lime">
+            <span className="flex items-center gap-1.5 rounded-full border-2 border-rust/50 px-3 py-0.5 font-mono text-[10px] font-bold text-rust">
               <span className="live-dot" /> LIVE
             </span>
           ) : (
-            <span className="rounded-md border border-brd px-3 py-0.5 font-mono text-[10px] font-bold uppercase text-ink-faint">{status === "next" ? "Next up" : "Upcoming"}</span>
+            <span className="rounded-full border-2 border-brd px-3 py-0.5 font-mono text-[10px] font-bold uppercase text-ink-faint">{status === "next" ? "Next up" : "Upcoming"}</span>
           )}
         </div>
       )}
@@ -183,7 +185,7 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
       <div className="flex items-center justify-between text-xs text-ink-faint">
         <span className="truncate">{f.competition ?? ""}</span>
         {f.startTime ? (
-          <span className="plate shrink-0 px-2.5 py-0.5 font-mono text-[11px] font-bold text-amber">⏱ {fmtWhen(f.startTime)}</span>
+          <span className="plate shrink-0 px-2.5 py-0.5 font-mono text-[11px] font-bold text-gold-deep">⏱ {fmtWhen(f.startTime)}</span>
         ) : null}
       </div>
       <button className={`btn ${featured ? "btn-primary" : "btn-ghost"}`} onClick={() => onCreate(f)}>

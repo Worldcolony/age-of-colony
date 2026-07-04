@@ -1,16 +1,27 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useWallet } from "@/hooks/useWallet";
 import { api } from "@/lib/api";
 import { AntMarch } from "@/components/AntMarch";
 
 export default function SplashPage() {
   const router = useRouter();
+  const { wallet, connect } = useWallet();
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
 
-  function onEnter() {
-    router.push("/lobby");
+  async function onConnect() {
+    if (wallet.connected) return router.push("/lobby");
+    setBusy(true);
+    try {
+      await connect();
+      router.push("/lobby");
+    } catch (e) {
+      setStatus((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onDemo() {
@@ -26,57 +37,38 @@ export default function SplashPage() {
   }
 
   return (
-    <div className="flex min-h-[calc(100dvh-150px)] flex-1 flex-col justify-center gap-4">
-      <div className="glass bracket signal-brand overflow-hidden">
-        <AntMarch className="border-b border-[color:var(--brd-soft)] bg-[rgba(5,12,11,0.68)] py-1.5" />
-        <div className="grid gap-5 p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="eyebrow mb-2">Live colony engine</p>
-              <h1 className="hud-title text-[42px] leading-[0.92]">
-                Age
-                <br />
-                of Colony
-              </h1>
-            </div>
-            <div className="nest-emblem h-20 w-20 shrink-0 text-4xl">
-              <span>🐜</span>
-            </div>
+    <div className="flex min-h-[86dvh] flex-1 flex-col items-center justify-center">
+      <div className="glass bracket w-full max-w-[340px] overflow-hidden text-center">
+        <AntMarch className="border-b-2 border-[color:var(--brd-soft)] bg-[color:var(--color-slot)] py-1.5" />
+        <div className="p-6">
+          <div className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-md border-2 border-[color:var(--brd-strong)] bg-[color:var(--color-slot)] shadow-[2px_2px_0_rgba(90,70,30,0.4)]">
+            <span className="text-3xl">🐜</span>
           </div>
-
-          <div className="tunnel-map plate grid gap-3 p-4">
-            <div className="flex items-center justify-between font-bold">
-              <span>Argentina</span>
-              <span className="font-display text-xl text-gold">2 - 1</span>
-              <span>France</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs text-ink-faint">
-              <span className="plate px-2 py-1">20 alive</span>
-              <span className="plate px-2 py-1 text-lime">market open</span>
-              <span className="plate px-2 py-1">+14 food</span>
-            </div>
-          </div>
-
-          <p className="max-w-[320px] text-sm leading-relaxed text-ink-soft">
-            Command your colony, read the match pressure, and let every ant vote before the market closes.
+          <p className="eyebrow mb-3">Live Colony Engine</p>
+          <h1 className="hud-title text-[16px] leading-[1.7]">
+            Age of
+            <br />
+            Colony
+          </h1>
+          <p className="mx-auto mt-4 max-w-[280px] text-sm leading-relaxed text-ink-soft">
+            Command your colony. Predict the match. Rule the lobby.
           </p>
-
-          <div className="flex flex-col gap-3">
-            <button className="btn btn-primary" disabled={busy} onClick={onEnter}>
-              Enter lobby
+          <div className="mt-6 flex flex-col gap-3">
+            <button className="btn btn-primary" disabled={busy} onClick={onConnect}>
+              {wallet.connected ? `Enter · ${wallet.short}` : "🔗 Connect Phantom Wallet"}
             </button>
             <button className="btn btn-ghost" disabled={busy} onClick={onDemo}>
               ▶ Watch demo
             </button>
             {status && <p className="min-h-4 text-xs text-ink-faint">{status}</p>}
           </div>
-          <p className="blink font-mono text-[9px] uppercase tracking-[0.18em] text-ink-faint">
-            Signal locked · room engine ready
+          <p className="blink mt-5 font-mono text-[9px] uppercase tracking-[0.28em] text-ink-faint">
+            ▸ insert wallet to play ◂
           </p>
         </div>
       </div>
-      <p className="text-center font-mono text-[10px] uppercase tracking-[0.2em] text-ink-faint">
-        TXLine · live match rooms
+      <p className="mt-5 font-mono text-[10px] uppercase tracking-[0.3em] text-ink-faint drop-shadow-[1px_1px_0_rgba(44,40,32,0.6)]">
+        Solana · TxODDS World Cup
       </p>
     </div>
   );

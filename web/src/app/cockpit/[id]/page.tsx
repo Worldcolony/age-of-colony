@@ -7,14 +7,16 @@ import { useGameStream } from "@/hooks/useGameStream";
 import { Segmented, Chips } from "@/components/Segmented";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, FavoriteContext, InfoNeed, Style } from "@/lib/types";
+import { worldBus } from "@/three/worldBus";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
-// feed row left-edge tint by event kind (amber = markets, lichen = wins, clay = votes, red = trouble)
+const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
+// feed row left-edge tint by event kind (gold = markets, green = wins, rust = votes, red = trouble)
 const KIND_EDGE: Record<string, string> = {
-  opportunity: "#d8943a", markets_closed: "#d8943a",
-  settlement: "#92b85f", hatch: "#92b85f", info_result: "#92b85f",
-  vote: "#c76e3a", ant_agent_vote: "#c76e3a", prediction: "#c76e3a",
-  game_error: "#ef5f49", starvation: "#ef5f49", void: "#ef5f49",
+  opportunity: "#b07e1c", markets_closed: "#b07e1c",
+  settlement: "#4e7e2a", hatch: "#4e7e2a", info_result: "#4e7e2a",
+  vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
+  game_error: "#b42318", starvation: "#b42318", void: "#b42318",
 };
 
 export default function CockpitPage() {
@@ -52,6 +54,7 @@ export default function CockpitPage() {
   function addEvent(e: GameEvent) {
     if (seen.current.has(e.index)) return;
     seen.current.add(e.index);
+    if (PULSE[e.kind]) worldBus.pulse(PULSE[e.kind]);
     setEvents((prev) => [e, ...prev].slice(0, 120));
   }
 
@@ -60,7 +63,16 @@ export default function CockpitPage() {
     onState: (g) => setGame(g),
   });
 
-  const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => (b.score || 0) - (a.score || 0)), [game?.colonies]);
+  const walletAccent = useStore((s) => s.wallet.accent);
+  useEffect(() => {
+    worldBus.setAccent(walletAccent || "#b6ff3c");
+  }, [walletAccent]);
+  useEffect(() => {
+    worldBus.setIntensity(RUNNING.has(game?.status ?? "") ? 0.9 : 0.4);
+  }, [game?.status]);
+
+  const colonies = game?.colonies ?? [];
+  const sorted = useMemo(() => [...colonies].sort((a, b) => (b.score || 0) - (a.score || 0)), [colonies]);
   const myIdx = sorted.findIndex((c) => c.colonyId === myColonyId);
   const mine = myIdx >= 0 ? sorted[myIdx] : sorted[0];
 
@@ -92,42 +104,42 @@ export default function CockpitPage() {
     <div className="flex flex-col gap-3">
       {/* sticky score bar — always visible while scrolling the console */}
       <div className="sticky top-2 z-30 flex flex-col gap-2">
-        <div className="glass bracket signal-brand flex flex-col gap-2 px-4 py-3">
+        <div className="glass bracket flex flex-col gap-2 !bg-parch-strong px-4 py-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-2 font-bold"><span className="text-2xl">{flag(p1)}</span><span className="truncate">{p1}</span></div>
-            <div className="plate px-3 py-1 font-display text-[20px] text-gold">{fmtScore(game?.match?.score)}</div>
+            <div className="plate px-3 py-1 font-display text-[15px] tracking-wider">{fmtScore(game?.match?.score)}</div>
             <div className="flex min-w-0 flex-row-reverse items-center gap-2 font-bold"><span className="text-2xl">{flag(p2)}</span><span className="truncate">{p2}</span></div>
           </div>
           <div className="flex items-center justify-between">
             <button className="text-xs font-bold text-ink-soft" onClick={() => router.push("/lobby")}>← Lobby</button>
-            <span className={`flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] ${RUNNING.has(status) ? "border-lime/50 text-lime" : status === "finished" ? "border-green/50 text-green" : "border-brd text-ink-faint"}`}>
+            <span className={`flex items-center gap-1.5 rounded-full border-2 px-2.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wide ${RUNNING.has(status) ? "border-rust/50 text-rust" : status === "finished" ? "border-green/50 text-green" : "border-brd text-ink-faint"}`}>
               {RUNNING.has(status) && <span className="live-dot" />}
               {status === "created" ? "warming up" : status.replace("_", " ") || "…"}
             </span>
-            <button className="text-xs font-bold text-amber" onClick={() => router.push(`/results/${id}`)}>Ranks →</button>
+            <button className="text-xs font-bold text-gold-deep" onClick={() => router.push(`/results/${id}`)}>Ranks →</button>
           </div>
         </div>
       </div>
 
       {status === "created" && (
-        <button className="btn btn-primary" disabled={starting} onClick={start}>{starting ? "Starting…" : "Start match"}</button>
+        <button className="btn btn-primary" disabled={starting} onClick={start}>{starting ? "Starting…" : "▶ Start match"}</button>
       )}
 
       <RankCard mine={mine} rank={(myIdx < 0 ? 0 : myIdx) + 1} />
 
       {(game?.activeOpportunities ?? []).map((o, i) => (
-        <div key={i} className="glass tunnel-map flex flex-col gap-2.5 border-l-4 border-l-gold p-4">
-          <span className="flex w-fit items-center gap-1.5 rounded-md border border-magenta/40 px-3 py-1 text-xs font-bold text-magenta"><span className="live-dot" />{(o.kind || "market").toUpperCase()}</span>
+        <div key={i} className="glass flex flex-col gap-2.5 border-l-4 border-l-gold p-4">
+          <span className="flex w-fit items-center gap-1.5 rounded-full border border-magenta/40 px-3 py-1 text-xs font-bold text-magenta"><span className="live-dot" />{(o.kind || "market").toUpperCase()}</span>
           <div className="font-bold">{o.label || o.question || "New market"}</div>
           <div className="flex flex-wrap gap-2">
             {(o.options || []).map((op, j) => (
-              <div key={j} className="plate flex-1 p-2.5 text-center text-sm font-bold">{op.label || op.value}</div>
+              <div key={j} className="flex-1 rounded-lg border border-brd bg-slot p-2.5 text-center text-sm font-bold">{op.label || op.value}</div>
             ))}
           </div>
         </div>
       ))}
 
-      <h2 className="hud-title text-[22px]">Strategy board</h2>
+      <h2 className="hud-title text-[11px]">🎛️ Soundboard</h2>
       {mine ? (
         <div className="glass flex flex-col gap-3.5 p-4">
           <SbRow label="Style">
@@ -160,8 +172,8 @@ export default function CockpitPage() {
             feedRows.map((e) => (
               <div
                 key={e.index}
-                className="plate flex items-start gap-2.5 border-l-4 px-3 py-2.5"
-                style={{ borderLeftColor: KIND_EDGE[e.kind] ?? "rgba(146,184,95,0.4)" }}
+                className="flex items-start gap-2.5 rounded-md border-2 border-brd border-l-4 bg-slot px-3 py-2.5"
+                style={{ borderLeftColor: KIND_EDGE[e.kind] ?? "rgba(74,58,30,0.4)" }}
               >
                 <span className="text-lg">{kindIcon(e.kind)}</span>
                 <span className="flex-1 text-[13px] leading-snug">{e.message || e.kind}</span>
@@ -178,8 +190,8 @@ export default function CockpitPage() {
 function RankCard({ mine, rank }: { mine?: Colony; rank: number }) {
   if (!mine) return <div className="glass p-4 text-center text-sm text-ink-faint">Deploy a colony to compete.</div>;
   return (
-    <div className="glass tunnel-map flex items-center gap-3.5 p-4">
-      <div className="font-display text-3xl text-lime" style={{ textShadow: "0 0 16px rgba(146,184,95,0.32)" }}>#{rank}</div>
+    <div className="glass flex items-center gap-3.5 p-4">
+      <div className="font-display text-2xl text-lime" style={{ textShadow: "2px 2px 0 rgba(176,126,28,0.4)" }}>#{rank}</div>
       <div className="flex flex-1 flex-col gap-2">
         <div className="flex items-center justify-between">
           <strong>{mine.name}</strong>
@@ -198,7 +210,7 @@ function RankCard({ mine, rank }: { mine?: Colony; rank: number }) {
 }
 function Vital({ icon, v, l }: { icon: string; v: number | string; l: string }) {
   return (
-    <span className="plate flex items-center gap-1 px-2.5 py-1">
+    <span className="flex items-center gap-1 rounded-full border border-brd bg-slot px-2.5 py-1">
       <span>{icon}</span><b className="font-mono">{v}</b><span className="text-ink-faint">{l}</span>
     </span>
   );

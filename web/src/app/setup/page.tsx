@@ -39,7 +39,7 @@ export default function SetupPage() {
   if (!game?.gameId) {
     return (
       <div className="flex flex-col gap-3">
-        <h1 className="hud-title text-[24px]">My Colony</h1>
+        <h1 className="hud-title text-[13px]">My Colony</h1>
         <div className="glass p-4 text-center text-sm text-ink-faint">Pick a match and create a room first.</div>
         <button className="btn btn-primary" onClick={() => router.push("/lobby")}>Go to lobby</button>
       </div>
@@ -71,19 +71,16 @@ export default function SetupPage() {
       <button className="text-sm font-semibold text-ink-soft" onClick={() => router.back()}>← Back</button>
       <div>
         <p className="eyebrow">Pre-match</p>
-        <h1 className="hud-title text-[28px]">Tune your colony</h1>
+        <h1 className="hud-title text-[13px]">Tune your colony</h1>
       </div>
 
-      <div className="glass tunnel-map grid min-h-32 place-items-center gap-2 p-4">
+      <div className="glass grid place-items-center gap-2 p-4">
         <div className="flex flex-wrap justify-center gap-1 text-lg">
           {Array.from({ length: shown }).map((_, i) => (
             <span key={i}>{style === "aggressive" && i % 5 === 0 ? "🔴" : style === "cautious" && i % 5 === 0 ? "🔵" : "🐜"}</span>
           ))}
           {Number(size) > shown && <span className="text-ink-faint">+{Number(size) - shown}</span>}
         </div>
-        <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-ink-faint">
-          {style} · {ground} · intel {info}
-        </p>
       </div>
 
       <Field label="Colony name">
@@ -96,7 +93,7 @@ export default function SetupPage() {
 
       {msg && <p className="text-sm text-danger">{msg}</p>}
       <div className="sticky bottom-[92px] z-20 mt-1">
-        <button className="btn btn-primary" onClick={deploy}>Deploy colony</button>
+        <button className="btn btn-primary" onClick={deploy}>🚀 DEPLOY COLONY</button>
       </div>
     </div>
   );

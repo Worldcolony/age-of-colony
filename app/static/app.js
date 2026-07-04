@@ -1,7 +1,6 @@
 const state = {
   role: "user",
   userView: "home",
-  footerTab: "play",
   identity: {
     anonymousId: null,
     playerName: "",
@@ -120,7 +119,6 @@ const els = {
   gameLeaderboard: document.querySelector("#gameLeaderboard"),
   colonyDetail: document.querySelector("#colonyDetail"),
   gameFeed: document.querySelector("#gameFeed"),
-  footerTabs: document.querySelectorAll("[data-footer-tab]"),
 };
 
 const today = new Date().toISOString().slice(0, 10);
@@ -191,9 +189,6 @@ function bindEvents() {
   els.betTabs.forEach((button) => {
     button.addEventListener("click", () => selectBetTab(button.dataset.betTab));
   });
-  els.footerTabs.forEach((button) => {
-    button.addEventListener("click", () => handleFooterTab(button.dataset.footerTab));
-  });
   updateColonyBuilder();
 }
 
@@ -215,7 +210,7 @@ function applyWorkspaceRole(role, options = {}) {
   els.joinRoom.textContent = isAdmin ? "Add player" : "Join";
   els.startGameLive.textContent = "Start game";
   els.startGameLive.hidden = isAdmin;
-  els.finishGameLive.hidden = true;
+  els.finishGameLive.hidden = isAdmin;
   els.exitGame.hidden = true;
   els.startGameReplay.hidden = !isAdmin;
 
@@ -247,15 +242,10 @@ function setUserView(view, options = {}) {
   const { updateUrl = true } = options;
   if (state.role !== "user") {
     state.userView = "home";
-    state.footerTab = "play";
     delete document.body.dataset.userView;
-    updateFooterNav();
     return;
   }
   state.userView = ["home", "join", "room"].includes(view) ? view : "home";
-  if (state.userView === "home") state.footerTab = "play";
-  if (state.userView === "join") state.footerTab = "room";
-  if (state.userView === "room" && !["colony", "ranks"].includes(state.footerTab)) state.footerTab = "room";
   document.body.dataset.userView = state.userView;
   if (updateUrl) {
     if (state.userView === "home") setHomeUrl();
@@ -276,81 +266,13 @@ function openJoinRoomPage() {
 function backToHome() {
   if (state.role !== "user") return;
   resetGameUi("Create or join a private room.");
-  state.footerTab = "play";
   setUserView("home");
 }
 
 function exitFinishedGame() {
   if (state.role !== "user") return;
   resetGameUi("Create or join a private room.");
-  state.footerTab = "play";
   setUserView("home");
-}
-
-function handleFooterTab(tab) {
-  const target = ["play", "room", "colony", "ranks"].includes(tab) ? tab : "play";
-  const hasRoom = Boolean(state.game.id || state.game.roomCode || cleanRoomCode(els.roomCodeInput.value).length === 6);
-
-  if (target === "play") {
-    state.footerTab = "play";
-    if (state.role === "user") setUserView("home");
-    scrollToSection(".panel-fixtures");
-    updateFooterNav();
-    return;
-  }
-
-  if (target === "room") {
-    state.footerTab = "room";
-    if (state.role === "user") {
-      if (hasRoom) setUserView("room");
-      else openJoinRoomPage();
-    }
-    scrollToSection(".panel-game");
-    updateFooterNav();
-    return;
-  }
-
-  if (target === "colony") {
-    if (!hasRoom) return;
-    state.footerTab = "colony";
-    if (state.role === "user") setUserView("room");
-    scrollToSection("#colonyForm");
-    updateFooterNav();
-    return;
-  }
-
-  if (target === "ranks") {
-    if (!state.game.id) return;
-    state.footerTab = "ranks";
-    if (state.role === "user") setUserView("room");
-    scrollToSection("#gameLeaderboard");
-    updateFooterNav();
-  }
-}
-
-function scrollToSection(selector) {
-  const target = document.querySelector(selector);
-  if (!target) return;
-  target.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function updateFooterNav() {
-  if (!els.footerTabs?.length) return;
-  const hasRoom = Boolean(state.game.id || state.game.roomCode || cleanRoomCode(els.roomCodeInput.value).length === 6);
-  const hasGame = Boolean(state.game.id);
-  if (!hasRoom && ["colony", "ranks"].includes(state.footerTab)) state.footerTab = state.userView === "join" ? "room" : "play";
-  if (!hasGame && state.footerTab === "ranks") state.footerTab = hasRoom ? "room" : "play";
-  const activeTab = state.footerTab || (state.userView === "home" ? "play" : "room");
-
-  els.footerTabs.forEach((button) => {
-    const tab = button.dataset.footerTab;
-    const disabled = tab === "colony" ? !hasRoom : tab === "ranks" ? !hasGame : false;
-    button.disabled = disabled;
-    button.dataset.disabled = String(disabled);
-    button.dataset.active = String(!disabled && tab === activeTab);
-    const ariaLabel = tab === "room" && hasRoom && state.game.roomCode ? `Room ${state.game.roomCode}` : button.textContent.trim();
-    button.setAttribute("aria-label", ariaLabel);
-  });
 }
 
 function updateFixtureFilterState() {
@@ -1969,7 +1891,6 @@ function updateGameActions() {
   }
   els.startGameReplay.disabled = !isAdmin || !hasRoom || running || status === "finished" || !hasColony;
   if (els.copyRoomCode) els.copyRoomCode.disabled = cleanRoomCode(state.game.roomCode || "").length !== 6;
-  updateFooterNav();
 }
 
 function appendGameEvent(event) {

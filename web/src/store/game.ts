@@ -3,13 +3,18 @@
 import { create } from "zustand";
 import type { Fixture, GameEvent, GameState } from "@/lib/types";
 
-interface PlayerState {
+interface WalletState {
+  installed: boolean;
+  connected: boolean;
+  pubkey: string | null;
+  accent: string;
+  short: string;
   name: string | null;
 }
 
 interface Store {
-  player: PlayerState;
-  setPlayer: (p: Partial<PlayerState>) => void;
+  wallet: WalletState;
+  setWallet: (w: Partial<WalletState>) => void;
 
   game: GameState | null;
   events: GameEvent[];
@@ -24,8 +29,8 @@ interface Store {
 }
 
 export const useStore = create<Store>((set) => ({
-  player: { name: null },
-  setPlayer: (p) => set((s) => ({ player: { ...s.player, ...p } })),
+  wallet: { installed: false, connected: false, pubkey: null, accent: "#38E8FF", short: "", name: null },
+  setWallet: (w) => set((s) => ({ wallet: { ...s.wallet, ...w } })),
 
   game: null,
   events: [],
