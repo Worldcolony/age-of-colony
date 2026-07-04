@@ -1646,3 +1646,161 @@ body[data-workspace-role="user"][data-user-view="room"][data-footer-tab="ranks"]
     margin-top: 0 !important;
   }
 }
+
+/* Compact mobile type scale: keep touch targets, reduce billboard-sized text. */
+@media (max-width: 640px) {
+  .topbar > div:first-child {
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    min-height: 2.9rem;
+    gap: 0.12rem 0.58rem !important;
+    padding: 0.32rem 0.68rem 0.32rem 0.34rem;
+  }
+
+  .topbar > div:first-child::before {
+    width: 2.12rem;
+    height: 2.12rem;
+    font-size: 0.58rem;
+  }
+
+  .topbar h1 {
+    font-size: clamp(1rem, 4.55vw, 1.16rem) !important;
+    line-height: 1 !important;
+  }
+
+  .eyebrow,
+  .badge,
+  .match-status,
+  .setup-step,
+  .section-kicker,
+  .setup-label,
+  .detail-kicker,
+  .colony-builder-banner span,
+  .ground-picker legend,
+  th {
+    font-size: 0.58rem !important;
+  }
+
+  .badge {
+    min-height: 1.45rem;
+    padding-inline: 0.5rem !important;
+  }
+
+  .panel-heading h2,
+  .join-page h3,
+  .bet-board h3,
+  .game-grid h3,
+  .my-colony-head h3 {
+    font-size: clamp(1.12rem, 4.9vw, 1.36rem) !important;
+    line-height: 1.04 !important;
+  }
+
+  body[data-workspace-role="user"][data-user-view="join"] .join-page h3 {
+    font-size: clamp(1.42rem, 6.4vw, 1.8rem) !important;
+    line-height: 1.04 !important;
+  }
+
+  .live-match-card h3 {
+    font-size: clamp(1.44rem, 7.1vw, 1.95rem) !important;
+    line-height: 1 !important;
+  }
+
+  .panel-heading p,
+  .live-match-card p,
+  .join-page p,
+  .simulation-panel p,
+  .bet-board-head p,
+  .empty,
+  .muted {
+    font-size: 0.86rem !important;
+    line-height: 1.34 !important;
+  }
+
+  label {
+    gap: 0.28rem;
+    font-size: 0.76rem !important;
+    line-height: 1.2 !important;
+  }
+
+  button {
+    min-height: 44px !important;
+    padding-top: 0.56rem !important;
+    padding-bottom: 0.56rem !important;
+    font-size: 0.88rem !important;
+    line-height: 1.08 !important;
+  }
+
+  input,
+  select {
+    min-height: 44px !important;
+    padding-top: 0.58rem !important;
+    padding-bottom: 0.58rem !important;
+    font-size: 16px !important;
+    line-height: 1.2 !important;
+  }
+
+  body[data-workspace-role="user"] #roomCodeInput {
+    min-height: 44px !important;
+    font-size: 16px !important;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+
+  body[data-workspace-role="user"] #roomCode,
+  #roomCode {
+    font-size: clamp(1.85rem, 8.2vw, 2.35rem) !important;
+    letter-spacing: 0.06em;
+  }
+
+  .colony-builder-banner strong,
+  .colony-profile-card strong,
+  .tuning-head strong,
+  .lobby-stat strong,
+  .my-colony-metric strong,
+  .market-pill strong {
+    font-size: 0.98rem !important;
+    line-height: 1.12 !important;
+  }
+
+  .ground-options span {
+    font-size: 0.86rem !important;
+  }
+
+  .range-scale,
+  .colony-card p,
+  .event-meta,
+  .event-details {
+    font-size: 0.72rem !important;
+    line-height: 1.32 !important;
+  }
+
+  .tabbar {
+    padding: 0.28rem;
+  }
+
+  .tabbar button {
+    min-height: 3.05rem !important;
+    padding-block: 0.28rem !important;
+    font-size: clamp(0.6rem, 2.35vw, 0.68rem) !important;
+    line-height: 1.04 !important;
+  }
+
+  .tabbar button .ic {
+    width: 1.05rem;
+    height: 1.05rem;
+    margin-bottom: 0.04rem;
+  }
+}
+
+@media (max-width: 360px) {
+  body[data-workspace-role="user"][data-user-view="join"] .join-page h3 {
+    font-size: 1.34rem !important;
+  }
+
+  .live-match-card h3 {
+    font-size: 1.36rem !important;
+  }
+
+  .tabbar button {
+    font-size: 0.58rem !important;
+  }
+}
