@@ -44,6 +44,8 @@ interface MarketModel {
   lastIndex: number;
 }
 
+type CockpitTab = "live" | "settled" | "feed";
+
 export default function CockpitPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -56,6 +58,9 @@ export default function CockpitPage() {
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<CockpitTab>("live");
+  const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
+  const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const anonId = useMemo(() => getAnonId(), []);
 
@@ -142,11 +147,13 @@ export default function CockpitPage() {
   const markets = useMemo(() => buildMarkets(game?.activeOpportunities ?? [], events), [game?.activeOpportunities, events]);
   const openMarkets = markets.filter((market) => market.status === "open");
   const settledMarkets = markets.filter((market) => market.status !== "open" && (market.settlements.length || market.voids.length));
-  const visibleOpen = openMarkets.slice(0, 3);
-  const olderOpen = openMarkets.slice(3);
-  const visibleSettled = settledMarkets.slice(0, 5);
-  const olderSettled = settledMarkets.slice(5);
-  const feedRows = events.filter((e) => isUsefulLiveEvent(e)).slice(0, 5);
+  const selectedMarket = openMarkets.find((market) => market.id === selectedMarketId) ?? openMarkets[0];
+  const selectedSettled = settledMarkets.find((market) => market.id === selectedSettledId) ?? settledMarkets[0];
+  const effectiveSelectedMarketId = selectedMarket?.id ?? null;
+  const effectiveSelectedSettledId = selectedSettled?.id ?? null;
+  const openSummary = useMemo(() => summarizeOpenMarkets(openMarkets), [openMarkets]);
+  const usefulEvents = events.filter((e) => isUsefulLiveEvent(e));
+  const feedRows = usefulEvents.slice(0, activeTab === "feed" ? 18 : 5);
 
   useEffect(() => {
     if (ownColony?.colonyId && myColonyId !== ownColony.colonyId) {
@@ -196,86 +203,354 @@ export default function CockpitPage() {
           </button>
         </section>
       ) : (
-        <>
-          <section className="glass flex flex-col gap-3 p-4">
-            <SectionTitle title="Open markets" count={openMarkets.length} accent="Ants are voting" />
-            {visibleOpen.length ? visibleOpen.map((market) => <MarketPanel key={market.id} market={market} />) : (
-              <EmptyState title="No market open" body="The next prediction window will appear here." />
-            )}
-            {olderOpen.length > 0 && (
-              <details className="group">
-                <summary className="cursor-pointer list-none rounded-lg border border-[color:var(--brd-soft)] px-3 py-2 text-sm font-bold text-ink-soft">
-                  Show {olderOpen.length} older open market{olderOpen.length > 1 ? "s" : ""}
-                </summary>
-                <div className="mt-3 flex flex-col gap-3">
-                  {olderOpen.map((market) => <MarketPanel key={market.id} market={market} compact />)}
-                </div>
-              </details>
-            )}
-          </section>
+        <section className="glass flex flex-col gap-3 p-3">
+          <CockpitTabs
+            active={activeTab}
+            counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+            onChange={setActiveTab}
+          />
 
-          <section className="glass flex flex-col gap-3 p-4">
-            <SectionTitle title="Settled" count={settledMarkets.length} accent="Resolved results" />
-            {visibleSettled.length ? visibleSettled.map((market) => <SettledPanel key={market.id} market={market} />) : (
-              <EmptyState title="No settled market yet" body="Results will appear here as markets expire or resolve." />
-            )}
-            {olderSettled.length > 0 && (
-              <details className="group">
-                <summary className="cursor-pointer list-none rounded-lg border border-[color:var(--brd-soft)] px-3 py-2 text-sm font-bold text-ink-soft">
-                  Show {olderSettled.length} older settlement{olderSettled.length > 1 ? "s" : ""}
-                </summary>
-                <div className="mt-3 flex flex-col gap-3">
-                  {olderSettled.map((market) => <SettledPanel key={market.id} market={market} compact />)}
-                </div>
-              </details>
-            )}
-          </section>
-        </>
+          {activeTab === "live" && (
+            <LiveTab
+              openMarkets={openMarkets}
+              openSummary={openSummary}
+              selectedMarket={selectedMarket}
+              selectedMarketId={effectiveSelectedMarketId}
+              settledMarkets={settledMarkets}
+              onSelectMarket={setSelectedMarketId}
+              onSelectSettled={(marketId) => {
+                setSelectedSettledId(marketId);
+                setActiveTab("settled");
+              }}
+            />
+          )}
+
+          {activeTab === "settled" && (
+            <SettledTab
+              settledMarkets={settledMarkets}
+              selectedSettled={selectedSettled}
+              selectedSettledId={effectiveSelectedSettledId}
+              onSelectSettled={setSelectedSettledId}
+            />
+          )}
+
+          {activeTab === "feed" && (
+            <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />
+          )}
+        </section>
       )}
 
-      <section className="glass flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between">
-          <h2 className="font-bold">Latest signals</h2>
-          <button className="quiet-link text-sm" onClick={() => router.push(`/results/${id}`)}>Ranks</button>
-        </div>
-        <div className="flex flex-col divide-y divide-[color:var(--brd-soft)]">
-          {feedRows.length === 0 ? (
-            <span className="py-4 text-center text-sm text-ink-faint">Waiting for live signals...</span>
-          ) : (
-            feedRows.map((e) => (
-              <div
-                key={e.index}
-                className="grid grid-cols-[4px_1fr_auto] gap-3 py-2"
-              >
-                <span className="rounded-full" style={{ background: KIND_EDGE[e.kind] ?? "rgba(244,234,216,0.2)" }} />
-                <span className="text-sm leading-snug text-ink-soft">{compactEventMessage(e)}</span>
-                <span className="font-mono text-[10px] text-ink-faint">#{e.index}</span>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
+      <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
+        <span>{streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}</span>
+        <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>Ranks</button>
+      </footer>
+    </div>
+  );
+}
 
-      <div className="bottom-action">
-        <div className="bottom-action-inner">
-          <p className="py-3 text-center text-sm font-bold text-ink-faint">
-            {streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}
-          </p>
+function CockpitTabs({
+  active,
+  counts,
+  onChange,
+}: {
+  active: CockpitTab;
+  counts: Record<CockpitTab, number>;
+  onChange: (tab: CockpitTab) => void;
+}) {
+  const tabs: { id: CockpitTab; label: string }[] = [
+    { id: "live", label: "Live" },
+    { id: "settled", label: "Settled" },
+    { id: "feed", label: "Feed" },
+  ];
+  return (
+    <div className="seg sticky top-2 z-20 bg-[rgba(8,7,5,0.86)] backdrop-blur-md">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          data-active={active === tab.id}
+          onClick={() => onChange(tab.id)}
+          className="!flex items-center justify-center gap-2"
+        >
+          <span>{tab.label}</span>
+          <span className="font-mono text-[10px] opacity-75">{counts[tab.id]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LiveTab({
+  openMarkets,
+  openSummary,
+  selectedMarket,
+  selectedMarketId,
+  settledMarkets,
+  onSelectMarket,
+  onSelectSettled,
+}: {
+  openMarkets: MarketModel[];
+  openSummary: ReturnType<typeof summarizeOpenMarkets>;
+  selectedMarket?: MarketModel;
+  selectedMarketId: string | null;
+  settledMarkets: MarketModel[];
+  onSelectMarket: (marketId: string) => void;
+  onSelectSettled: (marketId: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-3 gap-2">
+        <CompactStat label="Live markets" value={openSummary.markets} tone="gold" />
+        <CompactStat label="Ants voting" value={openSummary.voting} tone="cyan" />
+        <CompactStat label="Abstain" value={openSummary.abstain} />
+      </div>
+
+      {openMarkets.length ? (
+        <>
+          <MarketRail markets={openMarkets} selectedId={selectedMarketId} onSelect={onSelectMarket} />
+          {selectedMarket && <FocusedMarketPanel market={selectedMarket} />}
+        </>
+      ) : (
+        <EmptyState title="No market open" body="The next prediction window will appear here." />
+      )}
+
+      {settledMarkets.length > 0 && (
+        <div className="rounded-xl border border-[color:var(--brd-soft)] bg-black/14 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold">Latest settled</p>
+              <p className="text-xs text-ink-faint">Tap one to inspect.</p>
+            </div>
+            <span className="status-pill">{settledMarkets.length}</span>
+          </div>
+          <SettledRail
+            markets={settledMarkets.slice(0, 8)}
+            selectedId={null}
+            onSelect={onSelectSettled}
+            compact
+          />
         </div>
+      )}
+    </div>
+  );
+}
+
+function SettledTab({
+  settledMarkets,
+  selectedSettled,
+  selectedSettledId,
+  onSelectSettled,
+}: {
+  settledMarkets: MarketModel[];
+  selectedSettled?: MarketModel;
+  selectedSettledId: string | null;
+  onSelectSettled: (marketId: string) => void;
+}) {
+  if (!settledMarkets.length) {
+    return <EmptyState title="No settled market yet" body="Results will appear here as markets expire or resolve." />;
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-bold">Settled markets</h2>
+          <p className="text-xs text-ink-faint">Select a result instead of scrolling the journal.</p>
+        </div>
+        <span className="status-pill">{settledMarkets.length}</span>
+      </div>
+      <SettledRail markets={settledMarkets} selectedId={selectedSettledId} onSelect={onSelectSettled} />
+      {selectedSettled && <SettledDetailPanel market={selectedSettled} />}
+    </div>
+  );
+}
+
+function FeedTab({ feedRows, onOpenRanks }: { feedRows: GameEvent[]; onOpenRanks: () => void }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-bold">Feed</h2>
+          <p className="text-xs text-ink-faint">Match signals and engine events.</p>
+        </div>
+        <button className="quiet-link text-sm" onClick={onOpenRanks}>Ranks</button>
+      </div>
+      <div className="max-h-[52dvh] overflow-y-auto rounded-xl border border-[color:var(--brd-soft)] bg-black/14 px-3">
+        {feedRows.length === 0 ? (
+          <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
+        ) : (
+          feedRows.map((event) => (
+            <div key={event.index} className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
+              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(244,234,216,0.2)" }} />
+              <span className="text-sm leading-snug text-ink-soft">{compactEventMessage(event)}</span>
+              <span className="font-mono text-[10px] text-ink-faint">#{event.index}</span>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
 }
 
-function SectionTitle({ title, count, accent }: { title: string; count: number; accent: string }) {
+function CompactStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "cyan" }) {
+  const color = tone === "gold" ? "text-gold" : tone === "cyan" ? "text-cyan" : "text-ink";
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <h2 className="text-lg font-bold">{title}</h2>
-        <p className="text-xs text-ink-faint">{accent}</p>
-      </div>
-      <span className="status-pill">{count}</span>
+    <div className="plate px-2 py-2 text-center">
+      <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
+      <p className={`font-mono text-lg font-bold ${color}`}>{value}</p>
     </div>
+  );
+}
+
+function MarketRail({
+  markets,
+  selectedId,
+  onSelect,
+}: {
+  markets: MarketModel[];
+  selectedId: string | null;
+  onSelect: (marketId: string) => void;
+}) {
+  return (
+    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Active markets">
+      {markets.map((market) => {
+        const distribution = aggregateVotes(market.votes);
+        const selected = selectedId === market.id;
+        return (
+          <button
+            key={market.id}
+            type="button"
+            onClick={() => onSelect(market.id)}
+            className={`min-w-[124px] rounded-xl border p-3 text-left transition ${
+              selected
+                ? "border-cyan/70 bg-[rgba(88,183,170,0.16)] text-ink"
+                : "border-[color:var(--brd-soft)] bg-black/16 text-ink-soft"
+            }`}
+          >
+            <span className="block truncate font-mono text-[10px] uppercase text-gold">{compactMarketName(market)}</span>
+            <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
+            <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-black/35">
+              {distribution.rows.length ? distribution.rows.map((row) => (
+                <span
+                  key={row.key}
+                  className="inline-block h-full"
+                  style={{ width: `${Math.max(4, Math.round((row.count / Math.max(1, distribution.total)) * 100))}%`, background: row.color }}
+                />
+              )) : <span className="block h-full w-1/3 bg-gold/50" />}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettledRail({
+  markets,
+  selectedId,
+  onSelect,
+  compact = false,
+}: {
+  markets: MarketModel[];
+  selectedId: string | null;
+  onSelect: (marketId: string) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Settled markets">
+      {markets.map((market) => {
+        const summary = settlementSummary(market);
+        const selected = selectedId === market.id;
+        return (
+          <button
+            key={market.id}
+            type="button"
+            onClick={() => onSelect(market.id)}
+            className={`min-w-[132px] rounded-xl border p-3 text-left transition ${
+              selected
+                ? "border-gold/70 bg-[rgba(230,161,58,0.14)] text-ink"
+                : "border-[color:var(--brd-soft)] bg-black/16 text-ink-soft"
+            }`}
+          >
+            <span className="block font-mono text-[10px] uppercase text-gold">{compactMarketName(market)}</span>
+            <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
+            {!compact && (
+              <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
+                <b className="rounded bg-black/25 px-1 py-1 text-green">{summary.food}</b>
+                <b className="rounded bg-black/25 px-1 py-1 text-rust">{summary.dead}</b>
+                <b className="rounded bg-black/25 px-1 py-1 text-ink">{summary.voided}</b>
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FocusedMarketPanel({ market }: { market: MarketModel }) {
+  const distribution = aggregateVotes(market.votes);
+  const pending = pendingAntCount(market, distribution.total);
+  return (
+    <article className="rounded-xl border border-cyan/40 bg-[rgba(88,183,170,0.08)] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-cyan">Selected market</p>
+          <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
+          <p className="mt-1 font-mono text-[10px] uppercase text-gold">{marketLabelPrefix(market)}</p>
+        </div>
+        <span className="rounded-full border border-cyan/50 px-2 py-1 font-mono text-[10px] uppercase text-cyan">open</span>
+      </div>
+
+      {distribution.rows.length ? (
+        <Distribution distribution={distribution} title="Ant vote split" />
+      ) : (
+        <OptionPreview opportunity={market.opportunity} />
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink-faint">
+        <span className="rounded-full bg-[rgba(230,161,58,0.1)] px-2 py-1 text-gold">
+          {distribution.voters ? `${distribution.voters} ants answered` : "Waiting for ants"}
+        </span>
+        <span className="rounded-full bg-black/25 px-2 py-1">
+          {market.votes.length}/{Math.max(1, market.starts.length || market.votes.length)} colonies reported
+        </span>
+        {pending > 0 && <span className="rounded-full bg-black/25 px-2 py-1">{pending} calls pending</span>}
+      </div>
+    </article>
+  );
+}
+
+function SettledDetailPanel({ market }: { market: MarketModel }) {
+  const summary = settlementSummary(market);
+  const distribution = aggregateVotes(market.votes);
+  return (
+    <article className="rounded-t-2xl border border-gold/45 bg-[rgba(18,16,12,0.94)] p-3 shadow-[0_-18px_45px_-34px_rgba(230,161,58,0.8)]">
+      <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gold/40" />
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-gold">Settled market</p>
+          <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
+          <p className="mt-1 font-mono text-[10px] uppercase text-ink-faint">{marketLabelPrefix(market)}</p>
+        </div>
+        <span className={`rounded-full border px-2 py-1 font-mono text-[10px] uppercase ${summary.tone}`}>
+          {summary.label}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <PulseMetric label="Food" value={summary.food > 0 ? `+${summary.food}` : 0} tone={summary.food > 0 ? "green" : undefined} />
+        <PulseMetric label="Dead" value={summary.dead} />
+        <PulseMetric label="Void" value={summary.voided} />
+      </div>
+
+      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="Vote split" />}
+
+      <div className="mt-3 flex flex-col gap-1">
+        {[...market.settlements, ...market.voids].slice(0, 3).map((event) => (
+          <p key={event.index} className="text-xs leading-snug text-ink-soft">{compactEventMessage(event)}</p>
+        ))}
+      </div>
+    </article>
   );
 }
 
@@ -299,72 +574,10 @@ function PulseMetric({ label, value, tone }: { label: string; value: number | st
   );
 }
 
-function MarketPanel({ market, compact = false }: { market: MarketModel; compact?: boolean }) {
-  const distribution = aggregateVotes(market.votes);
-  const pending = pendingAntCount(market, distribution.total);
-  return (
-    <article className="rounded-xl border border-[color:var(--brd-soft)] bg-black/18 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-bold text-gold">{marketLabelPrefix(market)}</p>
-          <h3 className={`${compact ? "text-sm" : "text-base"} font-bold leading-snug`}>{cleanMarketLabel(market.label)}</h3>
-        </div>
-        <span className="rounded-full border border-gold/40 px-2 py-1 font-mono text-[10px] uppercase text-gold">open</span>
-      </div>
-
-      {distribution.rows.length ? (
-        <Distribution distribution={distribution} />
-      ) : (
-        <OptionPreview opportunity={market.opportunity} />
-      )}
-
-      <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink-faint">
-        <span className="rounded-full bg-[rgba(230,161,58,0.1)] px-2 py-1 text-gold">
-          {distribution.voters ? `${distribution.voters} ants answered` : "Waiting for ants"}
-        </span>
-        <span className="rounded-full bg-black/25 px-2 py-1">
-          {market.votes.length}/{Math.max(1, market.starts.length || market.votes.length)} colonies reported
-        </span>
-        {pending > 0 && <span className="rounded-full bg-black/25 px-2 py-1">{pending} calls pending</span>}
-      </div>
-    </article>
-  );
-}
-
-function SettledPanel({ market, compact = false }: { market: MarketModel; compact?: boolean }) {
-  const summary = settlementSummary(market);
-  return (
-    <article className="rounded-xl border border-[color:var(--brd-soft)] bg-black/18 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-bold text-ink-soft">{marketLabelPrefix(market)}</p>
-          <h3 className={`${compact ? "text-sm" : "text-base"} font-bold leading-snug`}>{cleanMarketLabel(market.label)}</h3>
-        </div>
-        <span className={`rounded-full border px-2 py-1 font-mono text-[10px] uppercase ${summary.tone}`}>
-          {summary.label}
-        </span>
-      </div>
-
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <PulseMetric label="Food" value={summary.food > 0 ? `+${summary.food}` : 0} tone={summary.food > 0 ? "green" : undefined} />
-        <PulseMetric label="Dead" value={summary.dead} />
-        <PulseMetric label="Void" value={summary.voided} />
-      </div>
-
-      {!compact && (
-        <div className="mt-3 flex flex-col gap-1">
-          {[...market.settlements, ...market.voids].slice(0, 3).map((event) => (
-            <p key={event.index} className="text-xs leading-snug text-ink-soft">{compactEventMessage(event)}</p>
-          ))}
-        </div>
-      )}
-    </article>
-  );
-}
-
-function Distribution({ distribution }: { distribution: ReturnType<typeof aggregateVotes> }) {
+function Distribution({ distribution, title }: { distribution: ReturnType<typeof aggregateVotes>; title?: string }) {
   return (
     <div className="mt-3">
+      {title && <p className="mb-2 text-xs font-bold text-ink-faint">{title}</p>}
       <div className="flex h-3 overflow-hidden rounded-full bg-black/35" aria-label={`Vote distribution, ${distribution.total} ants`}>
         {distribution.rows.map((row) => (
           <span
@@ -377,7 +590,7 @@ function Distribution({ distribution }: { distribution: ReturnType<typeof aggreg
         ))}
       </div>
       <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, distribution.rows.length)}, minmax(0, 1fr))` }}>
-        {distribution.rows.slice(0, 3).map((row) => (
+        {distribution.rows.map((row) => (
           <div key={row.key} className="rounded-lg border border-[color:var(--brd-soft)] px-2 py-2">
             <p className="truncate text-xs font-bold" style={{ color: row.color }}>{row.label}</p>
             <p className="font-mono text-xl font-bold">{row.count}</p>
@@ -540,6 +753,22 @@ function aggregateVotes(votes: GameEvent[]) {
   return { rows, total, voters };
 }
 
+function summarizeOpenMarkets(markets: MarketModel[]) {
+  return markets.reduce(
+    (summary, market) => {
+      const distribution = aggregateVotes(market.votes);
+      const expected = market.starts.reduce((sum, event) => sum + Number(event.data?.activeCount ?? 0), 0);
+      const abstain = distribution.rows.find((row) => row.key === "abstain")?.count ?? 0;
+      return {
+        markets: summary.markets + 1,
+        voting: summary.voting + Math.max(distribution.total, expected),
+        abstain: summary.abstain + abstain,
+      };
+    },
+    { markets: 0, voting: 0, abstain: 0 },
+  );
+}
+
 function pendingAntCount(market: MarketModel, answered: number) {
   const expected = market.starts.reduce((sum, event) => sum + Number(event.data?.activeCount ?? 0), 0);
   return Math.max(0, expected - answered);
@@ -589,6 +818,22 @@ function minuteFromLabel(label?: string) {
 
 function marketLabelPrefix(market: MarketModel) {
   return market.minute != null ? `${market.minute}' window` : `#${market.lastIndex}`;
+}
+
+function compactMarketName(market: MarketModel) {
+  const prefix = market.minute != null ? `${market.minute}'` : `#${market.lastIndex}`;
+  return `${prefix} ${marketKindName(market.label)}`;
+}
+
+function marketKindName(label: string) {
+  const clean = cleanMarketLabel(label).toLowerCase();
+  if (clean.includes("commits the next foul")) return "Foul";
+  if (clean.includes("scores the next goal")) return "Next goal";
+  if (clean.includes("goal in the next 10")) return "Goal 10m";
+  if (clean.includes("penalty")) return "Penalty";
+  if (clean.includes("corner")) return "Corner";
+  if (clean.includes("card")) return "Card";
+  return cleanMarketLabel(label).replace(/\?$/, "").split(" ").slice(0, 3).join(" ");
 }
 
 function cleanMarketLabel(label: string) {
