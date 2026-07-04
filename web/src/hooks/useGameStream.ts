@@ -5,6 +5,7 @@ import { sseUrl } from "@/lib/api";
 import type { GameEvent, GameState } from "@/lib/types";
 
 interface Handlers {
+  onOpen?: () => void;
   onEvent?: (e: GameEvent) => void;
   onState?: (g: GameState) => void;
   onError?: () => void;
@@ -12,11 +13,15 @@ interface Handlers {
 
 export function useGameStream(gameId: string | null, handlers: Handlers, enabled = true) {
   const ref = useRef(handlers);
-  ref.current = handlers;
+
+  useEffect(() => {
+    ref.current = handlers;
+  }, [handlers]);
 
   useEffect(() => {
     if (!gameId || !enabled) return;
     const es = new EventSource(sseUrl(gameId));
+    es.onopen = () => ref.current.onOpen?.();
     es.addEventListener("game_event", (e) => {
       try { ref.current.onEvent?.(JSON.parse((e as MessageEvent).data)); } catch { /* */ }
     });
