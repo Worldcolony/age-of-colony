@@ -301,7 +301,7 @@ function LiveTab({
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-3 gap-2">
         <CompactStat label="Live markets" value={openSummary.markets} tone="gold" />
-        <CompactStat label="Ants voting" value={openSummary.voting} tone="cyan" />
+        <CompactStat label="Answers" value={openSummary.answers} tone="cyan" />
         <CompactStat label="Abstain" value={openSummary.abstain} />
       </div>
 
@@ -496,20 +496,21 @@ function FocusedMarketPanel({ market }: { market: MarketModel }) {
         <div className="min-w-0">
           <p className="text-xs font-bold text-cyan">Selected market</p>
           <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
+          <p className="mt-1 text-xs text-ink-faint">Aggregated across all colonies.</p>
           <p className="mt-1 font-mono text-[10px] uppercase text-gold">{marketLabelPrefix(market)}</p>
         </div>
         <span className="rounded-full border border-cyan/50 px-2 py-1 font-mono text-[10px] uppercase text-cyan">open</span>
       </div>
 
       {distribution.rows.length ? (
-        <Distribution distribution={distribution} title="Ant vote split" />
+        <Distribution distribution={distribution} title="Vote split (all colonies)" />
       ) : (
         <OptionPreview opportunity={market.opportunity} />
       )}
 
       <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink-faint">
         <span className="rounded-full bg-[rgba(230,161,58,0.1)] px-2 py-1 text-gold">
-          {distribution.voters ? `${distribution.voters} ants answered` : "Waiting for ants"}
+          {distribution.total ? `${distribution.total} total ant votes` : "Waiting for ants"}
         </span>
         <span className="rounded-full bg-black/25 px-2 py-1">
           {market.votes.length}/{Math.max(1, market.starts.length || market.votes.length)} colonies reported
@@ -543,7 +544,7 @@ function SettledDetailPanel({ market }: { market: MarketModel }) {
         <PulseMetric label="Void" value={summary.voided} />
       </div>
 
-      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="Vote split" />}
+      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="Vote split (all colonies)" />}
 
       <div className="mt-3 flex flex-col gap-1">
         {[...market.settlements, ...market.voids].slice(0, 3).map((event) => (
@@ -623,7 +624,7 @@ function RankCard({ mine, rank }: { mine?: Colony; rank: number }) {
   return (
     <section className="glass grid grid-cols-4 gap-1 p-3 text-center">
       <Vital label="Rank" value={`#${rank}`} tone="gold" />
-      <Vital label="Ants" value={mine.antsAlive} />
+      <Vital label="My ants" value={mine.antsAlive} />
       <Vital label="Food" value={mine.food} tone="green" />
       <Vital label="Larvae" value={mine.larvae} />
     </section>
@@ -761,11 +762,11 @@ function summarizeOpenMarkets(markets: MarketModel[]) {
       const abstain = distribution.rows.find((row) => row.key === "abstain")?.count ?? 0;
       return {
         markets: summary.markets + 1,
-        voting: summary.voting + Math.max(distribution.total, expected),
+        answers: summary.answers + Math.max(distribution.total, expected),
         abstain: summary.abstain + abstain,
       };
     },
-    { markets: 0, voting: 0, abstain: 0 },
+    { markets: 0, answers: 0, abstain: 0 },
   );
 }
 
