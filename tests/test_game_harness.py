@@ -1781,6 +1781,18 @@ class DemoRunApiTest(unittest.TestCase):
                 )
             self.assertEqual(allowed_demo.status_code, 200)
 
+            health_before_session = client.get("/health").json()
+            self.assertFalse(health_before_session["adminAuthenticated"])
+            bad_session = client.post("/api/admin/session", json={"token": "wrong"})
+            self.assertEqual(bad_session.status_code, 403)
+            session = client.post("/api/admin/session", json={"token": "secret"})
+            self.assertEqual(session.status_code, 200)
+            self.assertTrue(session.json()["adminAuthenticated"])
+            health_after_session = client.get("/health").json()
+            self.assertTrue(health_after_session["adminAuthenticated"])
+            cookie_admin_games = client.get("/api/admin/games")
+            self.assertEqual(cookie_admin_games.status_code, 200)
+
             admin_room_payload = {
                 "fixtureId": 616161,
                 "participant1": "France",
@@ -1810,7 +1822,7 @@ class DemoRunApiTest(unittest.TestCase):
                     }
                 ],
             }
-            blocked_admin_room = client.post("/api/admin/rooms", json=admin_room_payload)
+            blocked_admin_room = TestClient(app).post("/api/admin/rooms", json=admin_room_payload)
             self.assertEqual(blocked_admin_room.status_code, 403)
 
             allowed_admin_room = client.post(

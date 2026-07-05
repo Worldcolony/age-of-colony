@@ -76,6 +76,8 @@ LIVE_SCORE_POLL_SECONDS = 2.5
 LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
 REPLAY_MAX_DELAY_SECONDS = 8.0
 ADMIN_TOKEN_HEADER = "x-aoc-admin-token"
+ADMIN_SESSION_COOKIE = "aoc_admin_session"
+ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 
 def _env_float(name: str, default: float) -> float:
@@ -92,12 +94,27 @@ def _admin_token() -> str | None:
     return (os.getenv("AOC_ADMIN_TOKEN") or "").strip() or None
 
 
+def _admin_session_value(expected: str) -> str:
+    return hmac.new(expected.encode("utf-8"), b"age-of-colony-admin-session-v1", hashlib.sha256).hexdigest()
+
+
+def _request_has_admin_session(request: Request, expected: str) -> bool:
+    supplied = (request.headers.get(ADMIN_TOKEN_HEADER) or "").strip()
+    if supplied and hmac.compare_digest(supplied, expected):
+        return True
+    cookie = (request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
+    return bool(cookie and hmac.compare_digest(cookie, _admin_session_value(expected)))
+
+
+def _is_secure_request(request: Request) -> bool:
+    return request.url.scheme == "https" or (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip() == "https"
+
+
 def require_admin_tool(request: Request) -> None:
     expected = _admin_token()
     if not expected:
         return
-    supplied = (request.headers.get(ADMIN_TOKEN_HEADER) or "").strip()
-    if not supplied or not hmac.compare_digest(supplied, expected):
+    if not _request_has_admin_session(request, expected):
         raise HTTPException(status_code=403, detail="Admin token required for replay/debug tools.")
 
 
@@ -154,6 +171,10 @@ class FinishGameRequest(BaseModel):
 
 class DemoRunRequest(BaseModel):
     seed: int | None = None
+
+
+class AdminSessionRequest(BaseModel):
+    token: str
 
 
 class RunPreviousTxRequest(BaseModel):
@@ -221,9 +242,10 @@ async def index() -> FileResponse:
 
 
 @app.get("/health")
-async def health() -> dict[str, Any]:
+async def health(request: Request) -> dict[str, Any]:
     settings = TxLineSettings.from_env()
     agent_settings = OpenRouterSettings.from_env()
+    admin_token = _admin_token()
     return {
         "ok": True,
         "txlineConfigured": settings.configured,
@@ -242,9 +264,31 @@ async def health() -> dict[str, Any]:
             "inputPerMillionUsd": agent_settings.input_price_per_million_usd,
             "outputPerMillionUsd": agent_settings.output_price_per_million_usd,
         },
-        "adminToolsProtected": bool(_admin_token()),
+        "adminToolsProtected": bool(admin_token),
+        "adminAuthenticated": bool(admin_token and _request_has_admin_session(request, admin_token)),
         "supabase": supabase_store.public_status(),
     }
+
+
+@app.post("/api/admin/session")
+async def create_admin_session(payload: AdminSessionRequest, request: Request) -> JSONResponse:
+    expected = _admin_token()
+    if not expected:
+        return JSONResponse({"ok": True, "protected": False, "adminAuthenticated": True})
+    supplied = payload.token.strip()
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="Admin token required for replay/debug tools.")
+    response = JSONResponse({"ok": True, "protected": True, "adminAuthenticated": True})
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        _admin_session_value(expected),
+        max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=_is_secure_request(request),
+        samesite="lax",
+        path="/",
+    )
+    return response
 
 
 @app.post("/api/games")

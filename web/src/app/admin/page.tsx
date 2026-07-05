@@ -69,8 +69,9 @@ export default function AdminPage() {
   const [working, setWorking] = useState("");
 
   const protectedAdmin = Boolean(health?.adminToolsProtected);
+  const adminSessionActive = Boolean(health?.adminAuthenticated);
   const requestToken = adminToken.trim();
-  const canUseAdmin = !protectedAdmin || Boolean(requestToken);
+  const canUseAdmin = !protectedAdmin || Boolean(requestToken) || adminSessionActive;
   const tx = Boolean(health?.txlineConfigured);
   const or = Boolean(health?.openrouterConfigured);
   const selectedFixture = useMemo(
@@ -103,8 +104,8 @@ export default function AdminPage() {
           ? "Error"
           : "No match loaded";
 
-  async function loadFixtures(token = requestToken, shouldProtect = protectedAdmin) {
-    if (shouldProtect && !token) {
+  async function loadFixtures(token = requestToken, shouldProtect = protectedAdmin, hasSession = adminSessionActive) {
+    if (shouldProtect && !token && !hasSession) {
       setFixtures([]);
       setSelectedFixtureKey("");
       setFixtureLoadState({ status: "idle", message: "Enter the admin token before loading matches." });
@@ -179,8 +180,8 @@ export default function AdminPage() {
     return `${scanned} fixture${scanned === 1 ? "" : "s"} scanned, ${inspected} checked for score data.`;
   }
 
-  async function loadGames(token = requestToken, shouldProtect = protectedAdmin) {
-    if (shouldProtect && !token) {
+  async function loadGames(token = requestToken, shouldProtect = protectedAdmin, hasSession = adminSessionActive) {
+    if (shouldProtect && !token && !hasSession) {
       setGames([]);
       return;
     }
@@ -188,14 +189,14 @@ export default function AdminPage() {
     setGames(data.games ?? []);
   }
 
-  async function refreshDashboard(token = requestToken, shouldProtect = protectedAdmin) {
-    if (shouldProtect && !token) {
+  async function refreshDashboard(token = requestToken, shouldProtect = protectedAdmin, hasSession = adminSessionActive) {
+    if (shouldProtect && !token && !hasSession) {
       setMsg("Enter the admin token to load the simulation dashboard.");
       return;
     }
     setWorking("refresh");
     try {
-      await Promise.all([loadFixtures(token, shouldProtect), loadGames(token, shouldProtect)]);
+      await Promise.all([loadFixtures(token, shouldProtect, hasSession), loadGames(token, shouldProtect, hasSession)]);
       setMsg("");
     } catch (e) {
       setMsg((e as Error).message);
@@ -212,7 +213,8 @@ export default function AdminPage() {
         if (cancelled) return;
         setHealth(h);
         const shouldProtect = Boolean(h.adminToolsProtected);
-        if (!shouldProtect || requestToken) refreshDashboard(requestToken, shouldProtect);
+        const hasSession = Boolean(h.adminAuthenticated);
+        if (!shouldProtect || requestToken || hasSession) refreshDashboard(requestToken, shouldProtect, hasSession);
       })
       .catch((e) => {
         if (!cancelled) setMsg((e as Error).message);
@@ -224,10 +226,24 @@ export default function AdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function saveToken() {
+  async function saveToken() {
     const token = adminToken.trim();
-    if (typeof window !== "undefined") localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-    refreshDashboard(token, protectedAdmin);
+    if (!token && protectedAdmin) {
+      setMsg("Enter the admin token to unlock the dashboard.");
+      return;
+    }
+    setWorking("session");
+    setMsg("Unlocking admin session...");
+    try {
+      if (token) await api.adminSession(token);
+      if (typeof window !== "undefined") localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+      setHealth((current) => ({ ...(current ?? {}), adminAuthenticated: true }));
+      await refreshDashboard(token, protectedAdmin, true);
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setWorking("");
+    }
   }
 
   function updateColony(index: number, patch: Partial<AdminColonyDraft>) {

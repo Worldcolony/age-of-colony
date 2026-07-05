@@ -19,7 +19,7 @@ export class ApiError extends Error {
 }
 
 async function req<T>(path: string, method = "GET", body?: unknown, headers?: Record<string, string>): Promise<T> {
-  const opts: RequestInit = { method, headers: { ...headers } };
+  const opts: RequestInit = { method, credentials: "include", headers: { ...headers } };
   if (body !== undefined) {
     (opts.headers as Record<string, string>)["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body ?? {});
@@ -102,6 +102,7 @@ export interface ReplayFixtureList {
 
 export const api = {
   health: () => req<Record<string, unknown>>("/health"),
+  adminSession: (token: string) => req<{ ok: boolean; protected?: boolean; adminAuthenticated?: boolean }>("/api/admin/session", "POST", { token }),
 
   upcomingFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
     req<FixtureList>(`/api/fixtures/upcoming${qs(p)}`),
