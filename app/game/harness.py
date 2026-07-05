@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+import re
 import time
 import uuid
 from collections import Counter, deque
@@ -1358,7 +1359,7 @@ def event_context(event: dict[str, Any]) -> str | None:
 
 def event_contexts(event: dict[str, Any]) -> list[str]:
     flags = set(event.get("highlights") or [])
-    if "penalty" in flags or _event_has_text(event, "penalty"):
+    if _event_is_penalty_award(event):
         targets = event_targets(event)
         if targets.intersection({"goal", "miss", "saved", "cancel"}):
             return []
@@ -1373,6 +1374,26 @@ def event_contexts(event: dict[str, Any]) -> list[str]:
     ):
         return ["goal_next_10", "next_goal_team", "next_foul"]
     return []
+
+
+def _event_is_penalty_award(event: dict[str, Any]) -> bool:
+    action = _event_token(event.get("action"))
+    event_type = _event_token(event.get("type"))
+    flags = set(event.get("highlights") or [])
+    false_prefixes = ("penalty_area", "penalty_box", "penalty_arc", "penalty_possible")
+    if action in {"penalty", "penalties"}:
+        return True
+    if action.startswith("penalty_") and not action.startswith(false_prefixes) and "possible" not in action:
+        return True
+    if event_type in {"penalty", "penalties", "penalty_awarded", "penalty_kick"}:
+        return True
+    return "penalty" in flags and action in {"", "penalty", "penalties"}
+
+
+def _event_token(value: Any) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"[^a-z0-9]+", "_", str(value).casefold()).strip("_")
 
 
 def opportunity_deadline_seconds(context: str) -> int | None:

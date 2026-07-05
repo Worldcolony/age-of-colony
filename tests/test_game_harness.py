@@ -152,6 +152,29 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(foul_market.options[0].label, "yes, France commits the next foul")
         self.assertEqual(foul_market.options[1].label, "no, Belgium commits the next foul")
 
+    def test_penalty_area_pressure_does_not_create_penalty_market(self):
+        room, _ = self.make_room()
+        opportunities = build_opportunities(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "attack_possession",
+                "highlights": ["penalty"],
+                "minute": 11,
+                "clockSeconds": 660,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "possessionType": "Penalty area",
+                "description": "France attacks inside the penalty area",
+            },
+            1,
+            room.match_state,
+        )
+
+        self.assertEqual([opportunity.context for opportunity in opportunities], ["goal_next_10", "next_goal_team", "next_foul"])
+
     def test_user_config_creates_diverse_ant_distribution(self):
         _, harness = self.make_room()
         colony = harness.add_colony(

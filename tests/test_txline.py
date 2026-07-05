@@ -64,6 +64,18 @@ class TxLineNormalizationTest(unittest.TestCase):
         self.assertFalse(normalized["isHighlight"])
         self.assertNotIn("goal", normalized["highlights"])
 
+    def test_penalty_area_text_is_not_a_penalty_highlight(self):
+        normalized = normalize_score_record(
+            {
+                "fixtureId": 42,
+                "action": "attack_possession",
+                "possessionType": "Penalty area",
+                "dataSoccer": {"New": {"Type": "Attack"}},
+            }
+        )
+
+        self.assertNotIn("penalty", normalized["highlights"])
+
     def test_timeline_detects_possession_changes(self):
         records = [
             {"fixtureId": 42, "seq": 1, "possession": 1, "action": "safe_possession"},

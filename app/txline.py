@@ -391,7 +391,7 @@ def normalize_score_record(
         if item
     ).casefold()
 
-    flags = _highlight_flags(soccer, text_blob)
+    flags = _highlight_flags(soccer, text_blob, action=action, event_type=event_type)
     participant = _first_not_none(
         pick(soccer, "Participant", "participant"),
         pick(payload, "participant", "Participant"),
@@ -722,7 +722,7 @@ def _looks_like_sse_score(raw: dict[str, Any]) -> bool:
     return isinstance(raw.get("data"), dict) and ("event" in raw or "dataSoccer" in raw.get("data", {}))
 
 
-def _highlight_flags(soccer: dict[str, Any], text_blob: str) -> list[str]:
+def _highlight_flags(soccer: dict[str, Any], text_blob: str, *, action: str | None = None, event_type: str | None = None) -> list[str]:
     flags: list[str] = []
 
     def add(flag: str, condition: bool) -> None:
@@ -730,7 +730,7 @@ def _highlight_flags(soccer: dict[str, Any], text_blob: str) -> list[str]:
             flags.append(flag)
 
     add("goal", as_bool(soccer.get("Goal")) or _contains_scoring_goal(text_blob))
-    add("penalty", as_bool(soccer.get("Penalty")) or "penalty" in text_blob)
+    add("penalty", as_bool(soccer.get("Penalty")) or _is_penalty_action(action, event_type))
     add(
         "free_kick",
         bool(clean_text(soccer.get("FreeKickType")) or clean_text(nested_get(soccer, "New", "FreeKickType")))
@@ -1148,6 +1148,34 @@ def _contains_scoring_goal(text_blob: str) -> bool:
         return False
     tokens = [token for token in re.split(r"[^a-z0-9]+", text_blob) if token]
     return "goal" in tokens or "but" in tokens
+
+
+def _is_penalty_action(*values: Any) -> bool:
+    false_prefixes = ("penalty_area", "penalty_box", "penalty_arc", "penalty_possible")
+    true_tokens = {
+        "penalty",
+        "penalties",
+        "penalty_awarded",
+        "penalty_given",
+        "penalty_kick",
+        "penalty_scored",
+        "penalty_saved",
+        "penalty_missed",
+        "penalty_confirmed",
+        "spot_kick",
+    }
+    for value in values:
+        text = clean_text(value)
+        if not text:
+            continue
+        token = re.sub(r"[^a-z0-9]+", "_", text.casefold()).strip("_")
+        if not token or token.startswith(false_prefixes):
+            continue
+        if token in true_tokens:
+            return True
+        if token.startswith("penalty_") and "possible" not in token:
+            return True
+    return False
 
 
 def _event_title(action: str | None) -> str | None:
