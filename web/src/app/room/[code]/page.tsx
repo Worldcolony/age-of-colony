@@ -6,9 +6,21 @@ import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, fmtKickoffLine, teamName } from "@/lib/format";
-import type { GameState, Player } from "@/lib/types";
+import { Segmented, Chips } from "@/components/Segmented";
+import type { FavoriteContext, GameState, InfoNeed, Player, Style } from "@/lib/types";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
+const STYLES: { value: Style; label: string }[] = [
+  { value: "cautious", label: "Cautious" },
+  { value: "balanced", label: "Balanced" },
+  { value: "aggressive", label: "Aggressive" },
+];
+const GROUNDS: FavoriteContext[] = ["penalties", "corners", "momentum", "chaos", "balanced"];
+const INFO: { value: InfoNeed; label: string }[] = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
 
 export default function RoomPage() {
   const router = useRouter();
@@ -25,6 +37,9 @@ export default function RoomPage() {
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [style, setStyle] = useState<Style>("balanced");
+  const [ground, setGround] = useState<FavoriteContext>("momentum");
+  const [info, setInfo] = useState<InfoNeed>("medium");
 
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
@@ -104,9 +119,9 @@ export default function RoomPage() {
         g = await api.addColony(g.gameId, {
           name: cleanName,
           size: 20,
-          style: "balanced",
-          favoriteContext: "momentum",
-          infoNeed: "medium",
+          style,
+          favoriteContext: ground,
+          infoNeed: info,
           anonymousId: anonId,
         });
       }
@@ -163,9 +178,9 @@ export default function RoomPage() {
         <section className="glass pheromone-line flex flex-col gap-4 p-4">
           <div>
             <h2 className="font-bold">Enter the match</h2>
-            <p className="mt-1 text-sm text-ink-faint">One name for you and your colony.</p>
+            <p className="mt-1 text-sm text-ink-faint">One name for you and your colony, with tactics set before launch.</p>
           </div>
-          <div className="flex gap-2">
+          <Field label="Colony name">
             <input
               className="input"
               maxLength={32}
@@ -173,10 +188,19 @@ export default function RoomPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            <button className="btn btn-primary !w-auto shrink-0 px-5" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
-              {joining ? "Joining..." : "Join match"}
-            </button>
-          </div>
+          </Field>
+          <Field label="Strategy">
+            <Segmented options={STYLES} value={style} onChange={setStyle} />
+          </Field>
+          <Field label="Focus">
+            <Chips options={GROUNDS} value={ground} onChange={setGround} />
+          </Field>
+          <Field label="Risk level">
+            <Segmented options={INFO} value={info} onChange={setInfo} />
+          </Field>
+          <button className="btn btn-primary" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
+            {joining ? "Joining..." : "Join match"}
+          </button>
         </section>
       )}
 
@@ -252,4 +276,13 @@ function hasLocalColony(game: GameState, anonId: string): boolean {
 
 function isRoomCode(value: string): boolean {
   return /^\d{6}$/.test(value);
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-2">
+      <span className="text-sm font-bold text-ink-soft">{label}</span>
+      {children}
+    </label>
+  );
 }
