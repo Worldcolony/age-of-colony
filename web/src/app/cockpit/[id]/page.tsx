@@ -56,6 +56,13 @@ interface ColonyMarketActivity {
   topVote?: ReturnType<typeof aggregateVotes>["rows"][number];
 }
 
+interface MarketOutcome {
+  label: string;
+  detail: string;
+  badge: string;
+  tone: "green" | "gold" | "rust" | "muted";
+}
+
 export default function CockpitPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -564,6 +571,7 @@ function SettledRail({
     <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Settled markets">
       {markets.map((market) => {
         const summary = settlementSummary(market);
+        const outcome = marketOutcomeSummary(market);
         const selected = selectedId === market.id;
         return (
           <button
@@ -578,6 +586,11 @@ function SettledRail({
           >
             <span className="block font-mono text-[10px] uppercase text-gold-deep">{compactMarketName(market)}</span>
             <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
+            {!compact && (
+              <span className="mt-1 block truncate text-[11px] font-bold text-green">
+                Outcome: {outcome.label}
+              </span>
+            )}
             {!compact && (
               <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
                 <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-green">{summary.food}</b>
@@ -633,6 +646,7 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
   const summary = settlementSummary(market);
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
+  const outcome = marketOutcomeSummary(market);
   return (
     <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] p-3 shadow-[4px_4px_0_rgba(74,58,30,0.28)]">
       <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gold/40" />
@@ -646,6 +660,8 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
           {summary.label}
         </span>
       </div>
+
+      <MarketOutcomePanel outcome={outcome} />
 
       <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
 
@@ -666,6 +682,28 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
         ))}
       </div>
     </article>
+  );
+}
+
+function MarketOutcomePanel({ outcome }: { outcome: MarketOutcome }) {
+  const tone = outcome.tone === "green"
+    ? "border-[color:rgba(78,126,42,0.5)] bg-[rgba(78,126,42,0.1)] text-green"
+    : outcome.tone === "rust"
+      ? "border-[color:rgba(194,90,58,0.5)] bg-[rgba(194,90,58,0.08)] text-rust"
+      : outcome.tone === "gold"
+        ? "border-[color:rgba(176,126,28,0.5)] bg-[rgba(176,126,28,0.1)] text-gold-deep"
+        : "border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] text-ink-faint";
+  return (
+    <section className={`mt-3 rounded-md border-2 p-3 ${tone}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="eyebrow">Outcome</p>
+          <h3 className="truncate text-lg font-bold text-ink">{outcome.label}</h3>
+          <p className="mt-1 text-xs font-bold text-ink-faint">{outcome.detail}</p>
+        </div>
+        <span className="status-pill bg-[rgba(249,243,226,0.78)]">{outcome.badge}</span>
+      </div>
+    </section>
   );
 }
 
@@ -1079,6 +1117,117 @@ function settlementSummary(market: MarketModel) {
   return { food, dead, voided, wins, losses, label, tone };
 }
 
+function marketOutcomeSummary(market: MarketModel): MarketOutcome {
+  const winningLabels = uniqueNonEmpty(
+    market.settlements
+      .filter((event) => Boolean(eventData(event)?.win))
+      .map(eventOptionLabel),
+  );
+  if (winningLabels.length === 1) {
+    return {
+      label: cleanOutcomeLabel(winningLabels[0]),
+      detail: `${market.settlements.filter((event) => Boolean(eventData(event)?.win)).length} winning colony result(s).`,
+      badge: "confirmed",
+      tone: "green",
+    };
+  }
+  if (winningLabels.length > 1) {
+    return {
+      label: winningLabels.map(cleanOutcomeLabel).join(" / "),
+      detail: "Multiple winning options were recorded.",
+      badge: "confirmed",
+      tone: "green",
+    };
+  }
+
+  const inferred = inferOutcomeFromSettlements(market);
+  if (inferred) return inferred;
+
+  const voidReason = firstReason(market.voids);
+  if (market.voids.length && !market.settlements.length) {
+    return {
+      label: voidOutcomeLabel(market, voidReason),
+      detail: voidReason ? `Voided by ${humanizeReason(voidReason)}.` : "All recorded positions were voided.",
+      badge: "void",
+      tone: "muted",
+    };
+  }
+
+  if (market.settlements.length) {
+    return {
+      label: "Resolved",
+      detail: "No winning colony selected the outcome, so the exact outcome is not stored in this replay.",
+      badge: "review",
+      tone: "gold",
+    };
+  }
+
+  return {
+    label: "Closed",
+    detail: "No outcome data was recorded for this market.",
+    badge: "closed",
+    tone: "muted",
+  };
+}
+
+function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null {
+  const reason = firstReason(market.settlements) || firstReason(market.voids);
+  const label = cleanMarketLabel(market.label).toLowerCase();
+  const context = market.opportunity?.context;
+  if ((context === "goal_next_10" || label.includes("goal in the next 10")) && ["expired", "full_time"].includes(reason || "")) {
+    return {
+      label: "no goal in the next 10 min",
+      detail: `Inferred from ${humanizeReason(reason)}.`,
+      badge: "inferred",
+      tone: "gold",
+    };
+  }
+  if ((context === "next_goal_team" || label.includes("who scores the next goal")) && ["expired", "full_time"].includes(reason || "")) {
+    return {
+      label: "no goal before the deadline",
+      detail: `Inferred from ${humanizeReason(reason)}.`,
+      badge: "inferred",
+      tone: "gold",
+    };
+  }
+  if ((context === "next_foul" || label.includes("who commits the next foul")) && reason === "expired_no_foul") {
+    return {
+      label: "no foul before the deadline",
+      detail: "The foul market expired without a qualifying foul.",
+      badge: "void",
+      tone: "muted",
+    };
+  }
+
+  const optionLabels = (market.opportunity?.options ?? [])
+    .map((option) => option.label || option.value || option.optionId || "")
+    .filter(Boolean);
+  const losingLabels = uniqueNonEmpty(
+    market.settlements
+      .filter((event) => eventData(event)?.win === false)
+      .map(eventOptionLabel),
+  );
+  if (optionLabels.length === 2 && losingLabels.length === 1) {
+    const outcome = optionLabels.find((option) => normalizeLabel(option) !== normalizeLabel(losingLabels[0]));
+    if (outcome) {
+      return {
+        label: cleanOutcomeLabel(outcome),
+        detail: "Inferred from the losing side on a two-option market.",
+        badge: "inferred",
+        tone: "gold",
+      };
+    }
+  }
+  return null;
+}
+
+function voidOutcomeLabel(market: MarketModel, reason?: string) {
+  const label = cleanMarketLabel(market.label).toLowerCase();
+  if (reason === "expired_no_foul" || label.includes("who commits the next foul")) return "no foul before the deadline";
+  if (reason === "full_time") return "voided at full time";
+  return "market voided";
+}
+
 function colonyMarketActivity(market: MarketModel, colony?: Colony): ColonyMarketActivity {
   const colonyId = colony?.colonyId;
   const voteEvent = latestColonyEvent(market.votes, colonyId);
@@ -1202,6 +1351,7 @@ function eventData(event?: GameEvent) {
         food?: number;
         larvae?: number;
         option?: { label?: string; optionId?: string };
+        reason?: string;
         win?: boolean;
         wounded?: number;
       }
@@ -1211,6 +1361,36 @@ function eventData(event?: GameEvent) {
 function eventOptionLabel(event?: GameEvent) {
   const option = eventData(event)?.option;
   return option?.label || option?.optionId || "";
+}
+
+function firstReason(events: GameEvent[]) {
+  return events.map((event) => eventData(event)?.reason).find(Boolean);
+}
+
+function uniqueNonEmpty(values: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const clean = value.trim();
+    const key = normalizeLabel(clean);
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(clean);
+  }
+  return unique;
+}
+
+function normalizeLabel(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function cleanOutcomeLabel(value: string) {
+  return shortVoteLabel(value).replace(/\?$/, "");
+}
+
+function humanizeReason(reason?: string) {
+  if (!reason) return "settlement";
+  return reason.replace(/_/g, " ");
 }
 
 function voteTone(key: string): "green" | "gold" | "rust" | "muted" {

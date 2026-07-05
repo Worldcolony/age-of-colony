@@ -61,6 +61,7 @@ export interface OpportunityOption {
 
 export interface Opportunity {
   opportunityId?: string;
+  context?: string;
   label?: string;
   question?: string;
   kind?: string; // safe | precision | chaos | hero
