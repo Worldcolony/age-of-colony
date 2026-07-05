@@ -116,4 +116,5 @@ export interface StrategyPatch {
   style?: Style;
   favoriteContext?: FavoriteContext;
   infoNeed?: InfoNeed;
+  anonymousId?: string;
 }

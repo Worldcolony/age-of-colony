@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useQueen, EMBLEMS } from "@/lib/queen";
 import { AntMarch } from "@/components/AntMarch";
@@ -14,14 +14,14 @@ export default function QueenPage() {
   const [emblem, setEmblem] = useState<string>(EMBLEMS[0]);
   const [msg, setMsg] = useState("");
 
-  // prefill the form when editing an existing queen
-  useEffect(() => {
+  function beginEditing() {
     if (queen) {
       setName(queen.name);
       setMotto(queen.motto);
       setEmblem(queen.emblem);
     }
-  }, [queen]);
+    setEditing(true);
+  }
 
   function crown() {
     if (!name.trim()) return setMsg("Your queen needs a name.");
@@ -70,7 +70,7 @@ export default function QueenPage() {
             </div>
           </div>
         </div>
-        <button className="btn btn-ghost" onClick={() => setEditing(true)}>✏️ Edit royal decree</button>
+        <button className="btn btn-ghost" onClick={beginEditing}>✏️ Edit royal decree</button>
         <button
           className="btn btn-ghost !min-h-0 py-2 text-xs text-danger"
           onClick={() => { if (confirm("Abdicate? Her name and motto will be lost.")) abdicate(); }}

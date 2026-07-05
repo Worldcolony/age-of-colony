@@ -7,12 +7,14 @@ from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
 from app.main import (
+    ADMIN_TOKEN_HEADER,
     app,
     _finish_live_game,
     _live_timeline_finished,
     _merge_restored_events,
     _pick_live_target_fixture,
     _process_live_events,
+    _replay_delay_after_event,
     game_manager,
 )
 from app.game.harness import (
@@ -1436,6 +1438,46 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["colonies"][0]["favoriteContext"], "penalties")
         self.assertEqual(game["colonies"][0]["infoNeed"], "high")
 
+    def test_colony_strategy_patch_requires_matching_anonymous_owner(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={"fixtureId": 4243, "participant1": "Portugal", "participant2": "Brazil", "seed": 18},
+        ).json()
+
+        joined = client.post(
+            f"/api/games/{created['gameId']}/players",
+            json={"name": "Alice", "anonymousId": "anon_owner_alice"},
+        )
+        self.assertEqual(joined.status_code, 200)
+
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "A",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_owner_alice",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+        colony_id = colony_response.json()["colonies"][0]["colonyId"]
+
+        blocked = client.patch(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/strategy",
+            json={"style": "cautious", "anonymousId": "anon_intruder"},
+        )
+        self.assertEqual(blocked.status_code, 403)
+
+        allowed = client.patch(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/strategy",
+            json={"style": "aggressive", "anonymousId": "anon_owner_alice"},
+        )
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()["colonies"][0]["style"], "aggressive")
+
     def test_private_room_code_endpoint_supports_join(self):
         client = TestClient(app)
         created = client.post(
@@ -1676,6 +1718,69 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertIn("prediction", kinds)
         self.assertIn("settlement", kinds)
 
+    def test_admin_debug_tools_require_token_when_configured(self):
+        client = TestClient(app)
+
+        with patch.dict("os.environ", {"AOC_ADMIN_TOKEN": "secret"}):
+            blocked_demo = client.post("/api/demo/run", json={"seed": 99})
+            self.assertEqual(blocked_demo.status_code, 403)
+
+            created = client.post(
+                "/api/games",
+                json={
+                    "fixtureId": 515151,
+                    "participant1": "Norway",
+                    "participant2": "Canada",
+                    "creatorName": "Host",
+                    "anonymousId": "anon_admin_guard_host",
+                },
+            ).json()
+            public_colony = client.post(
+                f"/api/games/{created['gameId']}/colonies",
+                json={
+                    "name": "Player Nest",
+                    "size": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                    "anonymousId": "anon_admin_guard_host",
+                },
+            )
+            self.assertEqual(public_colony.status_code, 200)
+
+            blocked_unowned_colony = client.post(
+                f"/api/games/{created['gameId']}/colonies",
+                json={
+                    "name": "Admin Only Nest",
+                    "size": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                },
+            )
+            self.assertEqual(blocked_unowned_colony.status_code, 403)
+
+            allowed_unowned_colony = client.post(
+                f"/api/games/{created['gameId']}/colonies",
+                headers={ADMIN_TOKEN_HEADER: "secret"},
+                json={
+                    "name": "Admin Only Nest",
+                    "size": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                },
+            )
+            self.assertEqual(allowed_unowned_colony.status_code, 200)
+
+            with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")):
+                allowed_demo = client.post(
+                    "/api/demo/run",
+                    headers={ADMIN_TOKEN_HEADER: "secret"},
+                    json={"seed": 99},
+                )
+            self.assertEqual(allowed_demo.status_code, 200)
+
     def test_previous_tx_run_uses_latest_fixture_with_score_data(self):
         class FakeTxLineClient:
             async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
@@ -1729,6 +1834,119 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["participant2"], "Morocco")
         self.assertEqual(game["status"], "finished")
         self.assertEqual(len(game["colonies"]), 3)
+
+    def test_previous_tx_run_can_stream_replay_events(self):
+        class FakeTxLineClient:
+            async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
+                start = int((datetime.now(timezone.utc) - timedelta(hours=3)).timestamp())
+                return [
+                    {
+                        "FixtureId": 778,
+                        "StartTime": start,
+                        "Competition": "World Cup Demo",
+                        "CompetitionId": competition_id or 1,
+                        "Participant1": "Japan",
+                        "Participant2": "Ghana",
+                    }
+                ]
+
+            async def score_historical(self, fixture_id):
+                return [
+                    {
+                        "FixtureId": fixture_id,
+                        "Seq": 1,
+                        "Action": "high_danger_possession",
+                        "Participant": 1,
+                        "Possession": 1,
+                        "Clock": {"seconds": 600},
+                    },
+                    {
+                        "FixtureId": fixture_id,
+                        "Seq": 2,
+                        "Action": "goal",
+                        "Participant": 1,
+                        "Confirmedd": True,
+                        "Clock": {"seconds": 650},
+                        "Score": {"Participant1": {"Total": {"Goals": 1}}, "Participant2": {"Total": {"Goals": 0}}},
+                    },
+                ]
+
+            async def score_updates(self, fixture_id):
+                return []
+
+            async def score_snapshot(self, fixture_id):
+                return []
+
+        scheduled = []
+
+        def fake_schedule(room, events, *, delay_seconds=0.0, time_scale=None):
+            scheduled.append(
+                {
+                    "gameId": room.game_id,
+                    "events": events,
+                    "delaySeconds": delay_seconds,
+                    "timeScale": time_scale,
+                }
+            )
+
+        client = TestClient(app)
+        with (
+            patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")),
+            patch("app.main.TxLineClient", FakeTxLineClient),
+            patch("app.main._schedule_replay_task", fake_schedule),
+        ):
+            response = client.post(
+                "/api/games/run-previous",
+                json={
+                    "days": 1,
+                    "limit": 5,
+                    "competitionId": 42,
+                    "seed": 11,
+                    "stream": True,
+                    "replayDelaySeconds": 0.8,
+                    "replayTimeScale": 120,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        game = response.json()
+        self.assertEqual(game["fixtureId"], 778)
+        self.assertEqual(game["status"], "running_replay")
+        self.assertEqual(game["eventIndex"], 0)
+        self.assertEqual(len(game["colonies"]), 3)
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(len(scheduled[0]["events"]), 2)
+        self.assertEqual(scheduled[0]["delaySeconds"], 0.8)
+        self.assertEqual(scheduled[0]["timeScale"], 120)
+
+    def test_replay_delay_uses_scaled_match_clock_with_fixed_fallback(self):
+        self.assertAlmostEqual(
+            _replay_delay_after_event(
+                [{"clockSeconds": 600}, {"clockSeconds": 660}],
+                0,
+                delay_seconds=0.8,
+                time_scale=120,
+            ),
+            0.5,
+        )
+        self.assertEqual(
+            _replay_delay_after_event(
+                [{"clockSeconds": 600}, {"clockSeconds": 5000}],
+                0,
+                delay_seconds=0.8,
+                time_scale=1,
+            ),
+            8.0,
+        )
+        self.assertEqual(
+            _replay_delay_after_event(
+                [{"action": "attack"}, {"action": "goal"}],
+                0,
+                delay_seconds=0.8,
+                time_scale=120,
+            ),
+            0.8,
+        )
 
     def test_rerun_clones_colonies_and_starts_new_replay(self):
         class FakeTxLineClient:

@@ -745,6 +745,7 @@ async function updateColonyStrategy(colonyId) {
       style,
       favoriteContext,
       infoNeed,
+      anonymousId: state.identity.anonymousId,
     });
     delete state.game.strategyDrafts[colonyId];
     renderGameState(game);

@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import hmac
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
@@ -73,6 +74,8 @@ AUTORUN_COLONIES = (
 )
 LIVE_SCORE_POLL_SECONDS = 2.5
 LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
+REPLAY_MAX_DELAY_SECONDS = 8.0
+ADMIN_TOKEN_HEADER = "x-aoc-admin-token"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -83,6 +86,19 @@ def _env_float(name: str, default: float) -> float:
 
 
 LIVE_AUTO_FINISH_AFTER_SECONDS = max(0.0, _env_float("LIVE_AUTO_FINISH_AFTER_SECONDS", 9000.0))
+
+
+def _admin_token() -> str | None:
+    return (os.getenv("AOC_ADMIN_TOKEN") or "").strip() or None
+
+
+def require_admin_tool(request: Request) -> None:
+    expected = _admin_token()
+    if not expected:
+        return
+    supplied = (request.headers.get(ADMIN_TOKEN_HEADER) or "").strip()
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="Admin token required for replay/debug tools.")
 
 
 class CreateGameRequest(BaseModel):
@@ -121,12 +137,15 @@ class UpdateColonyStrategyRequest(BaseModel):
     style: str | None = None
     favoriteContext: str | None = None
     infoNeed: str | None = None
+    anonymousId: str | None = None
 
 
 class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
     anonymousId: str | None = None
+    replayDelaySeconds: float = Field(default=0.0, ge=0.0, le=30.0)
+    replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
 
 
 class FinishGameRequest(BaseModel):
@@ -143,6 +162,9 @@ class RunPreviousTxRequest(BaseModel):
     competitionId: int | None = None
     search: str | None = None
     seed: int | None = None
+    stream: bool = False
+    replayDelaySeconds: float = Field(default=0.75, ge=0.0, le=30.0)
+    replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
 
 
 @app.exception_handler(TxLineConfigError)
@@ -208,6 +230,7 @@ async def health() -> dict[str, Any]:
             "inputPerMillionUsd": agent_settings.input_price_per_million_usd,
             "outputPerMillionUsd": agent_settings.output_price_per_million_usd,
         },
+        "adminToolsProtected": bool(_admin_token()),
         "supabase": supabase_store.public_status(),
     }
 
@@ -232,8 +255,10 @@ async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
 
 
 @app.post("/api/games/{game_id}/colonies")
-async def create_colony(game_id: str, payload: CreateColonyRequest) -> dict[str, Any]:
+async def create_colony(game_id: str, payload: CreateColonyRequest, request: Request) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
+    if not (payload.anonymousId or "").strip():
+        require_admin_tool(request)
     try:
         game_manager.harness(game_id).add_colony(
             name=payload.name,
@@ -339,6 +364,7 @@ async def delete_queen(
 @app.patch("/api/games/{game_id}/colonies/{colony_id}/strategy")
 async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateColonyStrategyRequest) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
+    _ensure_colony_owner(room, colony_id, payload.anonymousId, action="update this colony")
     try:
         game_manager.harness(game_id).update_colony_strategy(
             colony_id,
@@ -353,12 +379,14 @@ async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateCo
 
 
 @app.post("/api/games/{game_id}/start")
-async def start_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
+async def start_game(game_id: str, payload: StartGameRequest, request: Request) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
     _ensure_deepseek_agent()
     mode = payload.mode.strip().casefold()
     if mode not in {"replay", "live"}:
         raise HTTPException(status_code=422, detail="mode must be replay or live")
+    if mode == "replay":
+        require_admin_tool(request)
     if not room.colonies:
         raise HTTPException(status_code=422, detail="Add at least one colony before starting the match.")
     if room.status in {"running_replay", "running_live"}:
@@ -405,6 +433,18 @@ async def finish_game(game_id: str, payload: FinishGameRequest) -> dict[str, Any
 def _ensure_live_host(room: GameRoom, anonymous_id: str | None, *, action: str = "start the game") -> None:
     if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
         raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
+
+
+def _ensure_colony_owner(room: GameRoom, colony_id: str, anonymous_id: str | None, *, action: str) -> None:
+    colony = room.colonies.get(colony_id)
+    if not colony:
+        return
+    if not colony.player_id and not colony.player_anonymous_id:
+        return
+    clean_anonymous_id = (anonymous_id or "").strip()
+    if clean_anonymous_id and clean_anonymous_id == colony.player_anonymous_id:
+        return
+    raise HTTPException(status_code=403, detail=f"Only the colony owner can {action}.")
 
 
 def _ensure_live_room_ready(room: GameRoom) -> None:
@@ -504,7 +544,8 @@ async def _start_live_room_now(room: GameRoom) -> None:
 
 
 @app.post("/api/games/{game_id}/rerun")
-async def rerun_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
+async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) -> dict[str, Any]:
+    require_admin_tool(request)
     _ensure_deepseek_agent()
     old_room = _get_game_or_404(game_id)
     if old_room.status in {"running_replay", "running_live"}:
@@ -539,18 +580,21 @@ async def rerun_game(game_id: str, payload: StartGameRequest) -> dict[str, Any]:
 
 @app.get("/api/fixtures/recent")
 async def recent_fixtures(
+    request: Request,
     days: int = Query(default=14, ge=1, le=90),
     limit: int = Query(default=50, ge=1, le=200),
     competition_id: int | None = Query(default=None),
     search: str | None = Query(default=None),
 ) -> dict[str, Any]:
+    require_admin_tool(request)
     client = TxLineClient()
     fixtures = await _recent_past_fixtures(client, days=days, limit=limit, competition_id=competition_id, search=search)
     return {"mode": "recent", "days": days, "limit": limit, "count": len(fixtures), "fixtures": fixtures}
 
 
 @app.post("/api/games/run-previous")
-async def run_previous_tx_game(payload: RunPreviousTxRequest) -> dict[str, Any]:
+async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) -> dict[str, Any]:
+    require_admin_tool(request)
     _ensure_deepseek_agent()
     client = TxLineClient()
     fixtures = await _recent_past_fixtures(
@@ -611,8 +655,22 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest) -> dict[str, Any]:
                 "rawCount": timeline["rawCount"],
                 "fixture": fixture,
                 "sourceCounts": {name: len(items) for name, items in source_records.items()},
+                "stream": payload.stream,
+                "replayDelaySeconds": payload.replayDelaySeconds,
+                "replayTimeScale": payload.replayTimeScale,
             },
         )
+        if payload.stream:
+            room.status = "running_replay"
+            _schedule_replay_task(
+                room,
+                timeline["events"],
+                delay_seconds=payload.replayDelaySeconds,
+                time_scale=payload.replayTimeScale,
+            )
+            await _sync_room_to_supabase_async(room)
+            return room.public_state()
+
         harness.process_events(timeline["events"])
         await _sync_room_to_supabase_async(room)
         return room.public_state()
@@ -627,13 +685,15 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest) -> dict[str, Any]:
 
 
 @app.get("/api/demo/matches")
-async def demo_matches() -> dict[str, Any]:
+async def demo_matches(request: Request) -> dict[str, Any]:
+    require_admin_tool(request)
     fixtures = demo_fixtures()
     return {"count": len(fixtures), "fixtures": fixtures}
 
 
 @app.post("/api/demo/run")
-async def demo_run(payload: DemoRunRequest) -> dict[str, Any]:
+async def demo_run(payload: DemoRunRequest, request: Request) -> dict[str, Any]:
+    require_admin_tool(request)
     _ensure_deepseek_agent()
     fixture = demo_fixtures()[0]
     room = game_manager.create_room(
@@ -657,7 +717,8 @@ async def demo_run(payload: DemoRunRequest) -> dict[str, Any]:
 
 
 @app.get("/api/admin/games")
-async def admin_games(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
+    require_admin_tool(request)
     if not supabase_store.configured:
         games = [room.public_state() for room in game_manager.rooms.values()]
         games.sort(key=lambda item: item.get("eventIndex", 0), reverse=True)
@@ -1334,7 +1395,12 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
             {"mode": "replay", "source": "demo", "rawCount": len(events)},
         )
         room.status = "running_replay"
-        game_manager.replay_tasks[room.game_id] = asyncio.create_task(_run_replay_game(room.game_id, events))
+        _schedule_replay_task(
+            room,
+            events,
+            delay_seconds=payload.replayDelaySeconds,
+            time_scale=payload.replayTimeScale,
+        )
         await _sync_room_to_supabase_async(room)
         return room.public_state()
 
@@ -1366,20 +1432,80 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
     room.add_log(
         "game_started",
         f"Replay started with {len(timeline['events'])} normalized events.",
-        {"mode": "replay", "source": payload.source, "rawCount": timeline["rawCount"]},
+        {
+            "mode": "replay",
+            "source": payload.source,
+            "rawCount": timeline["rawCount"],
+            "replayDelaySeconds": payload.replayDelaySeconds,
+            "replayTimeScale": payload.replayTimeScale,
+        },
     )
     room.status = "running_replay"
-    game_manager.replay_tasks[room.game_id] = asyncio.create_task(_run_replay_game(room.game_id, timeline["events"]))
+    _schedule_replay_task(
+        room,
+        timeline["events"],
+        delay_seconds=payload.replayDelaySeconds,
+        time_scale=payload.replayTimeScale,
+    )
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
-async def _run_replay_game(game_id: str, events: list[dict[str, Any]]) -> None:
+def _schedule_replay_task(
+    room: Any,
+    events: list[dict[str, Any]],
+    *,
+    delay_seconds: float = 0.0,
+    time_scale: float | None = None,
+) -> None:
+    task = game_manager.replay_tasks.get(room.game_id)
+    if task and not task.done():
+        return
+    game_manager.replay_tasks[room.game_id] = asyncio.create_task(
+        _run_replay_game(
+            room.game_id,
+            events,
+            delay_seconds=delay_seconds,
+            time_scale=time_scale,
+        )
+    )
+
+
+async def _run_replay_game(
+    game_id: str,
+    events: list[dict[str, Any]],
+    *,
+    delay_seconds: float = 0.0,
+    time_scale: float | None = None,
+) -> None:
     room = game_manager.get_room(game_id)
     if not room:
         return
     try:
-        await asyncio.to_thread(game_manager.harness(game_id).process_events, events)
+        harness = game_manager.harness(game_id)
+        if delay_seconds <= 0 and not time_scale:
+            await asyncio.to_thread(harness.process_events, events)
+            return
+
+        for index, event in enumerate(events):
+            room = game_manager.get_room(game_id)
+            if not room or room.status != "running_replay":
+                break
+            await asyncio.to_thread(harness.process_event, event)
+            _sync_room_agent_usage(game_id)
+            await _sync_room_to_supabase_async(room)
+            delay = _replay_delay_after_event(
+                events,
+                index,
+                delay_seconds=delay_seconds,
+                time_scale=time_scale,
+            )
+            if delay:
+                await asyncio.sleep(delay)
+
+        room = game_manager.get_room(game_id)
+        if room and room.status == "running_replay":
+            await asyncio.to_thread(harness.finish_game, mode="replay")
     except asyncio.CancelledError:
         room.status = "stopped"
         raise
@@ -1388,8 +1514,37 @@ async def _run_replay_game(game_id: str, events: list[dict[str, Any]]) -> None:
         room.status = "error"
         room.add_log("game_error", f"Replay interrupted: {exc}", _error_log_data(exc))
     finally:
-        await _sync_room_to_supabase_async(room)
+        final_room = game_manager.get_room(game_id) or room
+        if final_room:
+            await _sync_room_to_supabase_async(final_room)
         game_manager.replay_tasks.pop(game_id, None)
+
+
+def _replay_delay_after_event(
+    events: list[dict[str, Any]],
+    index: int,
+    *,
+    delay_seconds: float = 0.0,
+    time_scale: float | None = None,
+) -> float:
+    if index >= len(events) - 1:
+        return 0.0
+    if time_scale:
+        current_clock = _event_clock_seconds(events[index])
+        next_clock = _event_clock_seconds(events[index + 1])
+        if current_clock is not None and next_clock is not None and next_clock >= current_clock:
+            return min(REPLAY_MAX_DELAY_SECONDS, max(0.0, (next_clock - current_clock) / time_scale))
+    return min(REPLAY_MAX_DELAY_SECONDS, max(0.0, delay_seconds))
+
+
+def _event_clock_seconds(event: dict[str, Any]) -> float | None:
+    value = event.get("clockSeconds")
+    if value is None and isinstance(event.get("clock"), dict):
+        value = event["clock"].get("seconds")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 async def _run_live_game(game_id: str) -> None:

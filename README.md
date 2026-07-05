@@ -6,6 +6,19 @@ Age of Colony V0 lets players create a private room for a fixture, add colonies,
 
 See also: [available TXLine data](docs/txline-data.md).
 
+## Simple Flow
+
+```mermaid
+flowchart LR
+    A[Create room + share code] --> B[Players join + start live]
+    B --> C[TXLine live data]
+    C --> D{Prediction moment?}
+    D -->|No| C
+    D -->|Yes| E[Prediction opens + ants vote]
+    E --> F[Room updates with result]
+    F --> C
+```
+
 ## Configuration
 
 Keep TXLine credentials in environment variables:
@@ -44,6 +57,14 @@ export COLONY_AGENT_ANT_BATCH_SIZE="50"
 
 `COLONY_AGENT_MAX_PARALLEL_ANT_CALLS` controls how many ant calls can run at the same time. `OPENROUTER_MAX_RETRIES` retries transient DeepSeek/OpenRouter failures and malformed ant JSON, but it never replaces a vote with a local policy. `COLONY_AGENT_ANT_BATCH_SIZE` is only used when `COLONY_AGENT_CALL_MODE=batch` is selected for faster replay debugging. At the end of a run, the journal shows AI cost calculated from OpenRouter `usage` tokens and `OPENROUTER_INPUT_PRICE_PER_MILLION_USD` / `OPENROUTER_OUTPUT_PRICE_PER_MILLION_USD`.
 
+Admin/debug replay tools:
+
+```bash
+export AOC_ADMIN_TOKEN="long-random-secret"
+```
+
+When `AOC_ADMIN_TOKEN` is configured, replay/debug endpoints require the `x-aoc-admin-token` header. The public lobby does not link to `/admin`; admins can open `/admin` directly, enter the token, replay previous TXLine matches, and create multiple admin-only colonies for simulation.
+
 ## Installation
 
 ```bash
@@ -74,6 +95,7 @@ Required Railway variables:
 TXLINE_JWT=...
 TXLINE_API_TOKEN=...
 OPENROUTER_API_KEY=...
+AOC_ADMIN_TOKEN=...
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
@@ -106,6 +128,12 @@ Admin persistence endpoints:
 - `GET /api/admin/games`: recent stored rooms, or in-memory rooms if Supabase is not configured
 - `GET /api/games/{game_id}`: current in-memory state, with Supabase fallback
 - `GET /api/games/{game_id}/replay`: current replay journal, with Supabase fallback
+
+When `AOC_ADMIN_TOKEN` is set, admin/debug endpoints must include:
+
+```bash
+x-aoc-admin-token: <AOC_ADMIN_TOKEN>
+```
 
 ## Useful Endpoints
 

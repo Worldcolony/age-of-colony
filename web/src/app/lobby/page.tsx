@@ -151,7 +151,7 @@ export default function LobbyPage() {
           <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={load}>Retry</button>
         </div>
       ) : matches.length === 0 ? (
-        <div className="glass p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days. Try an admin replay.</div>
+        <div className="glass p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days.</div>
       ) : (
         <div className="flex flex-col gap-3">
           {matches.slice(0, 8).map((item) => (
@@ -164,9 +164,6 @@ export default function LobbyPage() {
         <div className="bottom-action-inner">
           <button className="quiet-link py-2 text-base" onClick={() => setShowJoin((v) => !v)}>
             {showJoin ? "Hide code entry" : "Join with code"}
-          </button>
-          <button className="quiet-link py-2 text-xs text-ink-faint" onClick={() => router.push("/admin")}>
-            Admin replay
           </button>
         </div>
       </div>

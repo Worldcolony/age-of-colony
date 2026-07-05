@@ -198,7 +198,7 @@ export default function RoomPage() {
           ) : !isJoined ? (
             <button className="btn btn-primary" onClick={join}>Join room</button>
           ) : !myReady ? (
-            <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push("/setup")}>
+            <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push(`/setup?room=${encodeURIComponent(roomCode)}`)}>
               Create my colony
             </button>
           ) : isHost ? (

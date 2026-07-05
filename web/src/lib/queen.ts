@@ -63,16 +63,22 @@ export function useQueen() {
     let cancelled = false;
     const pk = wallet.pubkey;
     if (!pk) {
-      setQueen(null);
-      setSource(null);
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        setQueen(null);
+        setSource(null);
+      });
       return;
     }
     const local = loadQueen(pk);
     // show the cached queen immediately, then reconcile with the server
     if (local) {
-      setQueen(local);
-      setSource("local");
-      applyName(local.name);
+      Promise.resolve().then(() => {
+        if (cancelled) return;
+        setQueen(local);
+        setSource("local");
+        applyName(local.name);
+      });
     }
     (async () => {
       try {

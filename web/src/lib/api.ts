@@ -55,6 +55,9 @@ const authHeaders = (auth: QueenAuth): Record<string, string> => ({
   "x-aoc-ts": String(auth.ts),
 });
 
+const adminHeaders = (adminToken?: string): Record<string, string> =>
+  adminToken ? { "x-aoc-admin-token": adminToken } : {};
+
 export interface QueenRecord {
   wallet: string;
   name: string;
@@ -77,8 +80,8 @@ export const api = {
 
   upcomingFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
     req<FixtureList>(`/api/fixtures/upcoming${qs(p)}`),
-  recentFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
-    req<FixtureList>(`/api/fixtures/recent${qs(p)}`),
+  recentFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }, adminToken?: string) =>
+    req<FixtureList>(`/api/fixtures/recent${qs(p)}`, "GET", undefined, adminHeaders(adminToken)),
   liveTarget: (p?: { days?: number }) => req<FixtureList>(`/api/fixtures/live-target${qs(p)}`),
 
   createGame: (body: {
@@ -108,20 +111,29 @@ export const api = {
     req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`, "PUT", body, authHeaders(auth)),
   deleteQueen: (wallet: string, auth: QueenAuth) =>
     req<{ deleted: boolean }>(`/api/queens/${encodeURIComponent(wallet)}`, "DELETE", undefined, authHeaders(auth)),
-  addColony: (id: string, body: CreateColonyBody) => req<GameState>(`/api/games/${id}/colonies`, "POST", body),
+  addColony: (id: string, body: CreateColonyBody, adminToken?: string) =>
+    req<GameState>(`/api/games/${id}/colonies`, "POST", body, adminHeaders(adminToken)),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),
-  startGame: (id: string, mode: "replay" | "live" = "live", opts?: { anonymousId?: string }) =>
+  startGame: (
+    id: string,
+    mode: "replay" | "live" = "live",
+    opts?: { anonymousId?: string; replayDelaySeconds?: number; replayTimeScale?: number; adminToken?: string },
+  ) =>
     req<GameState>(`/api/games/${id}/start`, "POST", {
       mode,
       source: mode === "replay" ? "historical" : "updates",
       anonymousId: opts?.anonymousId,
-    }),
-  rerun: (id: string) => req<GameState>(`/api/games/${id}/rerun`, "POST", { mode: "replay", source: "historical" }),
+      replayDelaySeconds: opts?.replayDelaySeconds,
+      replayTimeScale: opts?.replayTimeScale,
+    }, adminHeaders(opts?.adminToken)),
+  rerun: (id: string, adminToken?: string) =>
+    req<GameState>(`/api/games/${id}/rerun`, "POST", { mode: "replay", source: "historical" }, adminHeaders(adminToken)),
 
-  demoMatches: () => req<FixtureList>("/api/demo/matches"),
-  demoRun: (body?: Record<string, unknown>) => req<GameState>("/api/demo/run", "POST", body ?? {}),
-  runPrevious: (body?: Record<string, unknown>) => req<GameState>("/api/games/run-previous", "POST", body ?? {}),
+  demoMatches: (adminToken?: string) => req<FixtureList>("/api/demo/matches", "GET", undefined, adminHeaders(adminToken)),
+  demoRun: (body?: Record<string, unknown>, adminToken?: string) => req<GameState>("/api/demo/run", "POST", body ?? {}, adminHeaders(adminToken)),
+  runPrevious: (body?: Record<string, unknown>, adminToken?: string) =>
+    req<GameState>("/api/games/run-previous", "POST", body ?? {}, adminHeaders(adminToken)),
 };
 
 export const sseUrl = (gameId: string) => `${API_BASE}/api/games/${gameId}/events`;

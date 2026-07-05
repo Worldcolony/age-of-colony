@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { getAnonId } from "@/lib/anon";
@@ -30,7 +30,39 @@ export default function SetupPage() {
   const [ground, setGround] = useState<FavoriteContext>("momentum");
   const [info, setInfo] = useState<InfoNeed>("medium");
   const [busy, setBusy] = useState(false);
+  const [hydrating, setHydrating] = useState(false);
   const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    if (game?.gameId) return;
+    let cancelled = false;
+
+    Promise.resolve().then(async () => {
+      if (typeof window === "undefined") return;
+      const params = new URLSearchParams(window.location.search);
+      const roomCode = normalizeRoomCode(params.get("room") || params.get("code"));
+      const gameId = (params.get("game") || "").trim();
+      if (!roomCode && !gameId) return;
+
+      setHydrating(true);
+      setMsg("");
+      try {
+        const loaded = roomCode ? await api.getRoomByCode(roomCode) : await api.getGame(gameId);
+        if (cancelled) return;
+        setGame(loaded);
+        const mine = loaded.colonies.find((colony) => colony.playerAnonymousId === getAnonId());
+        if (mine) setMyColonyId(mine.colonyId);
+      } catch (e) {
+        if (!cancelled) setMsg((e as Error).message);
+      } finally {
+        if (!cancelled) setHydrating(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [game?.gameId, setGame, setMyColonyId]);
 
   if (!game?.gameId) {
     return (
@@ -40,7 +72,9 @@ export default function SetupPage() {
           <h1 className="text-xl font-bold">Your colony</h1>
           <span />
         </header>
-        <div className="glass p-4 text-center text-sm text-ink-faint">Pick a match and create a room first.</div>
+        <div className="glass p-4 text-center text-sm text-ink-faint">
+          {hydrating ? "Loading room..." : msg || "Pick a match and create a room first."}
+        </div>
         <div className="bottom-action">
           <div className="bottom-action-inner">
             <button className="btn btn-primary" onClick={() => router.push("/lobby")}>Go to lobby</button>
@@ -126,4 +160,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
+}
+
+function normalizeRoomCode(value: string | null): string {
+  const code = (value || "").replace(/\D/g, "").slice(0, 6);
+  return code.length === 6 ? code : "";
 }
