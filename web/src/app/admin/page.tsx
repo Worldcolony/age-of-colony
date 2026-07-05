@@ -33,6 +33,12 @@ const DEFAULT_ADMIN_COLONIES = [
 ] satisfies AdminColonyDraft[];
 
 type AdminColonyDraft = Omit<CreateColonyBody, "anonymousId">;
+type FixtureLoadState = {
+  status: "idle" | "loading" | "loaded" | "error";
+  message?: string;
+  scanned?: number;
+  inspected?: number;
+};
 
 function freshDefaultColonies(): AdminColonyDraft[] {
   return DEFAULT_ADMIN_COLONIES.map((colony) => ({ ...colony }));
@@ -50,6 +56,8 @@ export default function AdminPage() {
   const [roomSetupKey, setRoomSetupKey] = useState("");
   const [selectedFixtureKey, setSelectedFixtureKey] = useState("");
   const [fixtureSearch, setFixtureSearch] = useState("");
+  const [fixtureLoadState, setFixtureLoadState] = useState<FixtureLoadState>({ status: "idle" });
+  const [loadingFixtures, setLoadingFixtures] = useState(false);
   const [manualFixtureId, setManualFixtureId] = useState("");
   const [manualParticipant1, setManualParticipant1] = useState("Home");
   const [manualParticipant2, setManualParticipant2] = useState("Away");
@@ -85,30 +93,90 @@ export default function AdminPage() {
   const runningGames = games.filter((game) => ["running_replay", "running_live"].includes(game.status));
   const finishedGames = games.filter((game) => game.status === "finished");
   const workflowStep = roomIsCurrent ? 4 : draftGame ? 3 : validColonies.length ? 2 : selectedFixture ? 1 : 0;
+  const fixtureStatusLabel = selectedFixture
+    ? "Selected"
+    : loadingFixtures
+      ? "Loading"
+      : fixtureLoadState.status === "loaded"
+        ? "No match found"
+        : fixtureLoadState.status === "error"
+          ? "Error"
+          : "No match loaded";
 
   async function loadFixtures(token = requestToken, shouldProtect = protectedAdmin) {
     if (shouldProtect && !token) {
       setFixtures([]);
+      setSelectedFixtureKey("");
+      setFixtureLoadState({ status: "idle", message: "Enter the admin token before loading matches." });
       return;
     }
-    const data = await api.replayFixtures(
-      {
-        days: 90,
-        limit: 24,
-        scan_limit: 160,
-        search: fixtureSearch.trim() || undefined,
-      },
-      token || undefined,
-    );
-    const list = data.fixtures ?? [];
-    setFixtures(list);
-    setSelectedFixtureKey((current) =>
-      list.some((fixture) => String(fixtureId(fixture)) === current)
-        ? current
-        : list[0]
-          ? String(fixtureId(list[0]))
-          : "",
-    );
+    setLoadingFixtures(true);
+    setFixtureLoadState({ status: "loading", message: "Scanning recent TXLine matches for replay data..." });
+    try {
+      const data = await api.replayFixtures(
+        {
+          days: 90,
+          limit: 24,
+          scan_limit: 120,
+          search: fixtureSearch.trim() || undefined,
+        },
+        token || undefined,
+      );
+      const list = data.fixtures ?? [];
+      setFixtures(list);
+      setSelectedFixtureKey((current) =>
+        list.some((fixture) => String(fixtureId(fixture)) === current)
+          ? current
+          : list[0]
+            ? String(fixtureId(list[0]))
+            : "",
+      );
+      setFixtureLoadState({
+        status: "loaded",
+        scanned: data.scanned,
+        inspected: data.inspected,
+        message: list.length
+          ? `Loaded ${list.length} replayable match${list.length === 1 ? "" : "es"}.`
+          : `Scanned ${data.scanned ?? 0} recent fixture${data.scanned === 1 ? "" : "s"}; none had replay data.`,
+      });
+    } catch (e) {
+      setFixtures([]);
+      setSelectedFixtureKey("");
+      setFixtureLoadState({ status: "error", message: (e as Error).message });
+      throw e;
+    } finally {
+      setLoadingFixtures(false);
+    }
+  }
+
+  async function handleLoadFixtures() {
+    setMsg("");
+    try {
+      await loadFixtures();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
+
+  function fixtureEmptyTitle() {
+    if (loadingFixtures) return "Scanning replayable matches...";
+    if (fixtureLoadState.status === "error") return "Could not load matches";
+    if (fixtureLoadState.status === "loaded") return "No replayable matches found";
+    return "No replayable matches loaded";
+  }
+
+  function fixtureEmptyText() {
+    if (loadingFixtures) return "TXLine is being scanned for recent matches that include score events. This can take a few seconds.";
+    if (fixtureLoadState.status === "error") return fixtureLoadState.message || "The match list request failed.";
+    if (fixtureLoadState.status === "loaded") return fixtureLoadState.message || "No replayable match was found in the current search window.";
+    return "Load matches to scan recent TXLine fixtures that have replay data. If TXLine returns empty, the fallback actions stay below.";
+  }
+
+  function fixtureStatsText() {
+    if (fixtureLoadState.status !== "loaded") return "";
+    const scanned = fixtureLoadState.scanned ?? 0;
+    const inspected = fixtureLoadState.inspected ?? 0;
+    return `${scanned} fixture${scanned === 1 ? "" : "s"} scanned, ${inspected} checked for score data.`;
   }
 
   async function loadGames(token = requestToken, shouldProtect = protectedAdmin) {
@@ -386,7 +454,7 @@ export default function AdminPage() {
             <StepCard
               number="1"
               title="Select a previous match"
-              status={selectedFixture ? "Selected" : fixtures.length ? "Choose one" : "No match loaded"}
+              status={fixtureStatusLabel}
             >
               <div className="grid gap-3 md:grid-cols-[1fr_auto]">
                 <input
@@ -395,15 +463,15 @@ export default function AdminPage() {
                   value={fixtureSearch}
                   onChange={(e) => setFixtureSearch(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") loadFixtures();
+                    if (e.key === "Enter") handleLoadFixtures();
                   }}
                 />
                 <button
                   className="btn btn-ghost !min-h-0 !w-auto px-4 py-2 text-sm"
-                  disabled={Boolean(working)}
-                  onClick={() => loadFixtures()}
+                  disabled={Boolean(working) || loadingFixtures}
+                  onClick={handleLoadFixtures}
                 >
-                  Load matches
+                  {loadingFixtures ? "Loading..." : "Load matches"}
                 </button>
               </div>
 
@@ -436,9 +504,10 @@ export default function AdminPage() {
 
                 {!fixtures.length && (
                   <EmptyPanel
-                    title="No replayable matches loaded"
-                    text="Load matches to scan recent TXLine fixtures that have replay data. If TXLine returns empty, the fallback actions stay below."
+                    title={fixtureEmptyTitle()}
+                    text={fixtureEmptyText()}
                   >
+                    {fixtureStatsText() && <p className="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink-faint">{fixtureStatsText()}</p>}
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
                       <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={findLatestAndStart}>
                         Find latest and launch
