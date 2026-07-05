@@ -252,59 +252,66 @@ export default function AdminPage() {
     return room;
   }
 
-  return (
-    <div className="flex flex-col gap-4 pb-6">
-      <header className="page-top">
-        <div>
-          <p className="eyebrow">Debug cockpit</p>
-          <h1 className="text-2xl font-bold">Admin simulation dashboard</h1>
-        </div>
-        <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" disabled={!canUseAdmin || working === "refresh"} onClick={() => refreshDashboard()}>
-          Refresh
-        </button>
-      </header>
-
-      <section className="glass bracket p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <StatusPill label="TXLine" ok={tx} />
-          <StatusPill label="OpenRouter" ok={or} />
-          {protectedAdmin && <span className="status-pill">Admin locked</span>}
-          <span className="status-pill">{fixtures.length} fixtures</span>
-          <span className="status-pill">{games.length} runs</span>
-        </div>
-        {health && !or && <p className="mt-3 text-xs text-ink-faint">Set OPENROUTER_API_KEY to start replay simulations.</p>}
-      </section>
-
-      {protectedAdmin && (
-        <section className="glass flex flex-col gap-3 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="hud-title text-[12px]">Admin access</h2>
-            <span className={`status-pill ${canUseAdmin ? "!border-lime/40 !text-lime" : ""}`}>{canUseAdmin ? "Unlocked" : "Locked"}</span>
+  if (protectedAdmin && !canUseAdmin) {
+    return (
+      <div className="relative left-1/2 flex w-[min(1180px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 pb-6">
+        <AdminHeader working={working} canUseAdmin={false} onRefresh={() => refreshDashboard()} />
+        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="glass bracket flex min-h-[430px] flex-col justify-between p-6">
+            <div>
+              <p className="eyebrow">Operator lock</p>
+              <h1 className="mt-3 text-4xl font-bold leading-tight">Unlock the simulation console</h1>
+              <p className="mt-4 max-w-2xl text-base text-ink-soft">
+                Admin replay tools are protected on this environment. Enter the token once to load fixtures, runs, colony presets, and direct replay controls.
+              </p>
+            </div>
+            <div className="mt-8 grid gap-3 sm:grid-cols-[1fr_auto]">
+              <input
+                className="input font-mono"
+                placeholder="AOC_ADMIN_TOKEN"
+                type="password"
+                value={adminToken}
+                onChange={(e) => setAdminToken(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveToken();
+                }}
+              />
+              <button className="btn btn-primary !w-auto px-8" onClick={saveToken}>Unlock dashboard</button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <input
-              className="input font-mono"
-              placeholder="AOC_ADMIN_TOKEN"
-              type="password"
-              value={adminToken}
-              onChange={(e) => setAdminToken(e.target.value)}
-            />
-            <button className="btn btn-primary !w-auto shrink-0 px-5" onClick={saveToken}>Unlock</button>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+            <Kpi label="TXLine" value={tx ? "Online" : "Missing"} tone={tx ? "good" : "bad"} />
+            <Kpi label="OpenRouter" value={or ? "Online" : "Missing"} tone={or ? "good" : "bad"} />
+            <Kpi label="Fixtures" value="Locked" />
+            <Kpi label="Runs" value="Locked" />
           </div>
         </section>
-      )}
+        {msg && <Message text={msg} />}
+      </div>
+    );
+  }
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(320px,430px)_1fr]">
-        <section className="glass flex flex-col gap-4 p-4">
-          <div>
-            <p className="eyebrow">Simulation builder</p>
-            <h2 className="text-xl font-bold">Create a room without codes</h2>
-          </div>
+  return (
+    <div className="relative left-1/2 flex w-[min(1440px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 pb-6">
+      <AdminHeader working={working} canUseAdmin={canUseAdmin} onRefresh={() => refreshDashboard()} />
+
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        <Kpi label="TXLine" value={tx ? "Online" : "Missing"} tone={tx ? "good" : "bad"} />
+        <Kpi label="OpenRouter" value={or ? "Online" : "Missing"} tone={or ? "good" : "bad"} />
+        <Kpi label="Fixtures" value={fixtures.length} />
+        <Kpi label="Runs" value={games.length} />
+        <Kpi label="Running" value={runningGames.length} tone={runningGames.length ? "warn" : "neutral"} />
+        <Kpi label="Finished" value={finishedGames.length} tone="good" />
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[360px_minmax(520px,1fr)_420px]">
+        <aside className="glass flex flex-col gap-4 p-4">
+          <PanelTitle eyebrow="Command rail" title="Build and launch" />
 
           <Field label="Replay fixture">
             <select
               className="input"
-              disabled={!canUseAdmin || !fixtures.length}
+              disabled={!fixtures.length}
               value={selectedFixture ? String(fixtureId(selectedFixture)) : ""}
               onChange={(e) => setSelectedFixtureKey(e.target.value)}
             >
@@ -316,159 +323,225 @@ export default function AdminPage() {
             </select>
           </Field>
 
-          {selectedFixture ? <FixturePlate fixture={selectedFixture} /> : <p className="text-sm text-ink-faint">Load recent fixtures to select a completed match.</p>}
+          {selectedFixture ? <SelectedFixture fixture={selectedFixture} /> : <EmptyPanel title="No fixture loaded" text="Refresh after unlocking to load completed TXLine matches." />}
 
-          <div className="grid gap-2 sm:grid-cols-2">
-            <button className="btn btn-primary" disabled={!canUseAdmin || Boolean(working)} onClick={() => launchSimulation()}>
+          <div className="grid gap-2">
+            <button className="btn btn-primary" disabled={Boolean(working) || !selectedFixture} onClick={() => launchSimulation()}>
               Create and start replay
             </button>
-            <button className="btn btn-ghost" disabled={!canUseAdmin || Boolean(working)} onClick={() => createAdminRoom()}>
-              Create admin room
+            <button className="btn btn-ghost" disabled={Boolean(working) || !selectedFixture} onClick={() => createAdminRoom()}>
+              Create room only
+            </button>
+            <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={runDemo}>
+              Run demo sandbox
             </button>
           </div>
-          <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={!canUseAdmin || Boolean(working)} onClick={runDemo}>
-            Run demo sandbox
-          </button>
-        </section>
 
-        <section className="glass flex flex-col gap-4 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="eyebrow">Colonies</p>
-              <h2 className="text-xl font-bold">Admin-only colony set</h2>
+          {draftGame && (
+            <div className="rounded-md border border-lime/30 bg-lime/10 p-3">
+              <p className="eyebrow !text-lime">Room ready</p>
+              <h3 className="mt-1 font-bold">{matchTitle(draftGame)}</h3>
+              <p className="mt-1 text-xs text-ink-faint">{draftGame.colonies.length} colonies · {draftGame.status}</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+                <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={startDraftReplay}>Start replay</button>
+                <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={() => router.push(`/cockpit/${draftGame.gameId}`)}>Open cockpit</button>
+              </div>
             </div>
+          )}
+
+          {protectedAdmin && (
+            <details className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-3">
+              <summary className="cursor-pointer text-sm font-bold text-ink-soft">Admin token</summary>
+              <div className="mt-3 grid gap-2">
+                <input
+                  className="input font-mono"
+                  placeholder="AOC_ADMIN_TOKEN"
+                  type="password"
+                  value={adminToken}
+                  onChange={(e) => setAdminToken(e.target.value)}
+                />
+                <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={saveToken}>Update token</button>
+              </div>
+            </details>
+          )}
+        </aside>
+
+        <main className="flex flex-col gap-4">
+          <section className="glass flex min-h-[460px] flex-col gap-4 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <PanelTitle eyebrow="Fixtures" title="Completed matches" />
+              <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" disabled={working === "refresh"} onClick={() => loadFixtures()}>
+                Reload fixtures
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[680px] border-separate border-spacing-y-2 text-left">
+                <thead className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                  <tr>
+                    <th className="px-3 py-1">Match</th>
+                    <th className="px-3 py-1">Competition</th>
+                    <th className="px-3 py-1">Kickoff</th>
+                    <th className="px-3 py-1 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fixtures.slice(0, 16).map((fixture) => {
+                    const key = String(fixtureId(fixture));
+                    const selected = key === String(fixtureId(selectedFixture ?? {} as Fixture));
+                    return (
+                      <tr key={key} className={`bg-black/20 ${selected ? "outline outline-2 outline-lime/40" : ""}`}>
+                        <td className="rounded-l-md px-3 py-3"><FixtureTeams fixture={fixture} /></td>
+                        <td className="max-w-[220px] truncate px-3 py-3 text-sm text-ink-soft">{fixture.competition ?? "Completed fixture"}</td>
+                        <td className="px-3 py-3 text-sm text-ink-faint">{fmtKickoffLine(fixture.startTime, fixture.startTimeIso)}</td>
+                        <td className="rounded-r-md px-3 py-3">
+                          <div className="flex justify-end gap-2">
+                            <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => setSelectedFixtureKey(key)}>Select</button>
+                            <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => launchSimulation(fixture)}>Start</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {!fixtures.length && <EmptyPanel title="No fixtures loaded" text="Refresh after unlocking, or check TXLine credentials." />}
+            </div>
+          </section>
+        </main>
+
+        <aside className="glass flex flex-col gap-4 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <PanelTitle eyebrow="Colonies" title="Simulation roster" />
             <span className="status-pill">{validColonies.length} active</span>
           </div>
 
-          <div className="flex flex-col gap-3">
-            {colonies.map((colony, index) => (
-              <div key={index} className="grid gap-2 border-b border-[color:var(--brd-soft)] pb-3 last:border-0 last:pb-0 md:grid-cols-[1.2fr_0.8fr_0.9fr_0.9fr_0.8fr_auto]">
-                <input className="input" value={colony.name} maxLength={40} onChange={(e) => updateColony(index, { name: e.target.value })} />
-                <select className="input" value={colony.size} onChange={(e) => updateColony(index, { size: Number(e.target.value) })}>
-                  {SIZES.map((size) => <option key={size} value={size}>{size} ants</option>)}
-                </select>
-                <select className="input" value={colony.style} onChange={(e) => updateColony(index, { style: e.target.value as Style })}>
-                  {STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
-                </select>
-                <select className="input" value={colony.favoriteContext} onChange={(e) => updateColony(index, { favoriteContext: e.target.value as FavoriteContext })}>
-                  {GROUNDS.map((ground) => <option key={ground} value={ground}>{ground}</option>)}
-                </select>
-                <select className="input" value={colony.infoNeed} onChange={(e) => updateColony(index, { infoNeed: e.target.value as InfoNeed })}>
-                  {INFO_NEEDS.map((need) => <option key={need.value} value={need.value}>{need.label}</option>)}
-                </select>
-                <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" disabled={colonies.length <= 1} onClick={() => removeColony(index)}>
-                  Remove
-                </button>
-              </div>
-            ))}
+          <div className="overflow-x-auto xl:overflow-visible">
+            <table className="w-full min-w-[620px] xl:min-w-0 border-separate border-spacing-y-2 text-left">
+              <thead className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+                <tr>
+                  <th className="px-2 py-1">Name</th>
+                  <th className="px-2 py-1">Size</th>
+                  <th className="px-2 py-1">Style</th>
+                  <th className="px-2 py-1">Focus</th>
+                  <th className="px-2 py-1">Info</th>
+                  <th className="px-2 py-1" />
+                </tr>
+              </thead>
+              <tbody>
+                {colonies.map((colony, index) => (
+                  <tr key={index} className="bg-black/20">
+                    <td className="rounded-l-md p-2">
+                      <input className="input !px-2 !py-2 text-sm" value={colony.name} maxLength={40} onChange={(e) => updateColony(index, { name: e.target.value })} />
+                    </td>
+                    <td className="p-2">
+                      <select className="input !px-2 !py-2 text-sm" value={colony.size} onChange={(e) => updateColony(index, { size: Number(e.target.value) })}>
+                        {SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-2">
+                      <select className="input !px-2 !py-2 text-sm" value={colony.style} onChange={(e) => updateColony(index, { style: e.target.value as Style })}>
+                        {STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-2">
+                      <select className="input !px-2 !py-2 text-sm" value={colony.favoriteContext} onChange={(e) => updateColony(index, { favoriteContext: e.target.value as FavoriteContext })}>
+                        {GROUNDS.map((ground) => <option key={ground} value={ground}>{ground}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-2">
+                      <select className="input !px-2 !py-2 text-sm" value={colony.infoNeed} onChange={(e) => updateColony(index, { infoNeed: e.target.value as InfoNeed })}>
+                        {INFO_NEEDS.map((need) => <option key={need.value} value={need.value}>{need.label}</option>)}
+                      </select>
+                    </td>
+                    <td className="rounded-r-md p-2">
+                      <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" disabled={colonies.length <= 1} onClick={() => removeColony(index)}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
             <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={addColony}>Add colony</button>
             <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={() => setColonies(freshDefaultColonies())}>Reset defaults</button>
           </div>
-        </section>
-      </div>
-
-      {draftGame && (
-        <section className="glass flex flex-col gap-3 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="eyebrow">Room ready</p>
-              <h2 className="text-xl font-bold">{matchTitle(draftGame)}</h2>
-              <p className="text-sm text-ink-faint">{draftGame.colonies.length} admin colonies · {draftGame.status}</p>
-            </div>
-            <div className="flex w-full gap-2 sm:w-auto">
-              <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={startDraftReplay}>Start replay</button>
-              <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={() => router.push(`/cockpit/${draftGame.gameId}`)}>Open cockpit</button>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {msg && <p className="rounded-lg border border-[color:var(--brd-soft)] bg-black/20 px-3 py-2 text-sm text-ink-soft">{msg}</p>}
-
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="eyebrow">Fixtures</p>
-            <h2 className="text-xl font-bold">Completed matches</h2>
-          </div>
-          <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" disabled={!canUseAdmin || working === "refresh"} onClick={() => loadFixtures()}>
-            Reload
-          </button>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2">
-          {fixtures.slice(0, 12).map((fixture) => {
-            const key = String(fixtureId(fixture));
-            const selected = key === selectedFixtureKey || (!selectedFixtureKey && fixture === selectedFixture);
-            return (
-              <button
-                key={key}
-                className={`glass flex flex-col gap-3 p-4 text-left ${selected ? "!border-lime/50" : ""}`}
-                disabled={!canUseAdmin || Boolean(working)}
-                onClick={() => setSelectedFixtureKey(key)}
-              >
-                <FixtureTeams fixture={fixture} />
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <span className="status-pill">{selected ? "Selected" : "Use fixture"}</span>
-                  <button
-                    className="btn btn-primary !min-h-0 py-2 text-sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      launchSimulation(fixture);
-                    }}
-                  >
-                    Start simulation
-                  </button>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        </aside>
       </section>
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="eyebrow">Runs</p>
-            <h2 className="text-xl font-bold">Simulation history</h2>
-          </div>
+      {msg && <Message text={msg} />}
+
+      <section className="glass flex flex-col gap-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <PanelTitle eyebrow="Runs" title="Simulation history" />
           <div className="flex gap-2">
             <span className="status-pill">{runningGames.length} running</span>
             <span className="status-pill">{finishedGames.length} finished</span>
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          {games.slice(0, 12).map((game) => (
-            <div key={game.gameId} className="glass flex flex-col gap-3 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="font-bold">{matchTitle(game)}</h3>
-                  <p className="font-mono text-xs text-ink-faint">{game.gameId}</p>
-                </div>
-                <span className={`status-pill ${game.status === "finished" ? "!border-lime/40 !text-lime" : ""}`}>{game.status.replace("_", " ")}</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center text-sm">
-                <Metric label="Score" value={fmtScore(game.match?.score)} />
-                <Metric label="Colonies" value={game.colonies.length} />
-                <Metric label="Events" value={game.eventIndex ?? 0} />
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={() => router.push(`/cockpit/${game.gameId}`)}>Open cockpit</button>
-                <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={!canUseAdmin || Boolean(working)} onClick={() => rerunGame(game)}>
-                  {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
-                </button>
-              </div>
-            </div>
-          ))}
-          {!games.length && (
-            <div className="glass p-4 text-sm text-ink-faint">No admin simulations loaded yet.</div>
-          )}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] border-separate border-spacing-y-2 text-left">
+            <thead className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
+              <tr>
+                <th className="px-3 py-1">Run</th>
+                <th className="px-3 py-1">Status</th>
+                <th className="px-3 py-1">Score</th>
+                <th className="px-3 py-1">Colonies</th>
+                <th className="px-3 py-1">Events</th>
+                <th className="px-3 py-1 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {games.slice(0, 14).map((game) => (
+                <tr key={game.gameId} className="bg-black/20">
+                  <td className="rounded-l-md px-3 py-3">
+                    <strong>{matchTitle(game)}</strong>
+                    <p className="font-mono text-[11px] text-ink-faint">{game.gameId}</p>
+                  </td>
+                  <td className="px-3 py-3"><span className={`status-pill ${game.status === "finished" ? "!border-lime/40 !text-lime" : ""}`}>{game.status.replace("_", " ")}</span></td>
+                  <td className="px-3 py-3 font-mono text-sm">{fmtScore(game.match?.score)}</td>
+                  <td className="px-3 py-3 text-sm">{game.colonies.length}</td>
+                  <td className="px-3 py-3 text-sm">{game.eventIndex ?? 0}</td>
+                  <td className="rounded-r-md px-3 py-3">
+                    <div className="flex justify-end gap-2">
+                      <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => router.push(`/cockpit/${game.gameId}`)}>Open</button>
+                      <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
+                        {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!games.length && <EmptyPanel title="No simulations yet" text="Create and start a replay to populate this run ledger." />}
         </div>
       </section>
+    </div>
+  );
+}
+
+function AdminHeader({ working, canUseAdmin, onRefresh }: { working: string; canUseAdmin: boolean; onRefresh: () => void }) {
+  return (
+    <header className="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <p className="eyebrow">Age of Colony control room</p>
+        <h1 className="text-3xl font-bold leading-tight md:text-4xl">Admin simulation dashboard</h1>
+      </div>
+      <button className="btn btn-ghost !min-h-0 !w-auto px-4 py-2 text-sm" disabled={!canUseAdmin || working === "refresh"} onClick={onRefresh}>
+        Refresh data
+      </button>
+    </header>
+  );
+}
+
+function PanelTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
+  return (
+    <div>
+      <p className="eyebrow">{eyebrow}</p>
+      <h2 className="text-xl font-bold leading-tight">{title}</h2>
     </div>
   );
 }
@@ -482,19 +555,22 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function StatusPill({ label, ok }: { label: string; ok: boolean }) {
+function Kpi({ label, value, tone = "neutral" }: { label: string; value: React.ReactNode; tone?: "neutral" | "good" | "bad" | "warn" }) {
+  const toneClass = tone === "good" ? "text-lime" : tone === "bad" ? "text-danger" : tone === "warn" ? "text-gold" : "text-ink";
   return (
-    <span className={`rounded-full border px-3 py-1 text-xs font-bold ${ok ? "border-lime/40 text-lime" : "border-danger/40 text-danger"}`}>
-      {label} {ok ? "OK" : "Missing"}
-    </span>
+    <div className="glass p-4">
+      <p className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">{label}</p>
+      <strong className={`mt-2 block text-2xl ${toneClass}`}>{value}</strong>
+    </div>
   );
 }
 
-function FixturePlate({ fixture }: { fixture: Fixture }) {
+function SelectedFixture({ fixture }: { fixture: Fixture }) {
   return (
     <div className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-3">
       <FixtureTeams fixture={fixture} />
-      <p className="mt-2 truncate text-xs text-ink-faint">{fixture.competition ?? "Completed fixture"} · {fmtKickoffLine(fixture.startTime, fixture.startTimeIso)}</p>
+      <p className="mt-3 truncate text-xs text-ink-faint">{fixture.competition ?? "Completed fixture"}</p>
+      <p className="mt-1 text-xs text-ink-faint">{fmtKickoffLine(fixture.startTime, fixture.startTimeIso)}</p>
     </div>
   );
 }
@@ -503,7 +579,7 @@ function FixtureTeams({ fixture }: { fixture: Fixture }) {
   const p1 = teamName(fixture.participant1);
   const p2 = teamName(fixture.participant2);
   return (
-    <div className="flex items-center justify-between gap-2">
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
       <div className="flex min-w-0 items-center gap-2 font-bold">
         <span className="text-xl">{flag(p1)}</span>
         <span className="truncate">{p1}</span>
@@ -517,12 +593,18 @@ function FixtureTeams({ fixture }: { fixture: Fixture }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+function EmptyPanel({ title, text }: { title: string; text: string }) {
   return (
-    <div className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 px-2 py-2">
-      <p className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">{label}</p>
-      <strong className="text-sm text-ink">{value}</strong>
+    <div className="rounded-md border border-dashed border-[color:var(--brd-soft)] bg-black/10 p-6 text-center">
+      <h3 className="font-bold text-ink">{title}</h3>
+      <p className="mt-2 text-sm text-ink-faint">{text}</p>
     </div>
+  );
+}
+
+function Message({ text }: { text: string }) {
+  return (
+    <p className="rounded-md border border-[color:var(--brd-soft)] bg-black/30 px-3 py-2 text-sm text-ink-soft">{text}</p>
   );
 }
 
