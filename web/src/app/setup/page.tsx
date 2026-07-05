@@ -69,7 +69,7 @@ export default function SetupPage() {
       <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-3">
         <header className="page-top">
           <button className="icon-btn" aria-label="Back" onClick={() => router.push("/lobby")}>←</button>
-          <h1 className="text-xl font-bold">Your colony</h1>
+          <h1 className="hud-title text-[13px]">Your colony</h1>
           <span />
         </header>
         <div className="glass p-4 text-center text-sm text-ink-faint">
@@ -112,7 +112,7 @@ export default function SetupPage() {
     <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
       <header className="page-top">
         <button className="icon-btn" aria-label="Back to room" onClick={() => router.back()}>←</button>
-        <h1 className="text-xl font-bold">Your colony</h1>
+        <h1 className="hud-title text-[13px]">Your colony</h1>
         <span className="status-pill">Room {game.roomCode}</span>
       </header>
 

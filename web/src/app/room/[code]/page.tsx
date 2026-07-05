@@ -123,7 +123,7 @@ export default function RoomPage() {
     <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
       <header className="page-top">
         <button className="icon-btn" aria-label="Back to lobby" onClick={() => router.push("/lobby")}>←</button>
-        <h1 className="text-xl font-bold">Room</h1>
+        <h1 className="hud-title text-[13px]">Room</h1>
         <span className="status-pill">{game?.status === "created" ? "Pre-match" : game?.status?.replace("_", " ") || "Room"}</span>
       </header>
 
@@ -139,7 +139,7 @@ export default function RoomPage() {
       <section className="glass pheromone-line flex flex-col items-center gap-4 p-5 text-center">
         <div>
           <p className="text-sm font-bold text-ink-soft">Room code</p>
-          <strong className="font-mono text-5xl tracking-[0.08em] text-gold">{roomCode}</strong>
+          <strong className="font-mono text-5xl tracking-[0.08em] text-gold-deep [text-shadow:2px_2px_0_rgba(90,70,30,0.25)]">{roomCode}</strong>
           <p className="mt-1 text-sm text-ink-faint">Share this code with your friends.</p>
         </div>
         <div className="grid w-full grid-cols-2 gap-3">
@@ -184,7 +184,7 @@ export default function RoomPage() {
         </div>
       </section>
 
-      {msg && <p className="rounded-lg border border-[color:var(--brd-soft)] bg-black/20 px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
+      {msg && <p className="well px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
 
       <div className="bottom-action">
         <div className="bottom-action-inner">

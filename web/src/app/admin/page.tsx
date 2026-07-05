@@ -405,7 +405,7 @@ export default function AdminPage() {
 
   if (protectedAdmin && !canUseAdmin) {
     return (
-      <div className="relative left-1/2 flex w-[min(1120px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 pb-6">
+      <div className="flex w-full flex-col gap-4 pb-6 lg:relative lg:left-1/2 lg:w-[min(1120px,calc(100vw-32px))] lg:-translate-x-1/2">
         <AdminHeader working={working} canUseAdmin={false} onRefresh={() => refreshDashboard()} />
         <section className="glass grid gap-6 p-6 lg:grid-cols-[1fr_360px]">
           <div className="flex min-h-[320px] flex-col justify-between">
@@ -442,7 +442,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="relative left-1/2 flex w-[min(1500px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 pb-6">
+    <div className="flex w-full flex-col gap-4 pb-6 lg:relative lg:left-1/2 lg:w-[min(1500px,calc(100vw-32px))] lg:-translate-x-1/2">
       <AdminHeader working={working} canUseAdmin={canUseAdmin} onRefresh={() => refreshDashboard()} />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -494,10 +494,10 @@ export default function AdminPage() {
                   return (
                     <button
                       key={key}
-                      className={`rounded-md border p-3 text-left transition ${
+                      className={`rounded-md border-2 p-3 text-left transition ${
                         selected
-                          ? "border-lime/50 bg-lime/10"
-                          : "border-[color:var(--brd-soft)] bg-black/20 hover:border-gold/50"
+                          ? "border-[color:var(--color-green)] bg-lime/10 shadow-[2px_2px_0_rgba(90,70,30,0.3)]"
+                          : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] hover:border-gold/60"
                       }`}
                       onClick={() => setSelectedFixtureKey(key)}
                     >
@@ -536,7 +536,7 @@ export default function AdminPage() {
             <StepCard number="2" title="Set admin colonies" status={`${validColonies.length} active`}>
               <div className="grid gap-3">
                 {colonies.map((colony, index) => (
-                  <div key={index} className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-3">
+                  <div key={index} className="well p-3">
                     <div className="grid gap-3 lg:grid-cols-[minmax(180px,1.2fr)_90px_140px_140px_120px_auto]">
                       <Field label="Name">
                         <input
@@ -607,7 +607,7 @@ export default function AdminPage() {
             <StepCard number="3" title="Create the room" status={roomIsCurrent ? "Ready" : roomNeedsRebuild ? "Needs rebuild" : "Waiting"}>
               {selectedFixture ? <SelectedFixture fixture={selectedFixture} /> : <EmptyPanel title="No match selected" text="Pick a replayable match first." />}
 
-              <div className="mt-4 rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-3">
+              <div className="well mt-4 p-3">
                 <p className="text-sm font-bold text-ink-soft">Room state</p>
                 <p className="mt-2 text-lg font-bold text-ink">
                   {roomIsCurrent ? "Admin room ready" : roomNeedsRebuild ? "Current setup changed" : "No room created yet"}
@@ -637,7 +637,7 @@ export default function AdminPage() {
             </StepCard>
 
             <StepCard number="4" title="Launch simulation" status={roomIsCurrent ? "Ready to launch" : "Locked"}>
-              <div className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-4">
+              <div className="well p-4">
                 <p className="text-sm text-ink-soft">
                   {roomIsCurrent
                     ? "The next click starts the replay stream and opens the cockpit for this room."
@@ -664,7 +664,7 @@ export default function AdminPage() {
               </div>
             </StepCard>
 
-            <details className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-4">
+            <details className="well p-4">
               <summary className="cursor-pointer text-sm font-bold text-ink-soft">Fallback tools</summary>
               <div className="mt-4 grid gap-3">
                 <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={findLatestAndStart}>
@@ -693,7 +693,7 @@ export default function AdminPage() {
             </details>
 
             {protectedAdmin && (
-              <details className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-4">
+              <details className="well p-4">
                 <summary className="cursor-pointer text-sm font-bold text-ink-soft">Admin token</summary>
                 <div className="mt-3 grid gap-2">
                   <input
@@ -734,7 +734,7 @@ export default function AdminPage() {
             </thead>
             <tbody>
               {games.slice(0, 14).map((game) => (
-                <tr key={game.gameId} className="bg-black/20">
+                <tr key={game.gameId} className="bg-[rgba(249,243,226,0.72)] shadow-[2px_2px_0_rgba(74,58,30,0.12)]">
                   <td className="rounded-l-md px-3 py-3">
                     <strong>{matchTitle(game)}</strong>
                     <p className="font-mono text-[11px] text-ink-faint">{game.gameId}</p>
@@ -767,7 +767,7 @@ function AdminHeader({ working, canUseAdmin, onRefresh }: { working: string; can
     <header className="flex flex-wrap items-center justify-between gap-4">
       <div>
         <p className="eyebrow">Age of Colony admin</p>
-        <h1 className="text-3xl font-bold leading-tight md:text-4xl">Simulation dashboard</h1>
+        <h1 className="hud-title text-[16px] leading-relaxed md:text-[19px]">Simulation dashboard</h1>
       </div>
       <button className="btn btn-ghost !min-h-0 !w-auto px-4 py-2 text-sm" disabled={!canUseAdmin || working === "refresh"} onClick={onRefresh}>
         Refresh data
@@ -778,10 +778,10 @@ function AdminHeader({ working, canUseAdmin, onRefresh }: { working: string; can
 
 function StepCard({ number, title, status, children }: { number: string; title: string; status: string; children: ReactNode }) {
   return (
-    <section className="min-w-0 rounded-md border border-[color:var(--brd)] bg-black/20 p-4">
+    <section className="glass min-w-0 p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-md border border-gold/50 bg-gold/10 font-mono text-sm font-bold text-gold">
+          <span className="plate flex h-9 w-9 items-center justify-center font-mono text-sm font-bold text-gold-deep">
             {number}
           </span>
           <h2 className="text-xl font-bold leading-tight">{title}</h2>
@@ -854,7 +854,7 @@ function FixtureTeams({ fixture }: { fixture: ReplayFixture }) {
 
 function EmptyPanel({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
   return (
-    <div className="min-w-0 rounded-md border border-dashed border-[color:var(--brd-soft)] bg-black/10 p-6 text-center">
+    <div className="min-w-0 rounded-md border-2 border-dashed border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.5)] p-6 text-center">
       <h3 className="font-bold text-ink">{title}</h3>
       <p className="mt-2 text-sm text-ink-faint">{text}</p>
       {children}
@@ -864,7 +864,7 @@ function EmptyPanel({ title, text, children }: { title: string; text: string; ch
 
 function Message({ text }: { text: string }) {
   return (
-    <p className="min-w-0 break-words rounded-md border border-[color:var(--brd-soft)] bg-black/30 px-3 py-2 text-sm text-ink-soft">{text}</p>
+    <p className="well min-w-0 break-words px-3 py-2 text-sm text-ink-soft">{text}</p>
   );
 }
 

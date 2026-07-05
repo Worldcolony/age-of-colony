@@ -12,10 +12,10 @@ import { worldBus } from "@/three/worldBus";
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
 const KIND_EDGE: Record<string, string> = {
-  opportunity: "#e6a13a", markets_closed: "#e6a13a",
-  settlement: "#8fbd50", hatch: "#8fbd50", info_result: "#8fbd50",
-  vote: "#d96150", ant_agent_vote: "#d96150", prediction: "#d96150",
-  game_error: "#d96150", starvation: "#d96150", void: "#d96150",
+  opportunity: "#b07e1c", markets_closed: "#b07e1c",
+  settlement: "#4e7e2a", hatch: "#4e7e2a", info_result: "#4e7e2a",
+  vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
+  game_error: "#c25a3a", starvation: "#c25a3a", void: "#c25a3a",
 };
 
 interface PublicVote {
@@ -129,7 +129,7 @@ export default function CockpitPage() {
 
   const walletAccent = useStore((s) => s.wallet.accent);
   useEffect(() => {
-    worldBus.setAccent(walletAccent || "#e6a13a");
+    worldBus.setAccent(walletAccent || "#b07e1c");
   }, [walletAccent]);
   useEffect(() => {
     worldBus.setIntensity(RUNNING.has(game?.status ?? "") ? 0.9 : 0.4);
@@ -162,11 +162,11 @@ export default function CockpitPage() {
   }, [myColonyId, ownColony?.colonyId, setMyColonyId]);
 
   return (
-    <div className="relative left-1/2 flex min-h-[calc(100dvh-36px)] w-[min(1500px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 pb-6">
+    <div className="flex min-h-[calc(100dvh-36px)] w-full flex-col gap-4 pb-6 xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
       <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
         <button className="icon-btn" aria-label="Back" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>←</button>
         <div className="text-center">
-          <h1 className="text-xl font-bold">Live cockpit</h1>
+          <h1 className="hud-title text-[13px]">Live cockpit</h1>
           <p className="text-xs text-ink-faint">{lastSyncAt ? `Synced ${formatClock(lastSyncAt)}` : "Syncing..."}</p>
         </div>
         <span className={`status-pill ${RUNNING.has(status) ? "!border-rust/50 !text-rust" : ""}`}>
@@ -177,7 +177,7 @@ export default function CockpitPage() {
 
       <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(520px,1.2fr)_minmax(360px,0.95fr)] 2xl:grid-cols-[360px_minmax(580px,1fr)_430px]">
         <aside className="grid min-w-0 content-start gap-4">
-          <section className="glass match-card-media flex flex-col gap-3 p-4">
+          <section className="glass match-card-media flex min-w-0 flex-col gap-3 p-4">
             <div className="flex items-center justify-between gap-3">
               <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p1)}</span>
               <div className="min-w-0 flex-1 text-center">
@@ -200,7 +200,7 @@ export default function CockpitPage() {
 
         <main className="grid min-w-0 content-start gap-4">
           {status === "created" ? (
-            <section className="glass flex flex-col gap-3 p-5 text-center xl:min-h-[360px] xl:justify-center">
+            <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:min-h-[360px] xl:justify-center">
               <p className="eyebrow">Simulation dashboard</p>
               <h2 className="text-2xl font-bold">Room is not live yet</h2>
               <p className="mx-auto max-w-md text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
@@ -209,7 +209,7 @@ export default function CockpitPage() {
               </button>
             </section>
           ) : (
-            <section className="glass flex min-h-[420px] flex-col gap-3 p-4 xl:min-h-[calc(100dvh-132px)]">
+            <section className="glass flex min-h-[420px] min-w-0 flex-col gap-3 p-4 xl:min-h-[calc(100dvh-132px)]">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="eyebrow">Simulation dashboard</p>
@@ -287,7 +287,7 @@ function RunStatusCard({
   const streamLabel = streamState === "reconnecting" ? "reconnect" : streamState;
   const shortId = gameId.length > 8 ? `${gameId.slice(0, 4)}...${gameId.slice(-4)}` : gameId;
   return (
-    <section className="glass flex flex-col gap-3 p-3">
+    <section className="glass flex min-w-0 flex-col gap-3 p-3">
       <div>
         <p className="eyebrow">Run state</p>
         <h2 className="text-base font-bold">Replay control</h2>
@@ -304,7 +304,7 @@ function RunStatusCard({
 
 function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: GameEvent[]; onOpenFeed: () => void }) {
   return (
-    <section className="glass flex flex-col gap-3 p-3">
+    <section className="glass flex min-w-0 flex-col gap-3 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow">Signals</p>
@@ -313,13 +313,13 @@ function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: GameEvent[]; onOp
         <button className="quiet-link text-sm" onClick={onOpenFeed}>Open feed</button>
       </div>
 
-      <div className="grid max-h-[300px] gap-0 overflow-y-auto rounded-xl border border-[color:var(--brd-soft)] bg-black/14 px-3">
+      <div className="well grid max-h-[300px] gap-0 overflow-y-auto px-3">
         {feedRows.length === 0 ? (
           <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
         ) : (
           feedRows.map((event) => (
             <div key={event.index} className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
-              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(244,234,216,0.2)" }} />
+              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(74,58,30,0.25)" }} />
               <span className="min-w-0 text-sm leading-snug text-ink-soft">{compactEventMessage(event)}</span>
               <span className="font-mono text-[10px] text-ink-faint">#{event.index}</span>
             </div>
@@ -345,7 +345,7 @@ function CockpitTabs({
     { id: "feed", label: "Feed" },
   ];
   return (
-    <div className="seg sticky top-2 z-20 bg-[rgba(8,7,5,0.86)] backdrop-blur-md">
+    <div className="seg sticky top-2 z-20 bg-[rgba(228,218,193,0.95)] backdrop-blur-md">
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -397,7 +397,7 @@ function LiveTab({
       )}
 
       {settledMarkets.length > 0 && (
-        <div className="rounded-xl border border-[color:var(--brd-soft)] bg-black/14 p-3">
+        <div className="well p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold">Latest settled</p>
@@ -456,13 +456,13 @@ function FeedTab({ feedRows, onOpenRanks }: { feedRows: GameEvent[]; onOpenRanks
         </div>
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Ranks</button>
       </div>
-      <div className="max-h-[52dvh] overflow-y-auto rounded-xl border border-[color:var(--brd-soft)] bg-black/14 px-3">
+      <div className="well max-h-[52dvh] overflow-y-auto px-3">
         {feedRows.length === 0 ? (
           <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
         ) : (
           feedRows.map((event) => (
             <div key={event.index} className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
-              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(244,234,216,0.2)" }} />
+              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(74,58,30,0.25)" }} />
               <span className="text-sm leading-snug text-ink-soft">{compactEventMessage(event)}</span>
               <span className="font-mono text-[10px] text-ink-faint">#{event.index}</span>
             </div>
@@ -502,15 +502,15 @@ function MarketRail({
             key={market.id}
             type="button"
             onClick={() => onSelect(market.id)}
-            className={`min-w-[124px] rounded-xl border p-3 text-left transition ${
+            className={`min-w-[124px] rounded-md border-2 p-3 text-left transition ${
               selected
-                ? "border-cyan/70 bg-[rgba(88,183,170,0.16)] text-ink"
-                : "border-[color:var(--brd-soft)] bg-black/16 text-ink-soft"
+                ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] text-ink shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
+                : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] text-ink-soft"
             }`}
           >
-            <span className="block truncate font-mono text-[10px] uppercase text-gold">{compactMarketName(market)}</span>
+            <span className="block truncate font-mono text-[10px] uppercase text-gold-deep">{compactMarketName(market)}</span>
             <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
-            <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-black/35">
+            <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-[rgba(74,58,30,0.18)]">
               {distribution.rows.length ? distribution.rows.map((row) => (
                 <span
                   key={row.key}
@@ -547,19 +547,19 @@ function SettledRail({
             key={market.id}
             type="button"
             onClick={() => onSelect(market.id)}
-            className={`min-w-[132px] rounded-xl border p-3 text-left transition ${
+            className={`min-w-[132px] rounded-md border-2 p-3 text-left transition ${
               selected
-                ? "border-gold/70 bg-[rgba(230,161,58,0.14)] text-ink"
-                : "border-[color:var(--brd-soft)] bg-black/16 text-ink-soft"
+                ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] text-ink shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
+                : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] text-ink-soft"
             }`}
           >
-            <span className="block font-mono text-[10px] uppercase text-gold">{compactMarketName(market)}</span>
+            <span className="block font-mono text-[10px] uppercase text-gold-deep">{compactMarketName(market)}</span>
             <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
             {!compact && (
               <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
-                <b className="rounded bg-black/25 px-1 py-1 text-green">{summary.food}</b>
-                <b className="rounded bg-black/25 px-1 py-1 text-rust">{summary.dead}</b>
-                <b className="rounded bg-black/25 px-1 py-1 text-ink">{summary.voided}</b>
+                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-green">{summary.food}</b>
+                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-rust">{summary.dead}</b>
+                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-ink">{summary.voided}</b>
               </span>
             )}
           </button>
@@ -573,15 +573,15 @@ function FocusedMarketPanel({ market }: { market: MarketModel }) {
   const distribution = aggregateVotes(market.votes);
   const pending = pendingAntCount(market, distribution.total);
   return (
-    <article className="rounded-xl border border-cyan/40 bg-[rgba(88,183,170,0.08)] p-3">
+    <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.95)] p-3 shadow-[3px_3px_0_rgba(74,58,30,0.25)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-bold text-cyan">Selected market</p>
+          <p className="eyebrow">Selected market</p>
           <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
           <p className="mt-1 text-xs text-ink-faint">Aggregated across all colonies.</p>
-          <p className="mt-1 font-mono text-[10px] uppercase text-gold">{marketLabelPrefix(market)}</p>
+          <p className="mt-1 font-mono text-[10px] uppercase text-gold-deep">{marketLabelPrefix(market)}</p>
         </div>
-        <span className="rounded-full border border-cyan/50 px-2 py-1 font-mono text-[10px] uppercase text-cyan">open</span>
+        <span className="rounded-full border-2 border-[color:var(--color-green)] px-2 py-1 font-mono text-[10px] uppercase text-green">open</span>
       </div>
 
       {distribution.rows.length ? (
@@ -591,13 +591,13 @@ function FocusedMarketPanel({ market }: { market: MarketModel }) {
       )}
 
       <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink-faint">
-        <span className="rounded-full bg-[rgba(230,161,58,0.1)] px-2 py-1 text-gold">
+        <span className="rounded-full bg-[rgba(176,126,28,0.14)] px-2 py-1 text-gold-deep">
           {distribution.total ? `${distribution.total} total ant votes` : "Waiting for ants"}
         </span>
-        <span className="rounded-full bg-black/25 px-2 py-1">
+        <span className="rounded-full bg-[rgba(74,58,30,0.1)] px-2 py-1">
           {market.votes.length}/{Math.max(1, market.starts.length || market.votes.length)} colonies reported
         </span>
-        {pending > 0 && <span className="rounded-full bg-black/25 px-2 py-1">{pending} calls pending</span>}
+        {pending > 0 && <span className="rounded-full bg-[rgba(74,58,30,0.1)] px-2 py-1">{pending} calls pending</span>}
       </div>
     </article>
   );
@@ -607,15 +607,15 @@ function SettledDetailPanel({ market }: { market: MarketModel }) {
   const summary = settlementSummary(market);
   const distribution = aggregateVotes(market.votes);
   return (
-    <article className="rounded-t-2xl border border-gold/45 bg-[rgba(18,16,12,0.94)] p-3 shadow-[0_-18px_45px_-34px_rgba(230,161,58,0.8)]">
+    <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] p-3 shadow-[4px_4px_0_rgba(74,58,30,0.28)]">
       <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gold/40" />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-bold text-gold">Settled market</p>
+          <p className="eyebrow">Settled market</p>
           <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
           <p className="mt-1 font-mono text-[10px] uppercase text-ink-faint">{marketLabelPrefix(market)}</p>
         </div>
-        <span className={`rounded-full border px-2 py-1 font-mono text-[10px] uppercase ${summary.tone}`}>
+        <span className={`rounded-full border-2 px-2 py-1 font-mono text-[10px] uppercase ${summary.tone}`}>
           {summary.label}
         </span>
       </div>
@@ -661,7 +661,7 @@ function Distribution({ distribution, title }: { distribution: ReturnType<typeof
   return (
     <div className="mt-3">
       {title && <p className="mb-2 text-xs font-bold text-ink-faint">{title}</p>}
-      <div className="flex h-3 overflow-hidden rounded-full bg-black/35" aria-label={`Vote distribution, ${distribution.total} ants`}>
+      <div className="flex h-3 overflow-hidden rounded-full bg-[rgba(74,58,30,0.18)]" aria-label={`Vote distribution, ${distribution.total} ants`}>
         {distribution.rows.map((row) => (
           <span
             key={row.key}
@@ -674,7 +674,7 @@ function Distribution({ distribution, title }: { distribution: ReturnType<typeof
       </div>
       <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, distribution.rows.length)}, minmax(0, 1fr))` }}>
         {distribution.rows.map((row) => (
-          <div key={row.key} className="rounded-lg border border-[color:var(--brd-soft)] px-2 py-2">
+          <div key={row.key} className="well px-2 py-2">
             <p className="truncate text-xs font-bold" style={{ color: row.color }}>{row.label}</p>
             <p className="font-mono text-xl font-bold">{row.count}</p>
             <p className="text-[11px] text-ink-faint">{Math.round((row.count / Math.max(1, distribution.total)) * 100)}%</p>
@@ -688,12 +688,12 @@ function Distribution({ distribution, title }: { distribution: ReturnType<typeof
 function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
   const options = opportunity?.options ?? [];
   if (!options.length) {
-    return <p className="mt-3 rounded-lg border border-[color:var(--brd-soft)] bg-black/20 p-3 text-sm text-ink-faint">Waiting for ant decisions...</p>;
+    return <p className="well mt-3 p-3 text-sm text-ink-faint">Waiting for ant decisions...</p>;
   }
   return (
     <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, options.length)}, minmax(0, 1fr))` }}>
       {options.slice(0, 3).map((option) => (
-        <div key={option.optionId || option.label} className="rounded-lg border border-[color:var(--brd-soft)] bg-black/20 p-2 text-center text-xs font-bold text-ink-soft">
+        <div key={option.optionId || option.label} className="well p-2 text-center text-xs font-bold text-ink-soft">
           {option.label || option.value}
         </div>
       ))}
@@ -704,7 +704,7 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
 function RankCard({ mine, rank, spectator }: { mine?: Colony; rank: number; spectator?: boolean }) {
   if (!mine) return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete.</div>;
   return (
-    <section className="glass grid grid-cols-4 gap-1 p-3 text-center">
+    <section className="glass grid min-w-0 grid-cols-4 gap-1 p-3 text-center">
       <Vital label="Rank" value={`#${rank}`} tone="gold" />
       <Vital label={spectator ? "Lead ants" : "My ants"} value={mine.antsAlive} />
       <Vital label="Food" value={mine.food} tone="green" />
@@ -724,14 +724,14 @@ function ColonyRoster({
 }) {
   if (!colonies.length) {
     return (
-      <section className="glass p-4 text-center text-sm text-ink-faint">
+      <section className="glass min-w-0 p-4 text-center text-sm text-ink-faint">
         No colonies attached to this simulation yet.
       </section>
     );
   }
 
   return (
-    <section className="glass flex flex-col gap-3 p-3 xl:min-h-[360px]">
+    <section className="glass flex min-w-0 flex-col gap-3 p-3 xl:min-h-[360px]">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow">Colonies</p>
@@ -746,10 +746,10 @@ function ColonyRoster({
           return (
             <div
               key={colony.colonyId}
-              className={`rounded-xl border p-3 ${
+              className={`rounded-md border-2 p-3 ${
                 active
-                  ? "border-cyan/50 bg-[rgba(88,183,170,0.12)]"
-                  : "border-[color:var(--brd-soft)] bg-black/16"
+                  ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
+                  : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)]"
               }`}
             >
               <div className="flex items-start justify-between gap-3">
@@ -762,7 +762,7 @@ function ColonyRoster({
                     {labelize(colony.style)} · {labelize(colony.favoriteContext)} · info {labelize(colony.infoNeed)}
                   </p>
                 </div>
-                {active && <span className="status-pill !border-cyan/50 !text-cyan">active</span>}
+                {active && <span className="status-pill">active</span>}
               </div>
 
               <div className="mt-3 grid grid-cols-4 gap-2 text-center">
@@ -782,7 +782,7 @@ function ColonyRoster({
 function MiniStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
   const color = tone === "gold" ? "text-gold" : tone === "green" ? "text-green" : "text-ink";
   return (
-    <div className="rounded-lg border border-[color:var(--brd-soft)] bg-black/16 px-2 py-2">
+    <div className="well px-2 py-2">
       <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
       <p className={`font-mono text-base font-bold ${color}`}>{value}</p>
     </div>
@@ -1011,11 +1011,11 @@ function shortVoteLabel(label: string) {
 }
 
 function voteColor(key: string, index: number) {
-  if (key === "abstain") return "#8f8370";
-  if (key === "yes" || key === "option_a") return "#8fbd50";
-  if (key === "no" || key === "option_b") return "#d96150";
-  if (key === "option_c") return "#58b7aa";
-  return index % 2 ? "#c9bca2" : "#e6a13a";
+  if (key === "abstain") return "#8c7e60";
+  if (key === "yes" || key === "option_a") return "#4e7e2a";
+  if (key === "no" || key === "option_b") return "#c25a3a";
+  if (key === "option_c") return "#b07e1c";
+  return index % 2 ? "#5e5440" : "#876012";
 }
 
 function compactEventMessage(event: GameEvent) {

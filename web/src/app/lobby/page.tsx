@@ -5,6 +5,7 @@ import { api, API_BASE } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fixtureId, fmtKickoffLine } from "@/lib/format";
+import { AntMarch } from "@/components/AntMarch";
 import type { Fixture } from "@/lib/types";
 
 export default function LobbyPage() {
@@ -100,11 +101,11 @@ export default function LobbyPage() {
     <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
       <header className="page-top">
         <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-xl border border-[color:var(--brd-strong)] bg-[rgba(230,161,58,0.08)] text-lg">
+          <div className="plate grid h-9 w-9 place-items-center text-lg">
             🐜
           </div>
           <div>
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-ink-soft">Age of Colony</p>
+            <p className="eyebrow">Age of Colony</p>
             <p className="text-xs text-ink-faint">{wallet.connected ? wallet.short : "guest"}</p>
           </div>
         </div>
@@ -114,7 +115,7 @@ export default function LobbyPage() {
       </header>
 
       <section className="mt-6">
-        <h1 className="text-3xl font-bold leading-tight text-ink">Choose a match</h1>
+        <h1 className="hud-title text-[17px] leading-relaxed">Choose a match</h1>
         <p className="mt-2 text-base text-ink-soft">Start a room or join your friends.</p>
       </section>
 
@@ -176,16 +177,17 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
   const p2 = teamName(f.participant2);
   const live = status === "current";
   return (
-    <div className={`glass match-card-media flex flex-col gap-4 p-4 ${featured ? "pheromone-line" : ""}`}>
+    <div className={`glass match-card-media flex flex-col gap-4 ${featured ? "pheromone-line overflow-hidden !pt-0 p-4" : "p-4"}`}>
+      {featured && <AntMarch className="-mx-4 border-b-2 border-[color:var(--brd-soft)] bg-[color:var(--color-slot)] py-1.5" />}
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-3 font-bold">
           <span className="plate grid h-12 w-14 shrink-0 place-items-center text-2xl">{flag(p1)}</span>
-          <span className="truncate text-2xl">{p1}</span>
+          <span className="truncate text-lg">{p1}</span>
         </div>
         <span className="font-mono text-sm font-bold uppercase text-gold">vs</span>
         <div className="flex min-w-0 flex-1 flex-row-reverse items-center gap-3 text-right font-bold">
           <span className="plate grid h-12 w-14 shrink-0 place-items-center text-2xl">{flag(p2)}</span>
-          <span className="truncate text-2xl">{p2}</span>
+          <span className="truncate text-lg">{p2}</span>
         </div>
       </div>
       <div className="flex items-center justify-between gap-3 text-sm text-ink-soft">
