@@ -548,6 +548,67 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(precision_predictions[0].resolved)
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
+        self.assertTrue(
+            any(
+                event.kind == "settlement"
+                and event.data.get("resolvedOutcome", {}).get("label") == "Belgium scored"
+                for event in room.log
+            )
+        )
+
+    def test_next_goal_losing_colony_still_records_actual_outcome(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Outcome Watch", 20, "balanced", "momentum", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 87,
+                "clockSeconds": 5220,
+                "participant": 1,
+                "participantLabel": "Brazil",
+                "possession": 1,
+                "possessionLabel": "Brazil",
+                "description": "High danger possession - Brazil",
+            }
+        )
+        no_goal_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.option.option_id == "next_goal_none"
+        ]
+        self.assertTrue(no_goal_predictions)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "goal",
+                "highlights": ["goal"],
+                "minute": 88,
+                "clockSeconds": 5280,
+                "participant": 2,
+                "participantLabel": "Norway",
+                "score": {"participant1": 0, "participant2": 1},
+                "confirmed": True,
+                "description": "Goal - Norway - confirmed",
+            }
+        )
+        settlement_events = [
+            event
+            for event in room.log
+            if event.kind == "settlement"
+            and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in no_goal_predictions}
+        ]
+
+        self.assertTrue(settlement_events)
+        self.assertTrue(all(not event.data.get("win") for event in settlement_events))
+        self.assertEqual({event.data.get("resolvedOutcome", {}).get("label") for event in settlement_events}, {"Norway scored"})
 
     def test_next_goal_market_waits_until_full_time_without_goal(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
@@ -601,6 +662,7 @@ class GameHarnessTest(unittest.TestCase):
                 if event.kind == "settlement"
                 and event.data.get("reason") == "full_time"
                 and event.data.get("win")
+                and event.data.get("resolvedOutcome", {}).get("label") == "No goal before full time"
                 and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in no_goal_predictions}
             ]
         )

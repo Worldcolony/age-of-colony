@@ -1118,6 +1118,24 @@ function settlementSummary(market: MarketModel) {
 }
 
 function marketOutcomeSummary(market: MarketModel): MarketOutcome {
+  const recordedOutcomes = recordedMarketOutcomes(market.settlements);
+  if (recordedOutcomes.length === 1) {
+    return {
+      label: cleanOutcomeLabel(recordedOutcomes[0].label),
+      detail: recordedOutcomes[0].detail || "Recorded from the match event that settled this market.",
+      badge: "confirmed",
+      tone: market.settlements.some((event) => Boolean(eventData(event)?.win)) ? "green" : "gold",
+    };
+  }
+  if (recordedOutcomes.length > 1) {
+    return {
+      label: recordedOutcomes.map((outcome) => cleanOutcomeLabel(outcome.label)).join(" / "),
+      detail: "Multiple recorded outcomes were found for this market.",
+      badge: "review",
+      tone: "gold",
+    };
+  }
+
   const winningLabels = uniqueNonEmpty(
     market.settlements
       .filter((event) => Boolean(eventData(event)?.win))
@@ -1184,7 +1202,7 @@ function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null 
   }
   if ((context === "next_goal_team" || label.includes("who scores the next goal")) && ["expired", "full_time"].includes(reason || "")) {
     return {
-      label: "no goal before the deadline",
+      label: "no goal before full time",
       detail: `Inferred from ${humanizeReason(reason)}.`,
       badge: "inferred",
       tone: "gold",
@@ -1192,7 +1210,7 @@ function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null 
   }
   if ((context === "next_foul" || label.includes("who commits the next foul")) && reason === "expired_no_foul") {
     return {
-      label: "no foul before the deadline",
+      label: "no foul before full time",
       detail: "The foul market expired without a qualifying foul.",
       badge: "void",
       tone: "muted",
@@ -1223,7 +1241,7 @@ function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null 
 
 function voidOutcomeLabel(market: MarketModel, reason?: string) {
   const label = cleanMarketLabel(market.label).toLowerCase();
-  if (reason === "expired_no_foul" || label.includes("who commits the next foul")) return "no foul before the deadline";
+  if (reason === "expired_no_foul" || label.includes("who commits the next foul")) return "no foul before full time";
   if (reason === "full_time") return "voided at full time";
   return "market voided";
 }
@@ -1352,6 +1370,7 @@ function eventData(event?: GameEvent) {
         larvae?: number;
         option?: { label?: string; optionId?: string };
         reason?: string;
+        resolvedOutcome?: { label?: string; detail?: string };
         win?: boolean;
         wounded?: number;
       }
@@ -1365,6 +1384,21 @@ function eventOptionLabel(event?: GameEvent) {
 
 function firstReason(events: GameEvent[]) {
   return events.map((event) => eventData(event)?.reason).find(Boolean);
+}
+
+function recordedMarketOutcomes(events: GameEvent[]) {
+  const seen = new Set<string>();
+  const outcomes: { label: string; detail?: string }[] = [];
+  for (const event of events) {
+    const raw = eventData(event)?.resolvedOutcome;
+    const label = String(raw?.label ?? "").trim();
+    if (!label) continue;
+    const key = normalizeLabel(label);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    outcomes.push({ label, detail: raw?.detail });
+  }
+  return outcomes;
 }
 
 function uniqueNonEmpty(values: string[]) {

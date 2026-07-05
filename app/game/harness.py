@@ -991,7 +991,13 @@ class GameHarness:
                 continue
             result = evaluate_prediction_event(prediction, opportunity, event)
             if result is not None:
-                self._apply_settlement(prediction, opportunity, win=result, reason="resolved")
+                self._apply_settlement(
+                    prediction,
+                    opportunity,
+                    win=result,
+                    reason="resolved",
+                    outcome=resolved_market_outcome(opportunity, event, reason="resolved"),
+                )
 
     def _expire_predictions(self, event: dict[str, Any]) -> None:
         clock = event.get("clockSeconds")
@@ -1011,9 +1017,23 @@ class GameHarness:
             if not (expired_by_clock or expired_by_events):
                 continue
             win = prediction.option.target in {"nothing", "no_goal"}
-            self._apply_settlement(prediction, opportunity, win=win, reason="expired")
+            self._apply_settlement(
+                prediction,
+                opportunity,
+                win=win,
+                reason="expired",
+                outcome=resolved_market_outcome(opportunity, None, reason="expired"),
+            )
 
-    def _apply_settlement(self, prediction: Prediction, opportunity: Opportunity, *, win: bool, reason: str) -> None:
+    def _apply_settlement(
+        self,
+        prediction: Prediction,
+        opportunity: Opportunity,
+        *,
+        win: bool,
+        reason: str,
+        outcome: dict[str, Any] | None = None,
+    ) -> None:
         colony = self.room.colonies.get(prediction.colony_id)
         if not colony:
             return
@@ -1077,6 +1097,7 @@ class GameHarness:
                 "predictionId": prediction.prediction_id,
                 "opportunityId": opportunity.opportunity_id,
                 "option": prediction.option.__dict__,
+                "resolvedOutcome": outcome,
                 **data,
             },
         )
@@ -1090,7 +1111,13 @@ class GameHarness:
             if not opportunity:
                 continue
             if opportunity.context in {"goal_next_10", "next_goal_team"}:
-                self._apply_settlement(prediction, opportunity, win=prediction.option.target == "no_goal", reason="full_time")
+                self._apply_settlement(
+                    prediction,
+                    opportunity,
+                    win=prediction.option.target == "no_goal",
+                    reason="full_time",
+                    outcome=resolved_market_outcome(opportunity, None, reason="full_time"),
+                )
             else:
                 self._void_prediction(prediction, opportunity, reason="full_time")
             closed += 1
@@ -1911,6 +1938,123 @@ def top_voted_option(opportunity: Opportunity, vote: dict[str, Any]) -> tuple[Op
             best_option = option
             best_votes = votes
     return best_option, best_votes
+
+
+def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | None, *, reason: str) -> dict[str, Any]:
+    targets = event_targets(event) if event else set()
+    team_label = event_team_label(event, opportunity) if event else None
+    team_scope = event_team_scope(event, opportunity) if event else None
+    minute = event.get("minute") if event else None
+
+    target = None
+    option = None
+    label = "Resolved"
+
+    if opportunity.context == "penalties":
+        if "goal" in targets:
+            target = "goal"
+            label = f"{team_label} penalty scored" if team_label else "Penalty scored"
+        elif targets.intersection({"miss", "saved"}):
+            target = "no_goal"
+            label = f"{team_label} penalty missed or saved" if team_label else "Penalty missed or saved"
+        elif "cancel" in targets:
+            target = "no_goal"
+            label = "Penalty cancelled"
+        option = outcome_option(opportunity, target)
+
+    elif opportunity.context == "goal_next_10":
+        if "goal" in targets:
+            target = "goal"
+            label = f"{team_label} scored" if team_label else "Goal scored"
+        else:
+            target = "no_goal"
+            label = "No goal in the next 10 min"
+        option = outcome_option(opportunity, target)
+
+    elif opportunity.context == "next_goal_team":
+        if "goal" in targets:
+            target = "goal"
+            label = f"{team_label} scored" if team_label else "Goal scored"
+            option = outcome_option(opportunity, target, team_scope)
+        else:
+            target = "no_goal"
+            label = "No goal before full time"
+            option = outcome_option(opportunity, target)
+
+    elif opportunity.context == "next_foul":
+        if "foul" in targets:
+            target = "foul"
+            label = f"{team_label} committed the next foul" if team_label else "Foul committed"
+            option = outcome_option(opportunity, target, team_scope)
+        elif reason == "full_time":
+            label = "No foul before full time"
+
+    detail = resolved_outcome_detail(label, minute, reason)
+    return {
+        "label": label,
+        "detail": detail,
+        "reason": reason,
+        "context": opportunity.context,
+        "target": target,
+        "teamLabel": team_label,
+        "minute": minute,
+        "optionId": option.option_id if option else None,
+        "optionLabel": option.label if option else None,
+        "eventAction": event.get("action") if event else None,
+    }
+
+
+def outcome_option(opportunity: Opportunity, target: str | None, team_scope: str | None = None) -> OpportunityOption | None:
+    if target is None:
+        return None
+    for option in opportunity.options:
+        if option.target != target:
+            continue
+        if team_scope is not None and option.team_scope != team_scope:
+            continue
+        return option
+    for option in opportunity.options:
+        if option.target == target:
+            return option
+    return None
+
+
+def event_team_label(event: dict[str, Any] | None, opportunity: Opportunity) -> str | None:
+    if not event:
+        return None
+    label = event.get("participantLabel") or event.get("possessionLabel")
+    if label:
+        return str(label)
+    scope = event_team_scope(event, opportunity)
+    if scope == "participant1":
+        return opportunity.source_event.get("_participant1Label")
+    if scope == "participant2":
+        return opportunity.source_event.get("_participant2Label")
+    return None
+
+
+def event_team_scope(event: dict[str, Any] | None, opportunity: Opportunity) -> str | None:
+    if not event:
+        return None
+    event_team = event.get("participant") or event.get("possession")
+    event_label = event.get("participantLabel") or event.get("possessionLabel")
+    participant1 = opportunity.source_event.get("_participant1Label")
+    participant2 = opportunity.source_event.get("_participant2Label")
+    if str(event_team) == "1" or bool(participant1 and event_label == participant1):
+        return "participant1"
+    if str(event_team) == "2" or bool(participant2 and event_label == participant2):
+        return "participant2"
+    return None
+
+
+def resolved_outcome_detail(label: str, minute: Any, reason: str) -> str:
+    if minute is not None:
+        return f"Resolved by match event at {minute}'."
+    if reason == "full_time":
+        return "Resolved at full time."
+    if reason == "expired":
+        return "Resolved when the market window expired."
+    return f"Resolved outcome: {label}."
 
 
 def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, event: dict[str, Any]) -> bool | None:
