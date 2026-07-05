@@ -174,6 +174,28 @@ def _should_retry_ant_output_error(detail: dict[str, Any]) -> bool:
     return False
 
 
+def _can_convert_ant_failure_to_abstain(detail: dict[str, Any]) -> bool:
+    category = detail.get("category")
+    if category in {"invalid_assistant_json", "missing_ant_decision"}:
+        return True
+    nested = detail.get("details")
+    if isinstance(nested, list):
+        return any(isinstance(item, dict) and _can_convert_ant_failure_to_abstain(item) for item in nested)
+    return False
+
+
+def _technical_abstain_decision(detail: dict[str, Any]) -> "AntAgentDecision":
+    category = str(detail.get("category") or detail.get("type") or "agent_output_error")
+    return AntAgentDecision(
+        ant_id=str(detail.get("antId") or ""),
+        vote="abstain",
+        action="neutral",
+        option_id=None,
+        reason=f"technical abstain: DeepSeek output error ({category})",
+        raw={"_callMode": "per_ant", "_technicalAbstain": True, "_failure": detail},
+    )
+
+
 @dataclass(frozen=True)
 class OpenRouterSettings:
     api_key: str | None
@@ -482,16 +504,19 @@ class OpenRouterColonyAgent:
                     decisions.append(decision)
 
         if failure_details:
-            first = failure_details[0]
-            first_hint = first.get("category") or first.get("type") or "unknown"
-            status = f" HTTP {first['statusCode']}" if first.get("statusCode") else ""
-            raise AgentDecisionError(
-                f"{len(failure_details)} DeepSeek ant call(s) failed. First failure: {first_hint}{status}.",
-                details=failure_details,
-            )
-        if len(decisions) != len(ants):
-            answered_ids = {decision.ant_id for decision in decisions}
-            missing_ids = [str(ant.get("antId") or "") for ant in ants if str(ant.get("antId") or "") not in answered_ids]
+            if decisions and all(_can_convert_ant_failure_to_abstain(detail) for detail in failure_details):
+                decisions.extend(_technical_abstain_decision(detail) for detail in failure_details)
+            else:
+                first = failure_details[0]
+                first_hint = first.get("category") or first.get("type") or "unknown"
+                status = f" HTTP {first['statusCode']}" if first.get("statusCode") else ""
+                raise AgentDecisionError(
+                    f"{len(failure_details)} DeepSeek ant call(s) failed. First failure: {first_hint}{status}.",
+                    details=failure_details,
+                )
+        answered_ids = {decision.ant_id for decision in decisions}
+        missing_ids = [str(ant.get("antId") or "") for ant in ants if str(ant.get("antId") or "") not in answered_ids]
+        if missing_ids:
             raise AgentDecisionError(
                 f"DeepSeek answered for {len(decisions)}/{len(ants)} ants.",
                 details=[
@@ -502,7 +527,8 @@ class OpenRouterColonyAgent:
                     }
                 ],
             )
-        return decisions
+        decision_by_id = {decision.ant_id: decision for decision in decisions}
+        return [decision_by_id[str(ant.get("antId") or "")] for ant in ants]
 
     def _decide_ants_batch(
         self,

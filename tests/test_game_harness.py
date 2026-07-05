@@ -1094,6 +1094,61 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(len(decisions), 3)
         self.assertTrue(all(decision.raw.get("_callMode") == "per_ant" for decision in decisions))
 
+    def test_openrouter_per_ant_missing_single_decision_becomes_abstain(self):
+        agent = OpenRouterColonyAgent(
+            OpenRouterSettings(
+                api_key="test-key",
+                model="deepseek/deepseek-v4-flash",
+                call_mode="per_ant",
+                max_parallel_ant_calls=1,
+                max_calls_per_game=10,
+                max_retries=0,
+            )
+        )
+
+        def fake_call(*, stage, context, ants):
+            ant_id = ants[0]["antId"]
+            if ant_id == "ant_2":
+                return {
+                    "model": "deepseek/deepseek-v4-flash",
+                    "choices": [{"finish_reason": "stop", "message": {"content": {"vote": "yes"}}}],
+                }
+            return {
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "message": {
+                            "content": {
+                                "antDecisions": [
+                                    {
+                                        "antId": ant_id,
+                                        "vote": "yes",
+                                        "reason": "solo call",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ],
+            }
+
+        agent._call_openrouter_ants = fake_call
+        decisions = agent.decide_ants(
+            game_id="game-test",
+            stage="pre_info",
+            context={
+                "market": {"yesOptionId": "penalty_goal", "noOptionId": "penalty_no_goal"},
+                "opportunity": {"options": [{"optionId": "penalty_goal"}, {"optionId": "penalty_no_goal"}]},
+            },
+            ants=[{"antId": "ant_1"}, {"antId": "ant_2"}, {"antId": "ant_3"}],
+        )
+
+        self.assertEqual([decision.ant_id for decision in decisions], ["ant_1", "ant_2", "ant_3"])
+        self.assertEqual(decisions[1].vote, "abstain")
+        self.assertEqual(decisions[1].action, "neutral")
+        self.assertTrue(decisions[1].raw.get("_technicalAbstain"))
+        self.assertEqual(decisions[1].raw["_failure"]["category"], "missing_ant_decision")
+
     def test_openrouter_single_ant_payload_uses_minimal_vote_schema(self):
         agent = OpenRouterColonyAgent(
             OpenRouterSettings(api_key="test-key", model="deepseek/deepseek-v4-flash", max_tokens=1200)
