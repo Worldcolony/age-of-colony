@@ -46,6 +46,16 @@ interface MarketModel {
 
 type CockpitTab = "live" | "settled" | "feed";
 
+interface ColonyMarketActivity {
+  colony?: Colony;
+  voteEvent?: GameEvent;
+  predictionEvent?: GameEvent;
+  settlementEvent?: GameEvent;
+  voidEvent?: GameEvent;
+  distribution: ReturnType<typeof aggregateVotes>;
+  topVote?: ReturnType<typeof aggregateVotes>["rows"][number];
+}
+
 export default function CockpitPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -139,6 +149,7 @@ export default function CockpitPage() {
   const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
   const spectatorFallback = (game?.players?.length ?? 0) === 0 ? sorted[0] : undefined;
   const mine = ownColony ?? spectatorFallback;
+  const colonyFocusLabel = ownColony ? "Your colony" : "Watched colony";
   const myIdx = mine ? sorted.findIndex((c) => c.colonyId === mine.colonyId) : -1;
   const rank = myIdx >= 0 ? myIdx + 1 : 0;
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
@@ -234,6 +245,8 @@ export default function CockpitPage() {
                   selectedMarket={selectedMarket}
                   selectedMarketId={effectiveSelectedMarketId}
                   settledMarkets={settledMarkets}
+                  colony={mine}
+                  colonyLabel={colonyFocusLabel}
                   onSelectMarket={setSelectedMarketId}
                   onSelectSettled={(marketId) => {
                     setSelectedSettledId(marketId);
@@ -247,6 +260,8 @@ export default function CockpitPage() {
                   settledMarkets={settledMarkets}
                   selectedSettled={selectedSettled}
                   selectedSettledId={effectiveSelectedSettledId}
+                  colony={mine}
+                  colonyLabel={colonyFocusLabel}
                   onSelectSettled={setSelectedSettledId}
                 />
               )}
@@ -368,6 +383,8 @@ function LiveTab({
   selectedMarket,
   selectedMarketId,
   settledMarkets,
+  colony,
+  colonyLabel,
   onSelectMarket,
   onSelectSettled,
 }: {
@@ -376,6 +393,8 @@ function LiveTab({
   selectedMarket?: MarketModel;
   selectedMarketId: string | null;
   settledMarkets: MarketModel[];
+  colony?: Colony;
+  colonyLabel: string;
   onSelectMarket: (marketId: string) => void;
   onSelectSettled: (marketId: string) => void;
 }) {
@@ -390,7 +409,7 @@ function LiveTab({
       {openMarkets.length ? (
         <>
           <MarketRail markets={openMarkets} selectedId={selectedMarketId} onSelect={onSelectMarket} />
-          {selectedMarket && <FocusedMarketPanel market={selectedMarket} />}
+          {selectedMarket && <FocusedMarketPanel market={selectedMarket} colony={colony} colonyLabel={colonyLabel} />}
         </>
       ) : (
         <EmptyState title="No market open" body="The next prediction window will appear here." />
@@ -421,11 +440,15 @@ function SettledTab({
   settledMarkets,
   selectedSettled,
   selectedSettledId,
+  colony,
+  colonyLabel,
   onSelectSettled,
 }: {
   settledMarkets: MarketModel[];
   selectedSettled?: MarketModel;
   selectedSettledId: string | null;
+  colony?: Colony;
+  colonyLabel: string;
   onSelectSettled: (marketId: string) => void;
 }) {
   if (!settledMarkets.length) {
@@ -441,7 +464,7 @@ function SettledTab({
         <span className="status-pill">{settledMarkets.length}</span>
       </div>
       <SettledRail markets={settledMarkets} selectedId={selectedSettledId} onSelect={onSelectSettled} />
-      {selectedSettled && <SettledDetailPanel market={selectedSettled} />}
+      {selectedSettled && <SettledDetailPanel market={selectedSettled} colony={colony} colonyLabel={colonyLabel} />}
     </div>
   );
 }
@@ -569,8 +592,9 @@ function SettledRail({
   );
 }
 
-function FocusedMarketPanel({ market }: { market: MarketModel }) {
+function FocusedMarketPanel({ market, colony, colonyLabel }: { market: MarketModel; colony?: Colony; colonyLabel: string }) {
   const distribution = aggregateVotes(market.votes);
+  const activity = colonyMarketActivity(market, colony);
   const pending = pendingAntCount(market, distribution.total);
   return (
     <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.95)] p-3 shadow-[3px_3px_0_rgba(74,58,30,0.25)]">
@@ -584,8 +608,10 @@ function FocusedMarketPanel({ market }: { market: MarketModel }) {
         <span className="rounded-full border-2 border-[color:var(--color-green)] px-2 py-1 font-mono text-[10px] uppercase text-green">open</span>
       </div>
 
+      <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="open" />
+
       {distribution.rows.length ? (
-        <Distribution distribution={distribution} title="Vote split (all colonies)" />
+        <Distribution distribution={distribution} title="All colonies vote split" />
       ) : (
         <OptionPreview opportunity={market.opportunity} />
       )}
@@ -603,9 +629,10 @@ function FocusedMarketPanel({ market }: { market: MarketModel }) {
   );
 }
 
-function SettledDetailPanel({ market }: { market: MarketModel }) {
+function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketModel; colony?: Colony; colonyLabel: string }) {
   const summary = settlementSummary(market);
   const distribution = aggregateVotes(market.votes);
+  const activity = colonyMarketActivity(market, colony);
   return (
     <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] p-3 shadow-[4px_4px_0_rgba(74,58,30,0.28)]">
       <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gold/40" />
@@ -620,20 +647,111 @@ function SettledDetailPanel({ market }: { market: MarketModel }) {
         </span>
       </div>
 
+      <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
+
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <PulseMetric label="Food" value={summary.food > 0 ? `+${summary.food}` : 0} tone={summary.food > 0 ? "green" : undefined} />
         <PulseMetric label="Dead" value={summary.dead} />
         <PulseMetric label="Void" value={summary.voided} />
       </div>
 
-      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="Vote split (all colonies)" />}
+      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="All colonies vote split" />}
 
       <div className="mt-3 flex flex-col gap-1">
-        {[...market.settlements, ...market.voids].slice(0, 3).map((event) => (
+        {[...personalResultEvents(activity), ...market.settlements, ...market.voids]
+          .filter(uniqueEventByIndex)
+          .slice(0, 4)
+          .map((event) => (
           <p key={event.index} className="text-xs leading-snug text-ink-soft">{compactEventMessage(event)}</p>
         ))}
       </div>
     </article>
+  );
+}
+
+function ColonyDecisionPanel({
+  activity,
+  title,
+  mode,
+}: {
+  activity: ColonyMarketActivity;
+  title: string;
+  mode: "open" | "settled";
+}) {
+  if (!activity.colony) {
+    return (
+      <div className="well mt-3 p-3 text-sm text-ink-faint">
+        No colony selected.
+      </div>
+    );
+  }
+
+  const decision = colonyDecisionSummary(activity);
+  const commit = colonyCommitSummary(activity);
+  const result = colonyResultSummary(activity, mode);
+  return (
+    <section className="mt-3 rounded-md border-2 border-[color:rgba(78,126,42,0.42)] bg-[rgba(78,126,42,0.08)] p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="eyebrow !text-green">{title}</p>
+          <h3 className="truncate text-base font-bold text-ink">{activity.colony.name}</h3>
+        </div>
+        <span className={`status-pill ${result.tone}`}>{result.badge}</span>
+      </div>
+
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <DecisionCell label="Decision" value={decision.value} detail={decision.detail} tone={decision.tone} />
+        <DecisionCell label="Committed" value={commit.value} detail={commit.detail} tone={commit.tone} />
+        <DecisionCell label="Result" value={result.value} detail={result.detail} tone={result.cellTone} />
+      </div>
+
+      {activity.distribution.rows.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between gap-3 text-xs font-bold text-ink-faint">
+            <span>Colony vote split</span>
+            <span>{activity.distribution.total} ants</span>
+          </div>
+          <div className="flex h-2.5 overflow-hidden rounded-full bg-[rgba(74,58,30,0.18)]">
+            {activity.distribution.rows.map((row) => (
+              <span
+                key={row.key}
+                style={{
+                  width: `${Math.max(4, Math.round((row.count / Math.max(1, activity.distribution.total)) * 100))}%`,
+                  background: row.color,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DecisionCell({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: "green" | "gold" | "rust" | "muted";
+}) {
+  const color = tone === "green"
+    ? "text-green"
+    : tone === "gold"
+      ? "text-gold"
+      : tone === "rust"
+        ? "text-rust"
+        : "text-ink";
+  return (
+    <div className="well min-w-0 px-3 py-2">
+      <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
+      <p className={`truncate text-sm font-bold ${color}`}>{value}</p>
+      <p className="mt-1 truncate text-[11px] text-ink-faint">{detail}</p>
+    </div>
   );
 }
 
@@ -959,6 +1077,147 @@ function settlementSummary(market: MarketModel) {
       ? "border-ink-faint/50 text-ink-faint"
       : "border-gold/50 text-gold";
   return { food, dead, voided, wins, losses, label, tone };
+}
+
+function colonyMarketActivity(market: MarketModel, colony?: Colony): ColonyMarketActivity {
+  const colonyId = colony?.colonyId;
+  const voteEvent = latestColonyEvent(market.votes, colonyId);
+  const predictionEvent = latestColonyEvent(market.predictions, colonyId);
+  const settlementEvent = latestColonyEvent(market.settlements, colonyId);
+  const voidEvent = latestColonyEvent(market.voids, colonyId);
+  const distribution = voteEvent ? aggregateVotes([voteEvent]) : { rows: [], total: 0, voters: 0 };
+  const topVote = [...distribution.rows].sort((a, b) => b.count - a.count)[0];
+  return { colony, voteEvent, predictionEvent, settlementEvent, voidEvent, distribution, topVote };
+}
+
+function latestColonyEvent(events: GameEvent[], colonyId?: string): GameEvent | undefined {
+  if (!colonyId) return undefined;
+  return [...events]
+    .filter((event) => String(event.data?.colonyId ?? "") === String(colonyId))
+    .sort((a, b) => b.index - a.index)[0];
+}
+
+function colonyDecisionSummary(activity: ColonyMarketActivity) {
+  if (!activity.voteEvent) {
+    return { value: "Waiting", detail: "No answer yet", tone: "muted" as const };
+  }
+  if (!activity.topVote) {
+    return { value: "Observed", detail: "No ants voted", tone: "muted" as const };
+  }
+  const value = activity.topVote.key === "abstain" ? "Abstain" : activity.topVote.label;
+  return {
+    value,
+    detail: `${activity.topVote.count}/${Math.max(1, activity.distribution.total)} ants`,
+    tone: voteTone(activity.topVote.key),
+  };
+}
+
+function colonyCommitSummary(activity: ColonyMarketActivity) {
+  const prediction = eventData(activity.predictionEvent);
+  const ants = Number(prediction?.ants ?? 0);
+  const option = eventOptionLabel(activity.predictionEvent);
+  if (activity.predictionEvent && ants > 0) {
+    return {
+      value: `${ants} ants`,
+      detail: option ? `on ${option}` : "committed",
+      tone: "gold" as const,
+    };
+  }
+  if (activity.voteEvent) {
+    return {
+      value: "No commit",
+      detail: activity.topVote?.key === "abstain" ? "the colony abstained" : "support stayed below threshold",
+      tone: "muted" as const,
+    };
+  }
+  return { value: "Waiting", detail: "no colony vote yet", tone: "muted" as const };
+}
+
+function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "settled") {
+  const settlement = eventData(activity.settlementEvent);
+  const voided = eventData(activity.voidEvent);
+  if (activity.settlementEvent) {
+    if (settlement?.win) {
+      const food = Number(settlement.food ?? 0);
+      const larvae = Number(settlement.larvae ?? 0);
+      return {
+        badge: "won",
+        value: food > 0 ? `+${food} food` : "Won",
+        detail: larvae > 0 ? `+${larvae} larvae` : eventOptionLabel(activity.settlementEvent) || "resolved",
+        tone: "!border-green/50 !text-green",
+        cellTone: "green" as const,
+      };
+    }
+    const dead = Number(settlement?.dead ?? 0);
+    const wounded = Number(settlement?.wounded ?? 0);
+    return {
+      badge: "lost",
+      value: dead > 0 ? `${dead} dead` : "Lost",
+      detail: wounded > 0 ? `${wounded} wounded` : eventOptionLabel(activity.settlementEvent) || "resolved",
+      tone: "!border-rust/50 !text-rust",
+      cellTone: "rust" as const,
+    };
+  }
+  if (activity.voidEvent) {
+    const ants = Number(voided?.ants ?? 0);
+    return {
+      badge: "void",
+      value: "Voided",
+      detail: ants > 0 ? `${ants} ants released` : eventOptionLabel(activity.voidEvent) || "no result",
+      tone: "!border-ink-faint/50 !text-ink-faint",
+      cellTone: "muted" as const,
+    };
+  }
+  if (mode === "open") {
+    return {
+      badge: "open",
+      value: activity.predictionEvent ? "At risk" : "Pending",
+      detail: activity.predictionEvent ? "waiting for result" : "no position yet",
+      tone: "!border-gold/50 !text-gold",
+      cellTone: activity.predictionEvent ? "gold" as const : "muted" as const,
+    };
+  }
+  return {
+    badge: "none",
+    value: "No result",
+    detail: "colony did not play",
+    tone: "!border-ink-faint/50 !text-ink-faint",
+    cellTone: "muted" as const,
+  };
+}
+
+function personalResultEvents(activity: ColonyMarketActivity) {
+  return [activity.settlementEvent, activity.voidEvent].filter(Boolean) as GameEvent[];
+}
+
+function uniqueEventByIndex(event: GameEvent, index: number, list: GameEvent[]) {
+  return list.findIndex((candidate) => candidate.index === event.index) === index;
+}
+
+function eventData(event?: GameEvent) {
+  return event?.data as
+    | {
+        ants?: number;
+        dead?: number;
+        food?: number;
+        larvae?: number;
+        option?: { label?: string; optionId?: string };
+        win?: boolean;
+        wounded?: number;
+      }
+    | undefined;
+}
+
+function eventOptionLabel(event?: GameEvent) {
+  const option = eventData(event)?.option;
+  return option?.label || option?.optionId || "";
+}
+
+function voteTone(key: string): "green" | "gold" | "rust" | "muted" {
+  if (key === "yes" || key === "option_a") return "green";
+  if (key === "no" || key === "option_b") return "rust";
+  if (key === "option_c" || key === "option_d") return "gold";
+  return "muted";
 }
 
 function opportunityFromEvent(event: GameEvent): Opportunity | undefined {
