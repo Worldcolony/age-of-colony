@@ -162,8 +162,8 @@ export default function CockpitPage() {
   }, [myColonyId, ownColony?.colonyId, setMyColonyId]);
 
   return (
-    <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-3">
-      <header className="page-top">
+    <div className="relative left-1/2 flex min-h-[calc(100dvh-36px)] w-[min(1500px,calc(100vw-32px))] -translate-x-1/2 flex-col gap-4 pb-6">
+      <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
         <button className="icon-btn" aria-label="Back" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>←</button>
         <div className="text-center">
           <h1 className="text-xl font-bold">Live cockpit</h1>
@@ -175,77 +175,158 @@ export default function CockpitPage() {
         </span>
       </header>
 
-      <section className="glass match-card-media flex flex-col gap-3 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p1)}</span>
-          <div className="min-w-0 flex-1 text-center">
-            <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
-            <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
-            <p className="truncate font-mono text-xs text-cyan">{game?.match?.possessionLabel || "TXLine live"}</p>
-          </div>
-          <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p2)}</span>
-        </div>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
-          <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
-          <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
-        </div>
-      </section>
+      <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(520px,1.2fr)_minmax(360px,0.95fr)] 2xl:grid-cols-[360px_minmax(580px,1fr)_430px]">
+        <aside className="grid min-w-0 content-start gap-4">
+          <section className="glass match-card-media flex flex-col gap-3 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p1)}</span>
+              <div className="min-w-0 flex-1 text-center">
+                <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
+                <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
+                <p className="truncate font-mono text-xs text-cyan">{game?.match?.possessionLabel || "TXLine live"}</p>
+              </div>
+              <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p2)}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
+              <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
+              <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
+            </div>
+          </section>
 
-      <RankCard mine={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
-      <ColonyRoster colonies={sorted} activeColonyId={mine?.colonyId} onOpenRanks={() => router.push(`/results/${id}`)} />
+          <RankCard mine={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
+          <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
+        </aside>
 
-      {status === "created" ? (
-        <section className="glass flex flex-col gap-3 p-4 text-center">
-          <h2 className="text-lg font-bold">Room is not live yet</h2>
-          <p className="text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
-          <button className="btn btn-primary" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>
-            Back to room
-          </button>
-        </section>
-      ) : (
-        <section className="glass flex flex-col gap-3 p-3">
-          <CockpitTabs
-            active={activeTab}
-            counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-            onChange={setActiveTab}
-          />
+        <main className="grid min-w-0 content-start gap-4">
+          {status === "created" ? (
+            <section className="glass flex flex-col gap-3 p-5 text-center xl:min-h-[360px] xl:justify-center">
+              <p className="eyebrow">Simulation dashboard</p>
+              <h2 className="text-2xl font-bold">Room is not live yet</h2>
+              <p className="mx-auto max-w-md text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
+              <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>
+                Back to room
+              </button>
+            </section>
+          ) : (
+            <section className="glass flex min-h-[420px] flex-col gap-3 p-4 xl:min-h-[calc(100dvh-132px)]">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Simulation dashboard</p>
+                  <h2 className="text-2xl font-bold">Decision board</h2>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="status-pill">{openMarkets.length} live</span>
+                  <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+                </div>
+              </div>
 
-          {activeTab === "live" && (
-            <LiveTab
-              openMarkets={openMarkets}
-              openSummary={openSummary}
-              selectedMarket={selectedMarket}
-              selectedMarketId={effectiveSelectedMarketId}
-              settledMarkets={settledMarkets}
-              onSelectMarket={setSelectedMarketId}
-              onSelectSettled={(marketId) => {
-                setSelectedSettledId(marketId);
-                setActiveTab("settled");
-              }}
-            />
+              <CockpitTabs
+                active={activeTab}
+                counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+                onChange={setActiveTab}
+              />
+
+              {activeTab === "live" && (
+                <LiveTab
+                  openMarkets={openMarkets}
+                  openSummary={openSummary}
+                  selectedMarket={selectedMarket}
+                  selectedMarketId={effectiveSelectedMarketId}
+                  settledMarkets={settledMarkets}
+                  onSelectMarket={setSelectedMarketId}
+                  onSelectSettled={(marketId) => {
+                    setSelectedSettledId(marketId);
+                    setActiveTab("settled");
+                  }}
+                />
+              )}
+
+              {activeTab === "settled" && (
+                <SettledTab
+                  settledMarkets={settledMarkets}
+                  selectedSettled={selectedSettled}
+                  selectedSettledId={effectiveSelectedSettledId}
+                  onSelectSettled={setSelectedSettledId}
+                />
+              )}
+
+              {activeTab === "feed" && (
+                <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />
+              )}
+            </section>
           )}
+        </main>
 
-          {activeTab === "settled" && (
-            <SettledTab
-              settledMarkets={settledMarkets}
-              selectedSettled={selectedSettled}
-              selectedSettledId={effectiveSelectedSettledId}
-              onSelectSettled={setSelectedSettledId}
-            />
-          )}
-
-          {activeTab === "feed" && (
-            <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />
-          )}
-        </section>
-      )}
+        <aside className="grid min-w-0 content-start gap-4">
+          <ColonyRoster colonies={sorted} activeColonyId={mine?.colonyId} onOpenRanks={() => router.push(`/results/${id}`)} />
+          <EventStreamCard feedRows={usefulEvents.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
+        </aside>
+      </div>
 
       <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
         <span>{streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}</span>
         <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>Ranks</button>
       </footer>
     </div>
+  );
+}
+
+function RunStatusCard({
+  gameId,
+  status,
+  streamState,
+  lastSyncAt,
+}: {
+  gameId: string;
+  status: string;
+  streamState: "connecting" | "live" | "reconnecting";
+  lastSyncAt: number | null;
+}) {
+  const runLabel = status ? status.replace(/_/g, " ") : "live";
+  const streamLabel = streamState === "reconnecting" ? "reconnect" : streamState;
+  const shortId = gameId.length > 8 ? `${gameId.slice(0, 4)}...${gameId.slice(-4)}` : gameId;
+  return (
+    <section className="glass flex flex-col gap-3 p-3">
+      <div>
+        <p className="eyebrow">Run state</p>
+        <h2 className="text-base font-bold">Replay control</h2>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <MiniStat label="Mode" value={runLabel} tone={RUNNING.has(status) ? "gold" : undefined} />
+        <MiniStat label="Stream" value={streamLabel} tone={streamState === "live" ? "green" : undefined} />
+        <MiniStat label="Game" value={shortId} />
+        <MiniStat label="Sync" value={lastSyncAt ? formatClock(lastSyncAt) : "..."} />
+      </div>
+    </section>
+  );
+}
+
+function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: GameEvent[]; onOpenFeed: () => void }) {
+  return (
+    <section className="glass flex flex-col gap-3 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="eyebrow">Signals</p>
+          <h2 className="text-base font-bold">Event stream</h2>
+        </div>
+        <button className="quiet-link text-sm" onClick={onOpenFeed}>Open feed</button>
+      </div>
+
+      <div className="grid max-h-[300px] gap-0 overflow-y-auto rounded-xl border border-[color:var(--brd-soft)] bg-black/14 px-3">
+        {feedRows.length === 0 ? (
+          <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
+        ) : (
+          feedRows.map((event) => (
+            <div key={event.index} className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
+              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(244,234,216,0.2)" }} />
+              <span className="min-w-0 text-sm leading-snug text-ink-soft">{compactEventMessage(event)}</span>
+              <span className="font-mono text-[10px] text-ink-faint">#{event.index}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -650,7 +731,7 @@ function ColonyRoster({
   }
 
   return (
-    <section className="glass flex flex-col gap-3 p-3">
+    <section className="glass flex flex-col gap-3 p-3 xl:min-h-[360px]">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow">Colonies</p>
@@ -659,7 +740,7 @@ function ColonyRoster({
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
       </div>
 
-      <div className="grid max-h-[260px] gap-2 overflow-y-auto pr-1">
+      <div className="grid max-h-[300px] gap-2 overflow-y-auto pr-1 xl:max-h-[calc(100dvh-390px)]">
         {colonies.map((colony, index) => {
           const active = colony.colonyId === activeColonyId;
           return (
