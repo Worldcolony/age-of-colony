@@ -262,7 +262,7 @@ export default function AdminPage() {
       setRoomSetupKey(setupKey);
       setGame(room);
       setMatchFixture(selectedFixture);
-      await loadGames();
+      setGames((current) => [room, ...current.filter((game) => game.gameId !== room.gameId)].slice(0, 50));
       setMsg(`Room ready for ${matchTitle(room)} with ${room.colonies.length} colonies.`);
     } catch (e) {
       setMsg((e as Error).message);
@@ -376,19 +376,15 @@ export default function AdminPage() {
   async function createRoomWithColonies(fixture: ReplayFixture, colonyDrafts: AdminColonyDraft[]): Promise<GameState> {
     const id = fixtureId(fixture);
     if (!id) throw new Error("Fixture has no id.");
-    const created = await api.createGame({
+    return api.adminCreateRoom({
       fixtureId: id,
       participant1: fixture.participant1 ?? null,
       participant2: fixture.participant2 ?? null,
       competition: fixture.competition ?? null,
       startTime: fixture.startTime ?? null,
       startTimeIso: fixture.startTimeIso ?? null,
-    });
-    let room = created;
-    for (const colony of colonyDrafts) {
-      room = await api.addColony(created.gameId, colony, requestToken || undefined);
-    }
-    return room;
+      colonies: colonyDrafts,
+    }, requestToken || undefined);
   }
 
   if (protectedAdmin && !canUseAdmin) {

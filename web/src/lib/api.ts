@@ -177,6 +177,16 @@ export const api = {
   demoRun: (body?: Record<string, unknown>, adminToken?: string) => req<GameState>("/api/demo/run", "POST", body ?? {}, adminHeaders(adminToken)),
   runPrevious: (body?: Record<string, unknown>, adminToken?: string) =>
     req<GameState>("/api/games/run-previous", "POST", body ?? {}, adminHeaders(adminToken)),
+  adminCreateRoom: (body: {
+    fixtureId: number | string;
+    participant1?: string | null;
+    participant2?: string | null;
+    competition?: string | null;
+    startTime?: number | null;
+    startTimeIso?: string | null;
+    seed?: number;
+    colonies: CreateColonyBody[];
+  }, adminToken?: string) => req<GameState>("/api/admin/rooms", "POST", body, adminHeaders(adminToken)),
   adminGames: (limit = 50, adminToken?: string) =>
     req<AdminGameList>(`/api/admin/games${qs({ limit })}`, "GET", undefined, adminHeaders(adminToken)),
 };

@@ -168,6 +168,17 @@ class RunPreviousTxRequest(BaseModel):
     colonies: list[CreateColonyRequest] | None = None
 
 
+class AdminRoomRequest(BaseModel):
+    fixtureId: int | str
+    participant1: str | None = None
+    participant2: str | None = None
+    competition: str | None = None
+    startTime: int | float | str | None = None
+    startTimeIso: str | None = None
+    seed: int | None = None
+    colonies: list[CreateColonyRequest] = Field(default_factory=list)
+
+
 @app.exception_handler(TxLineConfigError)
 async def txline_config_error_handler(_: Request, exc: TxLineConfigError) -> JSONResponse:
     return JSONResponse(
@@ -577,6 +588,38 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
         )
     room.mode = "replay"
     return await _start_replay_room(room, payload)
+
+
+@app.post("/api/admin/rooms")
+async def create_admin_room(payload: AdminRoomRequest, request: Request) -> dict[str, Any]:
+    require_admin_tool(request)
+    if not payload.colonies:
+        raise HTTPException(status_code=422, detail="Add at least one colony before creating an admin room.")
+
+    room = game_manager.create_room(
+        fixture_id=payload.fixtureId,
+        participant1=payload.participant1,
+        participant2=payload.participant2,
+        competition=payload.competition,
+        start_time=payload.startTime,
+        start_time_iso=payload.startTimeIso,
+        seed=payload.seed,
+    )
+    harness = game_manager.harness(room.game_id)
+    try:
+        for colony in payload.colonies:
+            harness.add_colony(
+                colony.name,
+                colony.size,
+                colony.style,
+                colony.favoriteContext,
+                colony.infoNeed,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
 
 
 @app.get("/api/fixtures/recent")

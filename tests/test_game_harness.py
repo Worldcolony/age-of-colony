@@ -1781,6 +1781,34 @@ class DemoRunApiTest(unittest.TestCase):
                 )
             self.assertEqual(allowed_demo.status_code, 200)
 
+            admin_room_payload = {
+                "fixtureId": 616161,
+                "participant1": "France",
+                "participant2": "Japan",
+                "competition": "Admin replay",
+                "colonies": [
+                    {
+                        "name": "Admin Scout",
+                        "size": 20,
+                        "style": "balanced",
+                        "favoriteContext": "momentum",
+                        "infoNeed": "medium",
+                    }
+                ],
+            }
+            blocked_admin_room = client.post("/api/admin/rooms", json=admin_room_payload)
+            self.assertEqual(blocked_admin_room.status_code, 403)
+
+            allowed_admin_room = client.post(
+                "/api/admin/rooms",
+                headers={ADMIN_TOKEN_HEADER: "secret"},
+                json=admin_room_payload,
+            )
+            self.assertEqual(allowed_admin_room.status_code, 200)
+            admin_room = allowed_admin_room.json()
+            self.assertEqual(admin_room["fixtureId"], 616161)
+            self.assertEqual(len(admin_room["colonies"]), 1)
+
     def test_admin_replay_fixtures_only_returns_matches_with_score_data(self):
         class FakeTxLineClient:
             async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
