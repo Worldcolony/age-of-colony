@@ -657,6 +657,85 @@ class GameHarnessTest(unittest.TestCase):
         self.assertGreater(pending_before, 0)
         self.assertEqual(pending_after, pending_before)
 
+    def test_goal_next_ten_market_waits_for_match_clock_not_event_count(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony(
+            name="Clock Nest",
+            size=50,
+            style="balanced",
+            favorite_context="momentum",
+            info_need="low",
+        )
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+        goal_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.opportunity_id.endswith("_goal_next_10")
+        ]
+        self.assertTrue(goal_predictions)
+
+        for offset in range(60):
+            clock_seconds = 605 + offset * 5
+            harness.process_event(
+                {
+                    "fixtureId": 42,
+                    "seq": 2 + offset,
+                    "action": "clock",
+                    "highlights": [],
+                    "minute": clock_seconds // 60,
+                    "clockSeconds": clock_seconds,
+                    "description": "Clock tick",
+                }
+            )
+
+        goal_opportunity_ids = {prediction.opportunity_id for prediction in goal_predictions}
+        self.assertTrue(all(not prediction.resolved for prediction in goal_predictions))
+        self.assertFalse(
+            [
+                event
+                for event in room.log
+                if event.kind == "settlement" and event.data.get("opportunityId") in goal_opportunity_ids
+            ]
+        )
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 62,
+                "action": "clock",
+                "highlights": [],
+                "minute": 20,
+                "clockSeconds": 1200,
+                "description": "Clock tick",
+            }
+        )
+
+        self.assertTrue(all(prediction.resolved for prediction in goal_predictions))
+        self.assertTrue(
+            [
+                event
+                for event in room.log
+                if event.kind == "settlement" and event.data.get("opportunityId") in goal_opportunity_ids
+            ]
+        )
+
     def test_deepseek_agent_is_required_for_game_events(self):
         manager = GameManager(decision_agent=None)
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)

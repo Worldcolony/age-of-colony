@@ -983,7 +983,8 @@ class GameHarness:
             if prediction.resolved:
                 continue
             expired_by_clock = clock is not None and prediction.deadline_clock is not None and clock >= prediction.deadline_clock
-            expired_by_events = self.room.event_index >= prediction.deadline_event_index
+            # Event counts are only a fallback for feeds that do not provide a match clock.
+            expired_by_events = prediction.deadline_clock is None and self.room.event_index >= prediction.deadline_event_index
             if not (expired_by_clock or expired_by_events):
                 continue
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
