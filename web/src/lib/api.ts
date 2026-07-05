@@ -83,6 +83,23 @@ export interface AdminGameList {
   hint?: string;
 }
 
+export interface ReplayFixture extends Fixture {
+  playable?: boolean;
+  source?: string | null;
+  eventCount?: number;
+  sourceCounts?: Record<string, number>;
+}
+
+export interface ReplayFixtureList {
+  count?: number;
+  days?: number;
+  limit?: number;
+  scanLimit?: number;
+  scanned?: number;
+  inspected?: number;
+  fixtures?: ReplayFixture[];
+}
+
 export const api = {
   health: () => req<Record<string, unknown>>("/health"),
 
@@ -90,6 +107,10 @@ export const api = {
     req<FixtureList>(`/api/fixtures/upcoming${qs(p)}`),
   recentFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }, adminToken?: string) =>
     req<FixtureList>(`/api/fixtures/recent${qs(p)}`, "GET", undefined, adminHeaders(adminToken)),
+  replayFixtures: (
+    p?: { days?: number; limit?: number; scan_limit?: number; competition_id?: number; search?: string },
+    adminToken?: string,
+  ) => req<ReplayFixtureList>(`/api/admin/replay-fixtures${qs(p)}`, "GET", undefined, adminHeaders(adminToken)),
   liveTarget: (p?: { days?: number }) => req<FixtureList>(`/api/fixtures/live-target${qs(p)}`),
 
   createGame: (body: {

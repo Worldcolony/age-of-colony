@@ -593,6 +593,64 @@ async def recent_fixtures(
     return {"mode": "recent", "days": days, "limit": limit, "count": len(fixtures), "fixtures": fixtures}
 
 
+@app.get("/api/admin/replay-fixtures")
+async def admin_replay_fixtures(
+    request: Request,
+    days: int = Query(default=90, ge=1, le=90),
+    limit: int = Query(default=24, ge=1, le=80),
+    scan_limit: int = Query(default=120, ge=1, le=200),
+    competition_id: int | None = Query(default=None),
+    search: str | None = Query(default=None),
+) -> dict[str, Any]:
+    require_admin_tool(request)
+    client = TxLineClient()
+    fixtures = await _recent_past_fixtures(
+        client,
+        days=days,
+        limit=scan_limit,
+        competition_id=competition_id,
+        search=search,
+    )
+    playable: list[dict[str, Any]] = []
+    inspected = 0
+
+    for fixture in fixtures:
+        if len(playable) >= limit:
+            break
+        fixture_id = fixture.get("fixtureId")
+        if fixture_id is None:
+            continue
+        try:
+            source_records = await _fetch_score_sources(client, int(fixture_id))
+        except (TypeError, ValueError):
+            continue
+        inspected += 1
+        chosen_source, records = _choose_best_source(source_records)
+        if not records:
+            continue
+        enriched = dict(fixture)
+        enriched.update(
+            {
+                "playable": True,
+                "source": chosen_source,
+                "eventCount": len(records),
+                "sourceCounts": {name: len(items) for name, items in source_records.items()},
+            }
+        )
+        playable.append(enriched)
+
+    return {
+        "mode": "replay-fixtures",
+        "days": days,
+        "limit": limit,
+        "scanLimit": scan_limit,
+        "scanned": len(fixtures),
+        "inspected": inspected,
+        "count": len(playable),
+        "fixtures": playable,
+    }
+
+
 @app.post("/api/games/run-previous")
 async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) -> dict[str, Any]:
     require_admin_tool(request)

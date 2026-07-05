@@ -1781,6 +1781,51 @@ class DemoRunApiTest(unittest.TestCase):
                 )
             self.assertEqual(allowed_demo.status_code, 200)
 
+    def test_admin_replay_fixtures_only_returns_matches_with_score_data(self):
+        class FakeTxLineClient:
+            async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
+                start = int((datetime.now(timezone.utc) - timedelta(hours=3)).timestamp())
+                return [
+                    {
+                        "FixtureId": 701,
+                        "StartTime": start,
+                        "Competition": "World Cup Demo",
+                        "CompetitionId": competition_id or 1,
+                        "Participant1": "France",
+                        "Participant2": "Brazil",
+                    },
+                    {
+                        "FixtureId": 702,
+                        "StartTime": start - 60,
+                        "Competition": "World Cup Demo",
+                        "CompetitionId": competition_id or 1,
+                        "Participant1": "Japan",
+                        "Participant2": "Ghana",
+                    },
+                ]
+
+            async def score_historical(self, fixture_id):
+                if fixture_id == 702:
+                    return [{"FixtureId": fixture_id, "Seq": 1, "Action": "goal"}]
+                return []
+
+            async def score_updates(self, fixture_id):
+                return []
+
+            async def score_snapshot(self, fixture_id):
+                return []
+
+        client = TestClient(app)
+        with patch("app.main.TxLineClient", FakeTxLineClient):
+            response = client.get("/api/admin/replay-fixtures?days=1&limit=5&scan_limit=5")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["fixtures"][0]["fixtureId"], 702)
+        self.assertEqual(data["fixtures"][0]["eventCount"], 1)
+        self.assertEqual(data["fixtures"][0]["source"], "historical")
+
     def test_previous_tx_run_uses_latest_fixture_with_score_data(self):
         class FakeTxLineClient:
             async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
