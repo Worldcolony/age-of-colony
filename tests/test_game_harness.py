@@ -260,6 +260,68 @@ class GameHarnessTest(unittest.TestCase):
             {"Norway penalty missed or saved"},
         )
 
+    def test_cancelled_penalty_voids_market_without_reward_or_penalty(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Penalty Void Watch", 20, "balanced", "penalties", "medium")
+
+        harness.process_event(
+            penalty_event(
+                seq=1,
+                minute=40,
+                clockSeconds=2400,
+                participant=2,
+                participantLabel="Norway",
+                possession=2,
+                possessionLabel="Norway",
+                description="Penalty - Norway - confirmed",
+            )
+        )
+        open_penalty_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if not prediction.resolved
+            and room.opportunities[prediction.opportunity_id].context == "penalties"
+        ]
+        self.assertTrue(open_penalty_predictions)
+
+        harness.process_event(
+            penalty_event(
+                seq=2,
+                action="penalty_cancelled",
+                highlights=["penalty"],
+                minute=41,
+                clockSeconds=2460,
+                participant=2,
+                participantLabel="Norway",
+                possession=2,
+                possessionLabel="Norway",
+                description="Penalty cancelled - Norway",
+            )
+        )
+
+        self.assertTrue(all(prediction.resolved for prediction in open_penalty_predictions))
+        self.assertEqual(colony.memory.wins, 0)
+        self.assertEqual(colony.memory.losses, 0)
+        self.assertFalse(
+            [
+                event
+                for event in room.log
+                if event.kind == "settlement"
+                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in open_penalty_predictions}
+            ]
+        )
+        self.assertTrue(
+            [
+                event
+                for event in room.log
+                if event.kind == "void"
+                and event.data.get("reason") == "penalty_cancelled"
+                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in open_penalty_predictions}
+            ]
+        )
+
     def test_pressure_event_creates_safe_precision_and_chaos_markets(self):
         room, _ = self.make_room()
         opportunities = build_opportunities(

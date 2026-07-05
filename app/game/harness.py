@@ -997,6 +997,9 @@ class GameHarness:
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
             if not opportunity:
                 continue
+            if penalty_cancelled_for_opportunity(opportunity, event):
+                self._void_prediction(prediction, opportunity, reason="penalty_cancelled")
+                continue
             result = evaluate_prediction_event(prediction, opportunity, event)
             if result is not None:
                 self._apply_settlement(
@@ -1966,7 +1969,6 @@ def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | No
             target = "no_goal"
             label = f"{team_label} penalty missed or saved" if team_label else "Penalty missed or saved"
         elif "cancel" in targets:
-            target = "no_goal"
             label = "Penalty cancelled"
         option = outcome_option(opportunity, target)
 
@@ -2079,8 +2081,6 @@ def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, 
             return prediction.option.target == "goal"
         if targets.intersection({"miss", "saved"}) and same_penalty_team:
             return prediction.option.target == "no_goal"
-        if "cancel" in targets:
-            return prediction.option.target == "no_goal"
         return None
 
     if opportunity.context == "goal_next_10":
@@ -2105,6 +2105,14 @@ def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, 
     if targets.intersection({"goal", "miss", "saved", "cancel", "card", "yellow_card", "confirmed"}):
         return False
     return None
+
+
+def penalty_cancelled_for_opportunity(opportunity: Opportunity, event: dict[str, Any]) -> bool:
+    if opportunity.context != "penalties" or "cancel" not in event_targets(event):
+        return False
+    if event_team_scope(event, opportunity) is None:
+        return True
+    return event_matches_team_scope("same_team", event, opportunity)
 
 
 def event_targets(event: dict[str, Any]) -> set[str]:

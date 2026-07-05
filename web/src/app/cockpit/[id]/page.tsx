@@ -1241,6 +1241,7 @@ function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null 
 
 function voidOutcomeLabel(market: MarketModel, reason?: string) {
   const label = cleanMarketLabel(market.label).toLowerCase();
+  if (reason === "penalty_cancelled") return "penalty cancelled";
   if (reason === "expired_no_foul" || label.includes("who commits the next foul")) return "no foul before full time";
   if (reason === "full_time") return "voided at full time";
   return "market voided";
