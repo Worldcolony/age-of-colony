@@ -638,6 +638,54 @@ class GameHarnessTest(unittest.TestCase):
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
 
+    def test_next_foul_market_stays_unique_while_window_open(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Foul Guard", 20, "balanced", "chaos", "medium")
+
+        def pressure_event(seq: int) -> dict:
+            return {
+                "fixtureId": 42,
+                "seq": seq,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 75 if seq == 1 else 77,
+                "clockSeconds": 4500 if seq == 1 else 4620,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+
+        harness.process_event(pressure_event(1))
+        first_foul_opportunities = [
+            opportunity
+            for opportunity in room.opportunities.values()
+            if opportunity.context == "next_foul"
+        ]
+        self.assertEqual(len(first_foul_opportunities), 1)
+        first_foul_id = first_foul_opportunities[0].opportunity_id
+
+        for seq in range(2, 24):
+            harness.process_event(pressure_event(seq))
+
+        foul_opportunities = [
+            opportunity
+            for opportunity in room.opportunities.values()
+            if opportunity.context == "next_foul"
+        ]
+        open_foul_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if not prediction.resolved
+            and room.opportunities[prediction.opportunity_id].context == "next_foul"
+        ]
+
+        self.assertEqual([opportunity.opportunity_id for opportunity in foul_opportunities], [first_foul_id])
+        self.assertTrue(open_foul_predictions)
+
     def test_successful_prediction_adds_food_and_larvae(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)

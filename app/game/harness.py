@@ -57,6 +57,7 @@ LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
 NEXT_FOUL_WINDOW_SECONDS = 10 * 60
 NEXT_GOAL_TEAM_SECONDS = 10 * 60
+ROLLING_WINDOW_CONTEXTS = {"goal_next_10", "next_goal_team", "next_foul"}
 
 
 def normalize_choice(value: str | None) -> str:
@@ -959,6 +960,8 @@ class GameHarness:
             "next_goal_team": 24,
             "next_foul": 18,
         }
+        if opportunity.context in ROLLING_WINDOW_CONTEXTS and self._has_open_context_prediction(opportunity.context):
+            return False
         team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
         key = (
             f"{opportunity.context}:{team_key}"
@@ -970,6 +973,15 @@ class GameHarness:
             return False
         self.room.last_opportunity_event_index_by_key[key] = self.room.event_index
         return True
+
+    def _has_open_context_prediction(self, context: str) -> bool:
+        for prediction in self.room.predictions.values():
+            if prediction.resolved:
+                continue
+            opportunity = self.room.opportunities.get(prediction.opportunity_id)
+            if opportunity and opportunity.context == context:
+                return True
+        return False
 
     def _settle_predictions(self, event: dict[str, Any]) -> None:
         for prediction in list(self.room.predictions.values()):
