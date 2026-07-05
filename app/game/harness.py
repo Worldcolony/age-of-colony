@@ -56,7 +56,7 @@ FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
 ROLLING_WINDOW_CONTEXTS = {"goal_next_10", "next_goal_team", "next_foul"}
-NO_DEADLINE_CONTEXTS = {"next_goal_team", "next_foul"}
+NO_DEADLINE_CONTEXTS = {"penalties", "next_goal_team", "next_foul"}
 
 
 def normalize_choice(value: str | None) -> str:
@@ -959,28 +959,29 @@ class GameHarness:
             "next_goal_team": 24,
             "next_foul": 18,
         }
-        if opportunity.context in ROLLING_WINDOW_CONTEXTS and self._has_open_context_prediction(opportunity.context):
+        key = self._opportunity_slot_key(opportunity)
+        if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_slot_prediction(key):
             return False
-        team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
-        key = (
-            f"{opportunity.context}:{team_key}"
-            if opportunity.context in {"penalties"}
-            else opportunity.context
-        )
         last_event_index = self.room.last_opportunity_event_index_by_key.get(key, -10_000)
         if self.room.event_index - last_event_index < cooldown_by_context[opportunity.context]:
             return False
         self.room.last_opportunity_event_index_by_key[key] = self.room.event_index
         return True
 
-    def _has_open_context_prediction(self, context: str) -> bool:
+    def _has_open_slot_prediction(self, key: str) -> bool:
         for prediction in self.room.predictions.values():
             if prediction.resolved:
                 continue
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
-            if opportunity and opportunity.context == context:
+            if opportunity and self._opportunity_slot_key(opportunity) == key:
                 return True
         return False
+
+    def _opportunity_slot_key(self, opportunity: Opportunity) -> str:
+        team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
+        if opportunity.context in {"penalties"}:
+            return f"{opportunity.context}:{team_key}"
+        return opportunity.context
 
     def _settle_predictions(self, event: dict[str, Any]) -> None:
         for prediction in list(self.room.predictions.values()):
@@ -1460,7 +1461,7 @@ def _event_token(value: Any) -> str:
 
 def opportunity_deadline_seconds(context: str) -> int | None:
     return {
-        "penalties": 120,
+        "penalties": None,
         "goal_next_10": GOAL_NEXT_10_SECONDS,
         "next_goal_team": None,
         "next_foul": None,
@@ -1469,7 +1470,7 @@ def opportunity_deadline_seconds(context: str) -> int | None:
 
 def opportunity_deadline_events(context: str) -> int | None:
     return {
-        "penalties": 8,
+        "penalties": None,
         "goal_next_10": 56,
         "next_goal_team": None,
         "next_foul": None,

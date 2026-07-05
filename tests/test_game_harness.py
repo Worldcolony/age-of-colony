@@ -105,6 +105,8 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertIsNotNone(opportunity)
         self.assertEqual(opportunity.context, "penalties")
+        self.assertIsNone(opportunity.deadline_clock)
+        self.assertIsNone(opportunity.deadline_event_index)
         self.assertEqual(opportunity.info_cost, 8)
         labels = {option.label: option.multiplier for option in opportunity.options}
         self.assertEqual(labels["yes, penalty scored"], 1.35)
@@ -156,6 +158,107 @@ class GameHarnessTest(unittest.TestCase):
         )
 
         self.assertIsNone(opportunity)
+
+    def test_penalty_market_stays_unique_until_penalty_result(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Penalty Watch", 20, "balanced", "penalties", "medium")
+
+        harness.process_event(
+            penalty_event(
+                seq=1,
+                minute=98,
+                clockSeconds=5880,
+                participant=2,
+                participantLabel="Norway",
+                possession=2,
+                possessionLabel="Norway",
+                description="Penalty - Norway - confirmed",
+            )
+        )
+        first_penalty_opportunities = [
+            opportunity
+            for opportunity in room.opportunities.values()
+            if opportunity.context == "penalties"
+        ]
+        self.assertEqual(len(first_penalty_opportunities), 1)
+        first_penalty_id = first_penalty_opportunities[0].opportunity_id
+
+        for seq, clock_seconds in [(2, 5940), (3, 5990)]:
+            harness.process_event(
+                {
+                    "fixtureId": 42,
+                    "seq": seq,
+                    "action": "clock",
+                    "highlights": [],
+                    "minute": clock_seconds // 60,
+                    "clockSeconds": clock_seconds,
+                    "description": "Clock tick",
+                }
+            )
+
+        harness.process_event(
+            penalty_event(
+                seq=4,
+                action="penalty_confirmed",
+                minute=100,
+                clockSeconds=6000,
+                participant=2,
+                participantLabel="Norway",
+                possession=2,
+                possessionLabel="Norway",
+                description="Penalty confirmed - Norway",
+            )
+        )
+        penalty_opportunities = [
+            opportunity
+            for opportunity in room.opportunities.values()
+            if opportunity.context == "penalties"
+        ]
+        penalty_opportunity_logs = [
+            event
+            for event in room.log
+            if event.kind == "opportunity"
+            and event.data.get("opportunity", {}).get("context") == "penalties"
+        ]
+        open_penalty_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if not prediction.resolved
+            and room.opportunities[prediction.opportunity_id].context == "penalties"
+        ]
+
+        self.assertEqual([opportunity.opportunity_id for opportunity in penalty_opportunities], [first_penalty_id])
+        self.assertEqual(len(penalty_opportunity_logs), 1)
+        self.assertTrue(open_penalty_predictions)
+
+        harness.process_event(
+            penalty_event(
+                seq=5,
+                action="penalty_saved",
+                minute=101,
+                clockSeconds=6060,
+                participant=2,
+                participantLabel="Norway",
+                possession=2,
+                possessionLabel="Norway",
+                description="Penalty saved - Norway",
+            )
+        )
+        penalty_settlements = [
+            event
+            for event in room.log
+            if event.kind == "settlement"
+            and event.data.get("opportunityId") == first_penalty_id
+        ]
+
+        self.assertTrue(penalty_settlements)
+        self.assertTrue(all(prediction.resolved for prediction in open_penalty_predictions))
+        self.assertEqual(
+            {(event.data.get("resolvedOutcome") or {}).get("label") for event in penalty_settlements},
+            {"Norway penalty missed or saved"},
+        )
 
     def test_pressure_event_creates_safe_precision_and_chaos_markets(self):
         room, _ = self.make_room()
