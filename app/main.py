@@ -581,6 +581,10 @@ async def _ensure_waiting_room_progress(room: GameRoom) -> None:
 
 async def _ensure_room_progress(room: GameRoom) -> None:
     await _ensure_waiting_room_progress(room)
+    if room.status == "error" and room.mode == "live":
+        room.status = "running_live"
+        room.add_log("live_sync", "Live stream recovered and polling resumed.", {"mode": "live", "recovered": True})
+        await _sync_room_to_supabase_async(room)
     if room.status == "running_live":
         _ensure_live_task(room)
 
@@ -878,6 +882,13 @@ async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=
     return await asyncio.to_thread(supabase_store.list_games, limit=limit)
 
 
+def _stored_game_can_resume_live(stored_game: dict[str, Any]) -> bool:
+    status = stored_game.get("status")
+    if status in {"waiting_kickoff", "running_live"}:
+        return True
+    return status == "error" and stored_game.get("mode") == "live"
+
+
 @app.get("/api/games/{game_id}")
 async def game_state(game_id: str) -> dict[str, Any]:
     room = game_manager.get_room(game_id)
@@ -887,7 +898,7 @@ async def game_state(game_id: str) -> dict[str, Any]:
     replay = await _stored_replay_or_none(game_id)
     if replay:
         stored_game = replay["game"]
-        if stored_game.get("status") in {"waiting_kickoff", "running_live"}:
+        if _stored_game_can_resume_live(stored_game):
             room = _restore_room_from_stored_row(
                 {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
                 events=replay.get("events") or [],
@@ -921,7 +932,7 @@ async def game_events(game_id: str) -> StreamingResponse:
         if not replay:
             raise HTTPException(status_code=404, detail="Game not found.")
         stored_game = replay["game"]
-        if stored_game.get("status") not in {"waiting_kickoff", "running_live"}:
+        if not _stored_game_can_resume_live(stored_game):
             raise HTTPException(status_code=404, detail="Live event stream not available for stored replay.")
         room = _restore_room_from_stored_row(
             {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
@@ -1715,33 +1726,41 @@ async def _run_live_game(game_id: str) -> None:
     harness = game_manager.harness(game_id)
     seen_event_keys: set[tuple[Any, ...]] = set()
     first_batch = True
+    poll_failures = 0
     try:
         while True:
             room = game_manager.get_room(game_id)
             if not room or room.status != "running_live":
                 break
-            timeline = await _live_score_timeline(client, room)
+            try:
+                timeline = await _live_score_timeline(client, room)
+                poll_failures = 0
+            except Exception as exc:
+                poll_failures += 1
+                if poll_failures == 1 or poll_failures % 5 == 0:
+                    room.add_log("game_error", f"Live polling retrying: {exc}", {**_error_log_data(exc), "retryCount": poll_failures})
+                    await _sync_room_to_supabase_async(room)
+                await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
+                continue
             timeline_events = timeline["events"]
-            if first_batch and room.event_index:
-                for event in timeline_events[: room.event_index]:
-                    seen_event_keys.add(_live_event_key(event))
+            if first_batch:
+                catchup_count = _prime_live_catchup(room, seen_event_keys, timeline_events, timeline)
+                if catchup_count:
+                    await _sync_room_to_supabase_async(room)
+                if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
+                    await asyncio.to_thread(_finish_live_game, harness)
+                    await _sync_room_to_supabase_async(room)
+                    break
+                first_batch = False
+                await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
+                continue
             new_events = [
                 event
                 for event in timeline_events
                 if str(event.get("fixtureId")) == str(room.fixture_id) and _remember_live_event(seen_event_keys, event)
             ]
             if new_events:
-                if first_batch and room.event_index == 0:
-                    room.add_log(
-                        "live_sync",
-                        f"Live catch-up loaded {len(new_events)} TXLine updates.",
-                        {
-                            "source": timeline.get("resolvedSource"),
-                            "rawCount": timeline.get("rawCount"),
-                            "fixtureId": room.fixture_id,
-                        },
-                    )
-                await asyncio.to_thread(_process_live_events, harness, new_events)
+                await asyncio.to_thread(_process_live_events, harness, new_events, resilient=True)
                 _sync_room_agent_usage(game_id)
                 await _sync_room_to_supabase_async(room)
             if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
@@ -1796,6 +1815,35 @@ def _remember_live_event(seen_event_keys: set[tuple[Any, ...]], event: dict[str,
     return True
 
 
+def _prime_live_catchup(
+    room: GameRoom,
+    seen_event_keys: set[tuple[Any, ...]],
+    timeline_events: list[dict[str, Any]],
+    timeline: dict[str, Any] | None = None,
+) -> int:
+    catchup_events = [
+        event
+        for event in timeline_events
+        if str(event.get("fixtureId")) == str(room.fixture_id)
+    ]
+    for event in catchup_events:
+        seen_event_keys.add(_live_event_key(event))
+        if room.match_state:
+            room.match_state.update(event)
+    if catchup_events:
+        room.add_log(
+            "live_sync",
+            f"Live catch-up synced {len(catchup_events)} TXLine updates. Future updates will open markets.",
+            {
+                "source": (timeline or {}).get("resolvedSource"),
+                "rawCount": (timeline or {}).get("rawCount"),
+                "fixtureId": room.fixture_id,
+                "processedAsMarkets": False,
+            },
+        )
+    return len(catchup_events)
+
+
 def _live_event_key(event: dict[str, Any]) -> tuple[Any, ...]:
     fixture_id = event.get("fixtureId")
     seq = event.get("seq")
@@ -1811,9 +1859,31 @@ def _live_event_key(event: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _process_live_events(harness: Any, events: list[dict[str, Any]]) -> None:
+def _process_live_events(harness: Any, events: list[dict[str, Any]], *, resilient: bool = False) -> int:
+    processed = 0
     for event in events:
-        harness.process_event(event)
+        if not resilient:
+            harness.process_event(event)
+            processed += 1
+            continue
+        try:
+            harness.process_event(event)
+            processed += 1
+        except Exception as exc:
+            harness.room.add_log("game_error", f"Live update skipped: {exc}", _live_event_error_data(exc, event))
+    return processed
+
+
+def _live_event_error_data(exc: Exception, event: dict[str, Any]) -> dict[str, Any]:
+    data = _error_log_data(exc)
+    data["event"] = {
+        "fixtureId": event.get("fixtureId"),
+        "seq": event.get("seq"),
+        "action": event.get("action"),
+        "minute": event.get("minute"),
+        "clockSeconds": event.get("clockSeconds"),
+    }
+    return data
 
 
 def _finish_live_game(harness: Any) -> None:

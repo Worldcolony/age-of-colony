@@ -13,8 +13,10 @@ from app.main import (
     _live_timeline_finished,
     _merge_restored_events,
     _pick_live_target_fixture,
+    _prime_live_catchup,
     _process_live_events,
     _replay_delay_after_event,
+    _stored_game_can_resume_live,
     game_manager,
 )
 from app.game.harness import (
@@ -1810,6 +1812,142 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(started.status_code, 200)
         self.assertEqual(started.json()["status"], "running_live")
         live_task.assert_called_once()
+
+    def test_error_live_room_recovers_when_state_is_loaded(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 949494,
+                "participant1": "Spain",
+                "participant2": "Canada",
+                "creatorName": "Host Alice",
+                "anonymousId": "anon_recover_host",
+            },
+        ).json()
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Recover Nest",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_recover_host",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+        room = game_manager.get_room(created["gameId"])
+        self.assertIsNotNone(room)
+        room.mode = "live"
+        room.status = "error"
+
+        with patch("app.main._ensure_live_task") as live_task:
+            response = client.get(f"/api/games/{created['gameId']}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "running_live")
+        live_task.assert_called_once()
+        self.assertTrue(any(event.kind == "live_sync" and event.data.get("recovered") for event in room.log))
+
+    def test_stored_error_live_game_can_resume(self):
+        self.assertTrue(_stored_game_can_resume_live({"status": "waiting_kickoff"}))
+        self.assertTrue(_stored_game_can_resume_live({"status": "running_live"}))
+        self.assertTrue(_stored_game_can_resume_live({"status": "error", "mode": "live"}))
+        self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "replay"}))
+        self.assertFalse(_stored_game_can_resume_live({"status": "finished", "mode": "live"}))
+
+    def test_live_catchup_does_not_create_retroactive_markets(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Catchup Nest", 20, "balanced", "momentum", "medium")
+        seen: set[tuple] = set()
+
+        count = _prime_live_catchup(
+            room,
+            seen,
+            [
+                {
+                    "fixtureId": 42,
+                    "seq": 1,
+                    "action": "high_danger_possession",
+                    "highlights": [],
+                    "minute": 10,
+                    "clockSeconds": 600,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "possession": 1,
+                    "possessionLabel": "France",
+                    "description": "High danger possession - France",
+                },
+                {
+                    "fixtureId": 42,
+                    "seq": 2,
+                    "action": "goal",
+                    "highlights": ["goal"],
+                    "minute": 12,
+                    "clockSeconds": 720,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "score": {"participant1": 1, "participant2": 0},
+                    "confirmed": True,
+                    "description": "Goal - France - confirmed",
+                },
+            ],
+            {"resolvedSource": "updates", "rawCount": 2},
+        )
+
+        self.assertEqual(count, 2)
+        self.assertEqual(room.event_index, 0)
+        self.assertEqual(room.opportunities, {})
+        self.assertEqual(room.predictions, {})
+        self.assertFalse(any(event.kind == "settlement" for event in room.log))
+        self.assertEqual(room.match_state.score, {"participant1": 1, "participant2": 0})
+        self.assertTrue(any(event.kind == "live_sync" and event.data.get("processedAsMarkets") is False for event in room.log))
+
+    def test_resilient_live_processing_skips_failed_event_and_continues(self):
+        class FailingAntAgent:
+            def decide_ants(self, *, game_id, stage, context, ants):
+                raise AgentDecisionError("missing_ant_decision")
+
+        manager = GameManager(decision_agent=FailingAntAgent())
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Live Nest", 20, "balanced", "momentum", "medium")
+
+        processed = _process_live_events(
+            harness,
+            [
+                {
+                    "fixtureId": 42,
+                    "seq": 1,
+                    "action": "high_danger_possession",
+                    "highlights": [],
+                    "minute": 10,
+                    "clockSeconds": 600,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "possession": 1,
+                    "possessionLabel": "France",
+                    "description": "High danger possession - France",
+                },
+                {
+                    "fixtureId": 42,
+                    "seq": 2,
+                    "action": "clock",
+                    "highlights": [],
+                    "minute": 11,
+                    "clockSeconds": 660,
+                    "description": "Clock tick",
+                },
+            ],
+            resilient=True,
+        )
+
+        self.assertEqual(processed, 1)
+        self.assertEqual(room.event_index, 2)
+        self.assertTrue(any(event.kind == "game_error" and "Live update skipped" in event.message for event in room.log))
 
     def test_live_host_can_manually_finish_stuck_room(self):
         client = TestClient(app)
