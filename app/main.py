@@ -1830,6 +1830,8 @@ def _prime_live_catchup(
         seen_event_keys.add(_live_event_key(event))
         if room.match_state:
             room.match_state.update(event)
+    if catchup_events and room.match_state:
+        room.match_state.score = _timeline_score_or_zero(timeline)
     if catchup_events:
         room.add_log(
             "live_sync",
@@ -1842,6 +1844,16 @@ def _prime_live_catchup(
             },
         )
     return len(catchup_events)
+
+
+def _timeline_score_or_zero(timeline: dict[str, Any] | None) -> dict[str, Any]:
+    score = (timeline or {}).get("score")
+    if not isinstance(score, dict):
+        return {"participant1": 0, "participant2": 0}
+    return {
+        "participant1": score.get("participant1") if score.get("participant1") is not None else 0,
+        "participant2": score.get("participant2") if score.get("participant2") is not None else 0,
+    }
 
 
 def _live_event_key(event: dict[str, Any]) -> tuple[Any, ...]:

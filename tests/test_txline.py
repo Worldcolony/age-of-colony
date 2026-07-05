@@ -76,6 +76,54 @@ class TxLineNormalizationTest(unittest.TestCase):
 
         self.assertNotIn("penalty", normalized["highlights"])
 
+    def test_unconfirmed_overturned_goal_does_not_update_score(self):
+        fixture = {"fixtureId": 42, "participant1": "Brazil", "participant2": "Norway"}
+        records = [
+            {
+                "FixtureId": 42,
+                "Seq": 59,
+                "Action": "goal",
+                "Participant": 2,
+                "Confirmed": False,
+                "Clock": {"Seconds": 160},
+                "Score": {"Participant2": {"Total": {"Goals": 1}}},
+            },
+            {
+                "FixtureId": 42,
+                "Seq": 64,
+                "Action": "var_end",
+                "Confirmed": True,
+                "Data": {"Outcome": "Overturned"},
+                "Clock": {"Seconds": 207},
+                "Score": {"Participant2": {"Total": {"Goals": 1}}},
+            },
+        ]
+
+        timeline = build_timeline(records, fixture=fixture, important_only=False)
+
+        self.assertIs(timeline["events"][0]["confirmed"], False)
+        self.assertEqual(timeline["events"][0]["score"], {"participant1": None, "participant2": None})
+        self.assertEqual(timeline["events"][1]["score"], {"participant1": None, "participant2": None})
+        self.assertIsNone(timeline["score"])
+
+    def test_confirmed_partial_goal_score_is_completed_with_zero(self):
+        timeline = build_timeline(
+            [
+                {
+                    "FixtureId": 42,
+                    "Seq": 59,
+                    "Action": "goal",
+                    "Participant": 2,
+                    "Confirmed": True,
+                    "Score": {"Participant2": {"Total": {"Goals": 1}}},
+                }
+            ],
+            fixture={"fixtureId": 42, "participant1": "Brazil", "participant2": "Norway"},
+            important_only=False,
+        )
+
+        self.assertEqual(timeline["score"], {"participant1": 0, "participant2": 1})
+
     def test_timeline_detects_possession_changes(self):
         records = [
             {"fixtureId": 42, "seq": 1, "possession": 1, "action": "safe_possession"},

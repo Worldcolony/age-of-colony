@@ -523,6 +523,75 @@ class GameHarnessTest(unittest.TestCase):
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
 
+    def test_overturned_goal_does_not_resolve_goal_market(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("VAR Nest", 20, "balanced", "momentum", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 1,
+                "clockSeconds": 60,
+                "participant": 2,
+                "participantLabel": "Norway",
+                "possession": 2,
+                "possessionLabel": "Norway",
+                "description": "High danger possession - Norway",
+            }
+        )
+        goal_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.option.option_id == "goal_next_10_yes"
+        ]
+        self.assertTrue(goal_predictions)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "var",
+                "type": "Goal",
+                "highlights": ["goal", "var"],
+                "minute": 4,
+                "clockSeconds": 186,
+                "confirmed": True,
+                "score": {"participant1": None, "participant2": None},
+                "description": "VAR - checking possible goal",
+            }
+        )
+        self.assertFalse(goal_predictions[0].resolved)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 3,
+                "action": "var_end",
+                "outcome": "Overturned",
+                "highlights": ["goal", "var"],
+                "minute": 4,
+                "clockSeconds": 207,
+                "confirmed": True,
+                "description": "VAR - goal overturned",
+            }
+        )
+
+        self.assertFalse(goal_predictions[0].resolved)
+        self.assertFalse([event for event in room.log if event.kind == "settlement"])
+
+    def test_match_state_merges_partial_score_updates(self):
+        room, _ = self.make_room()
+
+        room.match_state.update({"score": {"participant1": None, "participant2": 1}})
+        room.match_state.update({"score": {"participant1": 1, "participant2": None}})
+
+        self.assertEqual(room.match_state.score, {"participant1": 1, "participant2": 1})
+
     def test_next_foul_market_resolves_on_first_foul_team(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
@@ -1942,7 +2011,7 @@ class DemoRunApiTest(unittest.TestCase):
                     "description": "Goal - France - confirmed",
                 },
             ],
-            {"resolvedSource": "updates", "rawCount": 2},
+            {"resolvedSource": "updates", "rawCount": 2, "score": {"participant1": 1, "participant2": 0}},
         )
 
         self.assertEqual(count, 2)
@@ -1952,6 +2021,47 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertFalse(any(event.kind == "settlement" for event in room.log))
         self.assertEqual(room.match_state.score, {"participant1": 1, "participant2": 0})
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("processedAsMarkets") is False for event in room.log))
+
+    def test_live_catchup_resets_stale_score_when_no_official_score_exists(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
+        room.match_state.score = {"participant1": 0, "participant2": 1}
+        seen: set[tuple] = set()
+
+        count = _prime_live_catchup(
+            room,
+            seen,
+            [
+                {
+                    "fixtureId": 42,
+                    "seq": 59,
+                    "action": "goal",
+                    "highlights": ["goal"],
+                    "minute": 3,
+                    "clockSeconds": 160,
+                    "participant": 2,
+                    "participantLabel": "Norway",
+                    "confirmed": False,
+                    "score": {"participant1": None, "participant2": None},
+                    "description": "Goal - Norway - not confirmed",
+                },
+                {
+                    "fixtureId": 42,
+                    "seq": 64,
+                    "action": "var_end",
+                    "highlights": ["var"],
+                    "outcome": "Overturned",
+                    "minute": 4,
+                    "clockSeconds": 207,
+                    "score": {"participant1": None, "participant2": None},
+                    "description": "VAR - goal overturned",
+                },
+            ],
+            {"resolvedSource": "updates", "rawCount": 2, "score": None},
+        )
+
+        self.assertEqual(count, 2)
+        self.assertEqual(room.match_state.score, {"participant1": 0, "participant2": 0})
 
     def test_resilient_live_processing_skips_failed_event_and_continues(self):
         class FailingAntAgent:

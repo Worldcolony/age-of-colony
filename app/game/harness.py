@@ -338,7 +338,11 @@ class MatchState:
 
     def update(self, event: dict[str, Any]) -> None:
         if event.get("score") and (event["score"].get("participant1") is not None or event["score"].get("participant2") is not None):
-            self.score = event["score"]
+            current = self.score or {"participant1": 0, "participant2": 0}
+            self.score = {
+                "participant1": event["score"].get("participant1") if event["score"].get("participant1") is not None else current.get("participant1", 0),
+                "participant2": event["score"].get("participant2") if event["score"].get("participant2") is not None else current.get("participant2", 0),
+            }
         if event.get("possessionLabel"):
             self.possession_label = event["possessionLabel"]
         self.recent_events.append(event)
@@ -1941,9 +1945,23 @@ def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, 
 def event_targets(event: dict[str, Any]) -> set[str]:
     targets: set[str] = set()
     flags = set(event.get("highlights") or [])
-    if "discarded" in flags or _event_has_text(event, "action_discarded", "annule", "cancel"):
+    action = _event_token(event.get("action"))
+    cancelled = "discarded" in flags or _event_has_text(
+        event,
+        "action_discarded",
+        "annule",
+        "overturned",
+        "cancel",
+        "no goal",
+        "no_goal",
+    )
+    if cancelled:
         targets.add("cancel")
-    if "goal" in flags or (_event_has_text(event, "goal", "but") and not _event_has_text(event, "goal_kick", "goal kick", "goalkick")):
+    var_review_without_score = action in {"var", "var_start"} and not _event_score_has_value(event)
+    if not cancelled and (
+        "goal" in flags
+        or (_event_has_text(event, "goal", "but") and not _event_has_text(event, "goal_kick", "goal kick", "goalkick"))
+    ) and not var_review_without_score:
         targets.add("goal")
     if _event_has_text(event, "miss", "missed", "off target", "off_target", "wide"):
         targets.add("miss")
@@ -1966,6 +1984,11 @@ def event_targets(event: dict[str, Any]) -> set[str]:
     if _event_has_text(event, "high_danger", "danger_possession", "attack_possession"):
         targets.add("pressure")
     return targets
+
+
+def _event_score_has_value(event: dict[str, Any]) -> bool:
+    score = event.get("score")
+    return isinstance(score, dict) and (score.get("participant1") is not None or score.get("participant2") is not None)
 
 
 def event_matches_team_scope(team_scope: str, event: dict[str, Any], opportunity: Opportunity) -> bool:

@@ -372,7 +372,11 @@ def normalize_score_record(
     goal_type = clean_text(soccer.get("GoalType")) or clean_text(nested_get(soccer, "New", "GoalType"))
     possession = pick(payload, "possession", "Possession")
     possession_type = clean_text(pick(payload, "possessionType", "possessiontype", "PossessionType"))
-    confirmed = pick(payload, "confirmed", "Confirmedd")
+    confirmed = _first_not_none(
+        pick(payload, "confirmed", "Confirmedd", "Confirmed"),
+        pick(soccer, "confirmed", "Confirmedd", "Confirmed"),
+        top_data.get("Confirmed"),
+    )
     text_blob = " ".join(
         item
         for item in (
@@ -421,6 +425,25 @@ def normalize_score_record(
         player_out=player_out,
     )
 
+    raw_score = {
+        "participant1": _first_not_none(
+            _score_goals(score, "Participant1", "participant1"),
+            _score_goals(_event_score(payload), "Participant1", "participant1"),
+        ),
+        "participant2": _first_not_none(
+            _score_goals(score, "Participant2", "participant2"),
+            _score_goals(_event_score(payload), "Participant2", "participant2"),
+        ),
+    }
+    official_score = _official_event_score(
+        raw_score,
+        action=action,
+        event_type=event_type,
+        outcome=outcome,
+        confirmed=confirmed,
+        flags=flags,
+    )
+
     normalized = {
         "fixtureId": fixture_id,
         "id": pick(payload, "id", "Id"),
@@ -448,16 +471,7 @@ def normalize_score_record(
         "previousPossession": None,
         "previousPossessionLabel": None,
         "details": details,
-        "score": {
-            "participant1": _first_not_none(
-                _score_goals(score, "Participant1", "participant1"),
-                _score_goals(_event_score(payload), "Participant1", "participant1"),
-            ),
-            "participant2": _first_not_none(
-                _score_goals(score, "Participant2", "participant2"),
-                _score_goals(_event_score(payload), "Participant2", "participant2"),
-            ),
-        },
+        "score": official_score,
         "highlights": flags,
         "isHighlight": bool(flags),
         "description": _description(
@@ -824,6 +838,55 @@ def _event_data(payload: dict[str, Any]) -> dict[str, Any]:
 def _event_score(payload: dict[str, Any]) -> dict[str, Any]:
     score = pick(payload, "Score", "score")
     return score if isinstance(score, dict) else {}
+
+
+def _official_event_score(
+    score: dict[str, Any],
+    *,
+    action: str | None,
+    event_type: str | None,
+    outcome: str | None,
+    confirmed: Any,
+    flags: list[str],
+) -> dict[str, Any]:
+    if not _score_has_value(score):
+        return {"participant1": None, "participant2": None}
+    if confirmed is not None and not as_bool(confirmed):
+        return {"participant1": None, "participant2": None}
+    if _event_score_is_cancelled(action, event_type, outcome, flags):
+        return {"participant1": None, "participant2": None}
+    return score
+
+
+def _score_has_value(score: dict[str, Any]) -> bool:
+    return score.get("participant1") is not None or score.get("participant2") is not None
+
+
+def _event_score_is_cancelled(action: Any, event_type: Any, outcome: Any, flags: list[str]) -> bool:
+    text = " ".join(
+        str(part)
+        for part in (
+            action,
+            event_type,
+            outcome,
+            " ".join(flags),
+        )
+        if part is not None
+    ).casefold()
+    return any(
+        marker in text
+        for marker in (
+            "action_discarded",
+            "discarded",
+            "overturned",
+            "cancelled",
+            "canceled",
+            "annule",
+            "annulé",
+            "no goal",
+            "no_goal",
+        )
+    )
 
 
 def _latest_raw_score(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1254,10 +1317,19 @@ def _description(
 
 
 def _latest_score(events: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for event in reversed(events):
-        score = event.get("score")
-        if isinstance(score, dict) and (score.get("participant1") is not None or score.get("participant2") is not None):
-            return score
+    score = {"participant1": 0, "participant2": 0}
+    seen_score = False
+    for event in events:
+        event_score = event.get("score")
+        if not isinstance(event_score, dict):
+            continue
+        for participant in ("participant1", "participant2"):
+            value = event_score.get(participant)
+            if value is not None:
+                score[participant] = value
+                seen_score = True
+    if seen_score:
+        return score
     return None
 
 
