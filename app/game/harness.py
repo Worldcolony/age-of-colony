@@ -55,9 +55,8 @@ FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
-NEXT_FOUL_WINDOW_SECONDS = 10 * 60
-NEXT_GOAL_TEAM_SECONDS = 10 * 60
 ROLLING_WINDOW_CONTEXTS = {"goal_next_10", "next_goal_team", "next_foul"}
+NO_DEADLINE_CONTEXTS = {"next_goal_team", "next_foul"}
 
 
 def normalize_choice(value: str | None) -> str:
@@ -284,7 +283,7 @@ class Opportunity:
     minute: int | None
     created_event_index: int
     deadline_clock: int | None
-    deadline_event_index: int
+    deadline_event_index: int | None
     options: list[OpportunityOption]
     source_event: dict[str, Any]
     info_bought_by: set[str] = field(default_factory=set)
@@ -323,7 +322,7 @@ class Prediction:
     ant_ids: list[str]
     created_event_index: int
     deadline_clock: int | None
-    deadline_event_index: int
+    deadline_event_index: int | None
     info_bought: bool = False
     resolved: bool = False
 
@@ -999,19 +998,20 @@ class GameHarness:
         for prediction in list(self.room.predictions.values()):
             if prediction.resolved:
                 continue
+            opportunity = self.room.opportunities.get(prediction.opportunity_id)
+            if not opportunity or opportunity.context in NO_DEADLINE_CONTEXTS:
+                continue
             expired_by_clock = clock is not None and prediction.deadline_clock is not None and clock >= prediction.deadline_clock
             # Event counts are only a fallback for feeds that do not provide a match clock.
-            expired_by_events = prediction.deadline_clock is None and self.room.event_index >= prediction.deadline_event_index
+            expired_by_events = (
+                prediction.deadline_clock is None
+                and prediction.deadline_event_index is not None
+                and self.room.event_index >= prediction.deadline_event_index
+            )
             if not (expired_by_clock or expired_by_events):
                 continue
-            opportunity = self.room.opportunities.get(prediction.opportunity_id)
-            if not opportunity:
-                continue
-            if opportunity.context == "next_foul":
-                self._void_prediction(prediction, opportunity, reason="expired_no_foul")
-            else:
-                win = prediction.option.target in {"nothing", "no_goal"}
-                self._apply_settlement(prediction, opportunity, win=win, reason="expired")
+            win = prediction.option.target in {"nothing", "no_goal"}
+            self._apply_settlement(prediction, opportunity, win=win, reason="expired")
 
     def _apply_settlement(self, prediction: Prediction, opportunity: Opportunity, *, win: bool, reason: str) -> None:
         colony = self.room.colonies.get(prediction.colony_id)
@@ -1349,6 +1349,7 @@ def build_opportunities(event: dict[str, Any], event_index: int, match_state: Ma
     for context in contexts:
         options = opportunity_options(context, participant1, participant2, team_label)
         deadline_seconds = opportunity_deadline_seconds(context)
+        deadline_events = opportunity_deadline_events(context)
         opportunities.append(
             Opportunity(
                 opportunity_id=f"opp_{fixture_id}_{event_index}_{context}",
@@ -1360,7 +1361,7 @@ def build_opportunities(event: dict[str, Any], event_index: int, match_state: Ma
                 minute=minute,
                 created_event_index=event_index,
                 deadline_clock=clock + deadline_seconds if clock is not None and deadline_seconds is not None else None,
-                deadline_event_index=event_index + opportunity_deadline_events(context),
+                deadline_event_index=event_index + deadline_events if deadline_events is not None else None,
                 options=options,
                 source_event=source_event,
             )
@@ -1434,17 +1435,17 @@ def opportunity_deadline_seconds(context: str) -> int | None:
     return {
         "penalties": 120,
         "goal_next_10": GOAL_NEXT_10_SECONDS,
-        "next_goal_team": NEXT_GOAL_TEAM_SECONDS,
-        "next_foul": NEXT_FOUL_WINDOW_SECONDS,
+        "next_goal_team": None,
+        "next_foul": None,
     }[context]
 
 
-def opportunity_deadline_events(context: str) -> int:
+def opportunity_deadline_events(context: str) -> int | None:
     return {
         "penalties": 8,
         "goal_next_10": 56,
-        "next_goal_team": 56,
-        "next_foul": 56,
+        "next_goal_team": None,
+        "next_foul": None,
     }[context]
 
 
@@ -1463,7 +1464,7 @@ def opportunity_options(context: str, participant1: str = "A", participant2: str
         return [
             OpportunityOption("next_goal_p1", f"{participant1} scores the next goal", "wild", 4.4, "goal", "participant1"),
             OpportunityOption("next_goal_p2", f"{participant2} scores the next goal", "wild", 4.4, "goal", "participant2"),
-            OpportunityOption("next_goal_none", "no goal before the deadline", "safe", 1.35, "no_goal", "any"),
+            OpportunityOption("next_goal_none", "no goal before full time", "safe", 1.35, "no_goal", "any"),
         ]
     if context == "next_foul":
         return [
@@ -1566,7 +1567,7 @@ def agent_market_context(opportunity: Opportunity) -> dict[str, Any]:
     elif opportunity.context == "next_goal_team":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"
-        proposition = f"Who scores the next goal before the deadline: {participant1}, {participant2}, or no goal?"
+        proposition = f"Who scores the next goal before full time: {participant1}, {participant2}, or no goal?"
     elif opportunity.context == "next_foul":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"

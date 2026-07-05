@@ -193,7 +193,7 @@ class GameHarnessTest(unittest.TestCase):
         ])
         self.assertEqual(precision_market.options[0].label, "France scores the next goal")
         self.assertEqual(precision_market.options[1].label, "Belgium scores the next goal")
-        self.assertEqual(precision_market.options[2].label, "no goal before the deadline")
+        self.assertEqual(precision_market.options[2].label, "no goal before full time")
         self.assertEqual([option.option_id for option in foul_market.options], [
             "next_foul_p1",
             "next_foul_p2",
@@ -475,6 +475,32 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(opportunity.context, "goal_next_10")
         self.assertEqual(opportunity.deadline_clock, 5940)
 
+    def test_next_event_markets_have_no_deadline(self):
+        room, _ = self.make_room()
+        opportunities = build_opportunities(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 75,
+                "clockSeconds": 4500,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            1,
+            room.match_state,
+        )
+        goal_opportunity = next(opportunity for opportunity in opportunities if opportunity.context == "next_goal_team")
+        foul_opportunity = next(opportunity for opportunity in opportunities if opportunity.context == "next_foul")
+
+        self.assertIsNone(goal_opportunity.deadline_clock)
+        self.assertIsNone(goal_opportunity.deadline_event_index)
+        self.assertIsNone(foul_opportunity.deadline_clock)
+        self.assertIsNone(foul_opportunity.deadline_event_index)
+
     def test_precision_market_resolves_on_next_goal_team(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_b"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
@@ -522,6 +548,62 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(precision_predictions[0].resolved)
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
+
+    def test_next_goal_market_waits_until_full_time_without_goal(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Full Time Watch", 20, "balanced", "momentum", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 75,
+                "clockSeconds": 4500,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+        no_goal_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.option.option_id == "next_goal_none"
+        ]
+        self.assertTrue(no_goal_predictions)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "clock",
+                "highlights": [],
+                "minute": 86,
+                "clockSeconds": 5160,
+                "description": "Clock tick",
+            }
+        )
+
+        self.assertTrue(all(not prediction.resolved for prediction in no_goal_predictions))
+
+        harness.finish_game()
+
+        self.assertTrue(all(prediction.resolved for prediction in no_goal_predictions))
+        self.assertTrue(
+            [
+                event
+                for event in room.log
+                if event.kind == "settlement"
+                and event.data.get("reason") == "full_time"
+                and event.data.get("win")
+                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in no_goal_predictions}
+            ]
+        )
 
     def test_overturned_goal_does_not_resolve_goal_market(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
@@ -637,6 +719,61 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(foul_predictions[0].resolved)
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
+
+    def test_next_foul_market_waits_until_full_time_without_foul(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Long Foul Watch", 20, "balanced", "chaos", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 75,
+                "clockSeconds": 4500,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+        foul_predictions = [
+            prediction
+            for prediction in room.predictions.values()
+            if room.opportunities[prediction.opportunity_id].context == "next_foul"
+        ]
+        self.assertTrue(foul_predictions)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "clock",
+                "highlights": [],
+                "minute": 86,
+                "clockSeconds": 5160,
+                "description": "Clock tick",
+            }
+        )
+
+        self.assertTrue(all(not prediction.resolved for prediction in foul_predictions))
+
+        harness.finish_game()
+
+        self.assertTrue(all(prediction.resolved for prediction in foul_predictions))
+        self.assertTrue(
+            [
+                event
+                for event in room.log
+                if event.kind == "void"
+                and event.data.get("reason") == "full_time"
+                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in foul_predictions}
+            ]
+        )
 
     def test_next_foul_market_stays_unique_while_window_open(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
