@@ -1380,14 +1380,32 @@ def _event_is_penalty_award(event: dict[str, Any]) -> bool:
     action = _event_token(event.get("action"))
     event_type = _event_token(event.get("type"))
     flags = set(event.get("highlights") or [])
+    award_tokens = {"penalty", "penalties", "penalty_awarded", "penalty_given", "penalty_kick", "spot_kick"}
+    confirmation_tokens = {"penalty_confirmed", "confirmed_penalty"}
+    result_tokens = {"penalty_scored", "penalty_saved", "penalty_missed", "penalty_failed", "penalty_cancelled"}
     false_prefixes = ("penalty_area", "penalty_box", "penalty_arc", "penalty_possible")
-    if action in {"penalty", "penalties"}:
+    if event.get("confirmed") is not None and not truthy(event.get("confirmed")):
+        return False
+    if _event_has_text(event, "possible penalty", "penalty possible", "check possible", "not confirmed", "pending confirmation"):
+        return False
+    if _event_has_text(event, "no penalty", "not a penalty", "penalty cancelled", "penalty canceled", "penalty denied", "penalty overturned"):
+        return False
+    if action in result_tokens or event_type in result_tokens:
+        return False
+    if action in award_tokens or action in confirmation_tokens:
         return True
-    if action.startswith("penalty_") and not action.startswith(false_prefixes) and "possible" not in action:
+    if event_type in award_tokens or event_type in confirmation_tokens:
         return True
-    if event_type in {"penalty", "penalties", "penalty_awarded", "penalty_kick"}:
+    if action.startswith(false_prefixes) or event_type.startswith(false_prefixes):
+        return False
+    if "penalty" in flags and action in {"", "penalty", "penalties"}:
         return True
-    return "penalty" in flags and action in {"", "penalty", "penalties"}
+    return bool(
+        event.get("confirmed") is not None
+        and truthy(event.get("confirmed"))
+        and _event_has_text(event, "penalty")
+        and _event_has_text(event, "confirmed", "confirme", "awarded", "given")
+    )
 
 
 def _event_token(value: Any) -> str:

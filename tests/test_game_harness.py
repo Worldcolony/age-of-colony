@@ -110,6 +110,53 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(labels["yes, penalty scored"], 1.35)
         self.assertEqual(labels["no, missed or saved"], 5.5)
 
+    def test_unconfirmed_penalty_does_not_create_penalty_market(self):
+        opportunity = build_opportunity(penalty_event(confirmed=False, description="Penalty - pending confirmation"), 1)
+
+        self.assertIsNone(opportunity)
+
+    def test_penalty_result_does_not_open_new_penalty_market(self):
+        opportunity = build_opportunity(
+            penalty_event(
+                action="penalty_scored",
+                highlights=["penalty"],
+                description="Penalty scored",
+                confirmed=True,
+            ),
+            1,
+        )
+
+        self.assertIsNone(opportunity)
+
+    def test_confirmed_var_penalty_creates_penalty_market(self):
+        opportunity = build_opportunity(
+            penalty_event(
+                action="var",
+                highlights=["var"],
+                description="VAR - penalty confirmed",
+                details=["Confirmed"],
+                confirmed=True,
+            ),
+            1,
+        )
+
+        self.assertIsNotNone(opportunity)
+        self.assertEqual(opportunity.context, "penalties")
+
+    def test_var_no_penalty_does_not_create_penalty_market(self):
+        opportunity = build_opportunity(
+            penalty_event(
+                action="var",
+                highlights=["var"],
+                description="VAR - no penalty confirmed",
+                details=["Confirmed"],
+                confirmed=True,
+            ),
+            1,
+        )
+
+        self.assertIsNone(opportunity)
+
     def test_pressure_event_creates_safe_precision_and_chaos_markets(self):
         room, _ = self.make_room()
         opportunities = build_opportunities(
