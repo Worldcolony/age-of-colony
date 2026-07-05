@@ -75,6 +75,14 @@ export interface FixtureList {
   fixtures?: Fixture[];
 }
 
+export interface AdminGameList {
+  source?: string;
+  configured?: boolean;
+  count?: number;
+  games?: GameState[];
+  hint?: string;
+}
+
 export const api = {
   health: () => req<Record<string, unknown>>("/health"),
 
@@ -127,13 +135,29 @@ export const api = {
       replayDelaySeconds: opts?.replayDelaySeconds,
       replayTimeScale: opts?.replayTimeScale,
     }, adminHeaders(opts?.adminToken)),
-  rerun: (id: string, adminToken?: string) =>
-    req<GameState>(`/api/games/${id}/rerun`, "POST", { mode: "replay", source: "historical" }, adminHeaders(adminToken)),
+  rerun: (
+    id: string,
+    adminToken?: string,
+    opts?: { replayDelaySeconds?: number; replayTimeScale?: number },
+  ) =>
+    req<GameState>(
+      `/api/games/${id}/rerun`,
+      "POST",
+      {
+        mode: "replay",
+        source: "historical",
+        replayDelaySeconds: opts?.replayDelaySeconds,
+        replayTimeScale: opts?.replayTimeScale,
+      },
+      adminHeaders(adminToken),
+    ),
 
   demoMatches: (adminToken?: string) => req<FixtureList>("/api/demo/matches", "GET", undefined, adminHeaders(adminToken)),
   demoRun: (body?: Record<string, unknown>, adminToken?: string) => req<GameState>("/api/demo/run", "POST", body ?? {}, adminHeaders(adminToken)),
   runPrevious: (body?: Record<string, unknown>, adminToken?: string) =>
     req<GameState>("/api/games/run-previous", "POST", body ?? {}, adminHeaders(adminToken)),
+  adminGames: (limit = 50, adminToken?: string) =>
+    req<AdminGameList>(`/api/admin/games${qs({ limit })}`, "GET", undefined, adminHeaders(adminToken)),
 };
 
 export const sseUrl = (gameId: string) => `${API_BASE}/api/games/${gameId}/events`;
