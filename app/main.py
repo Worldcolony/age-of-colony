@@ -165,6 +165,7 @@ class RunPreviousTxRequest(BaseModel):
     stream: bool = False
     replayDelaySeconds: float = Field(default=0.75, ge=0.0, le=30.0)
     replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
+    colonies: list[CreateColonyRequest] | None = None
 
 
 @app.exception_handler(TxLineConfigError)
@@ -633,7 +634,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) 
             seed=payload.seed,
         )
         harness = game_manager.harness(room.game_id)
-        _add_autorun_colonies(harness)
+        _add_run_previous_colonies(harness, payload.colonies)
         room.mode = "replay"
         timeline = build_timeline(
             records,
@@ -1374,6 +1375,20 @@ def _fallback_room_code_from_game_id(game_id: str) -> str:
 def _add_autorun_colonies(harness: Any) -> None:
     for name, size, style, favorite_context, info_need in AUTORUN_COLONIES:
         harness.add_colony(name, size, style, favorite_context, info_need)
+
+
+def _add_run_previous_colonies(harness: Any, colonies: list[CreateColonyRequest] | None) -> None:
+    if not colonies:
+        _add_autorun_colonies(harness)
+        return
+    for colony in colonies:
+        harness.add_colony(
+            colony.name,
+            colony.size,
+            colony.style,
+            colony.favoriteContext,
+            colony.infoNeed,
+        )
 
 
 def _ensure_deepseek_agent() -> None:

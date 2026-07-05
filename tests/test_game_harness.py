@@ -1886,6 +1886,7 @@ class DemoRunApiTest(unittest.TestCase):
                     "events": events,
                     "delaySeconds": delay_seconds,
                     "timeScale": time_scale,
+                    "colonyNames": [colony.name for colony in room.colonies.values()],
                 }
             )
 
@@ -1905,6 +1906,15 @@ class DemoRunApiTest(unittest.TestCase):
                     "stream": True,
                     "replayDelaySeconds": 0.8,
                     "replayTimeScale": 120,
+                    "colonies": [
+                        {
+                            "name": "Admin Scout",
+                            "size": 20,
+                            "style": "balanced",
+                            "favoriteContext": "momentum",
+                            "infoNeed": "medium",
+                        }
+                    ],
                 },
             )
 
@@ -1913,11 +1923,13 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["fixtureId"], 778)
         self.assertEqual(game["status"], "running_replay")
         self.assertEqual(game["eventIndex"], 0)
-        self.assertEqual(len(game["colonies"]), 3)
+        self.assertEqual(len(game["colonies"]), 1)
+        self.assertEqual(game["colonies"][0]["name"], "Admin Scout")
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(len(scheduled[0]["events"]), 2)
         self.assertEqual(scheduled[0]["delaySeconds"], 0.8)
         self.assertEqual(scheduled[0]["timeScale"], 120)
+        self.assertEqual(scheduled[0]["colonyNames"], ["Admin Scout"])
 
     def test_replay_delay_uses_scaled_match_clock_with_fixed_fallback(self):
         self.assertAlmostEqual(

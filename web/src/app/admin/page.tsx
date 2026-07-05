@@ -42,6 +42,9 @@ export default function AdminPage() {
   const [games, setGames] = useState<GameState[]>([]);
   const [draftGame, setDraftGame] = useState<GameState | null>(null);
   const [selectedFixtureKey, setSelectedFixtureKey] = useState("");
+  const [manualFixtureId, setManualFixtureId] = useState("");
+  const [manualParticipant1, setManualParticipant1] = useState("Home");
+  const [manualParticipant2, setManualParticipant2] = useState("Away");
   const [colonies, setColonies] = useState<AdminColonyDraft[]>(freshDefaultColonies);
   const [adminToken, setAdminToken] = useState(() =>
     typeof window !== "undefined" ? localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "" : "",
@@ -67,7 +70,7 @@ export default function AdminPage() {
       setFixtures([]);
       return;
     }
-    const data = await api.recentFixtures({ days: 14, limit: 40 }, token || undefined);
+    const data = await api.recentFixtures({ days: 90, limit: 80 }, token || undefined);
     const list = data.fixtures ?? [];
     setFixtures(list);
     setSelectedFixtureKey((current) => current || (list[0] ? String(fixtureId(list[0])) : ""));
@@ -183,6 +186,41 @@ export default function AdminPage() {
     } finally {
       setWorking("");
     }
+  }
+
+  async function findLatestAndStart() {
+    if (!validColonies.length) return setMsg("Add at least one admin colony.");
+    setWorking("latest");
+    setMsg("Searching for latest completed fixture with score data...");
+    try {
+      const game = await api.runPrevious({
+        days: 90,
+        limit: 120,
+        stream: true,
+        colonies: validColonies.map((colony) => ({ ...colony, name: colony.name.trim() })),
+        ...REPLAY_SPEED,
+      }, requestToken || undefined);
+      resetGame();
+      setGame(game);
+      router.push(`/cockpit/${game.gameId}`);
+    } catch (e) {
+      setMsg((e as Error).message);
+    } finally {
+      setWorking("");
+    }
+  }
+
+  async function launchManualFixture() {
+    const cleanId = manualFixtureId.trim();
+    if (!cleanId) return setMsg("Enter a TXLine fixture id.");
+    if (!validColonies.length) return setMsg("Add at least one admin colony.");
+    const fixture: Fixture = {
+      fixtureId: Number.isFinite(Number(cleanId)) ? Number(cleanId) : cleanId,
+      participant1: manualParticipant1.trim() || "Home",
+      participant2: manualParticipant2.trim() || "Away",
+      competition: "Manual admin fixture",
+    };
+    await launchSimulation(fixture);
   }
 
   async function startDraftReplay() {
@@ -326,15 +364,38 @@ export default function AdminPage() {
           {selectedFixture ? <SelectedFixture fixture={selectedFixture} /> : <EmptyPanel title="No fixture loaded" text="Refresh after unlocking to load completed TXLine matches." />}
 
           <div className="grid gap-2">
-            <button className="btn btn-primary" disabled={Boolean(working) || !selectedFixture} onClick={() => launchSimulation()}>
-              Create and start replay
+            <button className="btn btn-primary" disabled={Boolean(working)} onClick={selectedFixture ? () => launchSimulation() : findLatestAndStart}>
+              {selectedFixture ? "Start selected replay" : "Find latest and start"}
             </button>
             <button className="btn btn-ghost" disabled={Boolean(working) || !selectedFixture} onClick={() => createAdminRoom()}>
               Create room only
             </button>
+            <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={findLatestAndStart}>
+              Find latest completed match
+            </button>
             <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={runDemo}>
               Run demo sandbox
             </button>
+          </div>
+
+          <div className="rounded-md border border-[color:var(--brd-soft)] bg-black/20 p-3">
+            <p className="eyebrow">Manual fixture</p>
+            <div className="mt-3 grid gap-2">
+              <input
+                className="input font-mono"
+                inputMode="numeric"
+                placeholder="TXLine fixture id"
+                value={manualFixtureId}
+                onChange={(e) => setManualFixtureId(e.target.value)}
+              />
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                <input className="input" placeholder="Participant 1" value={manualParticipant1} onChange={(e) => setManualParticipant1(e.target.value)} />
+                <input className="input" placeholder="Participant 2" value={manualParticipant2} onChange={(e) => setManualParticipant2(e.target.value)} />
+              </div>
+              <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working) || !manualFixtureId.trim()} onClick={launchManualFixture}>
+                Start manual fixture
+              </button>
+            </div>
           </div>
 
           {draftGame && (
@@ -405,7 +466,20 @@ export default function AdminPage() {
                   })}
                 </tbody>
               </table>
-              {!fixtures.length && <EmptyPanel title="No fixtures loaded" text="Refresh after unlocking, or check TXLine credentials." />}
+              {!fixtures.length && (
+                <div className="rounded-md border border-dashed border-[color:var(--brd-soft)] bg-black/10 p-6 text-center">
+                  <h3 className="font-bold text-ink">No fixtures loaded</h3>
+                  <p className="mt-2 text-sm text-ink-faint">The list endpoint returned empty, but you can still scan TXLine score data or use a fixture id manually.</p>
+                  <div className="mx-auto mt-4 grid max-w-md gap-2 sm:grid-cols-2">
+                    <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={findLatestAndStart}>
+                      Find latest and start
+                    </button>
+                    <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={() => loadFixtures()}>
+                      Reload list
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         </main>
