@@ -1793,6 +1793,20 @@ class DemoRunApiTest(unittest.TestCase):
                         "style": "balanced",
                         "favoriteContext": "momentum",
                         "infoNeed": "medium",
+                    },
+                    {
+                        "name": "Admin Guard",
+                        "size": 10,
+                        "style": "cautious",
+                        "favoriteContext": "penalties",
+                        "infoNeed": "high",
+                    },
+                    {
+                        "name": "Admin Rush",
+                        "size": 50,
+                        "style": "aggressive",
+                        "favoriteContext": "chaos",
+                        "infoNeed": "low",
                     }
                 ],
             }
@@ -1807,7 +1821,8 @@ class DemoRunApiTest(unittest.TestCase):
             self.assertEqual(allowed_admin_room.status_code, 200)
             admin_room = allowed_admin_room.json()
             self.assertEqual(admin_room["fixtureId"], 616161)
-            self.assertEqual(len(admin_room["colonies"]), 1)
+            self.assertEqual(len(admin_room["colonies"]), 3)
+            self.assertEqual([colony["name"] for colony in admin_room["colonies"]], ["Admin Scout", "Admin Guard", "Admin Rush"])
 
     def test_admin_replay_fixtures_only_returns_matches_with_score_data(self):
         class FakeTxLineClient:

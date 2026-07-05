@@ -192,7 +192,8 @@ export default function CockpitPage() {
         </div>
       </section>
 
-      <RankCard mine={mine} rank={rank} />
+      <RankCard mine={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
+      <ColonyRoster colonies={sorted} activeColonyId={mine?.colonyId} onOpenRanks={() => router.push(`/results/${id}`)} />
 
       {status === "created" ? (
         <section className="glass flex flex-col gap-3 p-4 text-center">
@@ -619,16 +620,96 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
   );
 }
 
-function RankCard({ mine, rank }: { mine?: Colony; rank: number }) {
+function RankCard({ mine, rank, spectator }: { mine?: Colony; rank: number; spectator?: boolean }) {
   if (!mine) return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete.</div>;
   return (
     <section className="glass grid grid-cols-4 gap-1 p-3 text-center">
       <Vital label="Rank" value={`#${rank}`} tone="gold" />
-      <Vital label="My ants" value={mine.antsAlive} />
+      <Vital label={spectator ? "Lead ants" : "My ants"} value={mine.antsAlive} />
       <Vital label="Food" value={mine.food} tone="green" />
       <Vital label="Larvae" value={mine.larvae} />
     </section>
   );
+}
+
+function ColonyRoster({
+  colonies,
+  activeColonyId,
+  onOpenRanks,
+}: {
+  colonies: Colony[];
+  activeColonyId?: string;
+  onOpenRanks: () => void;
+}) {
+  if (!colonies.length) {
+    return (
+      <section className="glass p-4 text-center text-sm text-ink-faint">
+        No colonies attached to this simulation yet.
+      </section>
+    );
+  }
+
+  return (
+    <section className="glass flex flex-col gap-3 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="eyebrow">Colonies</p>
+          <h2 className="text-base font-bold">Simulation roster</h2>
+        </div>
+        <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
+      </div>
+
+      <div className="grid max-h-[260px] gap-2 overflow-y-auto pr-1">
+        {colonies.map((colony, index) => {
+          const active = colony.colonyId === activeColonyId;
+          return (
+            <div
+              key={colony.colonyId}
+              className={`rounded-xl border p-3 ${
+                active
+                  ? "border-cyan/50 bg-[rgba(88,183,170,0.12)]"
+                  : "border-[color:var(--brd-soft)] bg-black/16"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="font-mono text-sm font-bold text-gold">#{index + 1}</span>
+                    <h3 className="truncate text-sm font-bold text-ink">{colony.name}</h3>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-ink-faint">
+                    {labelize(colony.style)} · {labelize(colony.favoriteContext)} · info {labelize(colony.infoNeed)}
+                  </p>
+                </div>
+                {active && <span className="status-pill !border-cyan/50 !text-cyan">active</span>}
+              </div>
+
+              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                <MiniStat label="Score" value={Math.round(colony.score ?? 0)} tone="gold" />
+                <MiniStat label="Ants" value={colony.antsAlive ?? 0} />
+                <MiniStat label="Food" value={colony.food ?? 0} tone="green" />
+                <MiniStat label="Larvae" value={colony.larvae ?? 0} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function MiniStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
+  const color = tone === "gold" ? "text-gold" : tone === "green" ? "text-green" : "text-ink";
+  return (
+    <div className="rounded-lg border border-[color:var(--brd-soft)] bg-black/16 px-2 py-2">
+      <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
+      <p className={`font-mono text-base font-bold ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+function labelize(value: string | null | undefined): string {
+  return String(value || "balanced").replace(/_/g, " ");
 }
 
 function Vital({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
