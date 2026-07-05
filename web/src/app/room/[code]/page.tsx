@@ -6,9 +6,9 @@ import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, fmtKickoffLine, teamName } from "@/lib/format";
-import type { Player } from "@/lib/types";
+import type { GameState, Player } from "@/lib/types";
 
-const RUNNING = new Set(["running_replay", "running_live", "waiting_kickoff"]);
+const RUNNING = new Set(["running_replay", "running_live"]);
 
 export default function RoomPage() {
   const router = useRouter();
@@ -30,6 +30,21 @@ export default function RoomPage() {
   const anonId = typeof window !== "undefined" ? getAnonId() : "";
   const roomCode = game?.roomCode || code;
 
+  const me = useMemo(() => players.find((p) => p.anonymousId === anonId), [players, anonId]);
+  const myColony = useMemo(() => game?.colonies?.find((c) => c.playerAnonymousId === anonId), [game?.colonies, anonId]);
+  const isJoined = joined || Boolean(me);
+  const isHost = Boolean(me?.isHost || (game?.owner?.anonymousId && game.owner.anonymousId === anonId));
+  const myReady = Boolean(me?.ready || myColony);
+  const missingPlayers = players.filter((p) => !p.ready);
+  const hasColony = Boolean(game?.colonies?.length);
+  const canStart = Boolean(isHost && hasColony && missingPlayers.length === 0 && game?.status === "created");
+  const canEnterCockpit = Boolean(game?.gameId && game.status && RUNNING.has(game.status) && myReady);
+  const startHelper = game?.status === "waiting_kickoff"
+    ? "Match will start automatically at kickoff."
+    : !hasColony
+      ? "Create a colony to enter this match room."
+      : "Ready. The live game starts automatically.";
+
   useEffect(() => {
     api
       .getRoomByCode(code)
@@ -43,34 +58,20 @@ export default function RoomPage() {
   }, [code]);
 
   useEffect(() => {
-    if (game?.gameId && game.status && RUNNING.has(game.status)) {
-      router.replace(`/cockpit/${game.gameId}`);
-    }
-  }, [game?.gameId, game?.status, router]);
+    if (canEnterCockpit && game?.gameId) router.replace(`/cockpit/${game.gameId}`);
+  }, [canEnterCockpit, game?.gameId, router]);
 
   useGameStream(game?.gameId ?? null, {
     onState: (g) => {
       setGame(g);
       setPlayers(g.players || []);
-      if (g.gameId && g.status && RUNNING.has(g.status)) router.replace(`/cockpit/${g.gameId}`);
+      if (g.players?.some((p) => p.anonymousId === anonId)) setJoined(true);
+      if (g.gameId && g.status && RUNNING.has(g.status) && hasLocalColony(g, anonId)) {
+        router.replace(`/cockpit/${g.gameId}`);
+      }
     },
     onEvent: (e) => { if (e.kind === "player_joined") setMsg(e.message); },
   });
-
-  const me = useMemo(() => players.find((p) => p.anonymousId === anonId), [players, anonId]);
-  const isJoined = joined || Boolean(me);
-  const isHost = Boolean(me?.isHost || (game?.owner?.anonymousId && game.owner.anonymousId === anonId));
-  const myReady = Boolean(me?.ready);
-  const missingPlayers = players.filter((p) => !p.ready);
-  const hasColony = Boolean(game?.colonies?.length);
-  const canStart = Boolean(isHost && hasColony && missingPlayers.length === 0 && game?.status === "created");
-  const startHelper = !isHost
-    ? "Waiting for the host to start."
-    : !hasColony
-      ? "Create at least one colony before start."
-      : missingPlayers.length
-        ? `Waiting for ${missingPlayers[0].name}'s colony`
-        : "Everyone is ready.";
 
   async function join() {
     if (!name.trim()) return setMsg("Enter a name.");
@@ -96,7 +97,7 @@ export default function RoomPage() {
   }
 
   async function share() {
-    const text = `Join my Age of Colony room - code ${roomCode} (${p1} vs ${p2})`;
+    const text = `Join the Age of Colony match room - ${p1} vs ${p2}`;
     const url = typeof location !== "undefined" ? location.href : undefined;
     try {
       if (navigator.share) await navigator.share({ title: "Age of Colony", text, url });
@@ -140,7 +141,7 @@ export default function RoomPage() {
         <div>
           <p className="text-sm font-bold text-ink-soft">Room code</p>
           <strong className="font-mono text-5xl tracking-[0.08em] text-gold-deep [text-shadow:2px_2px_0_rgba(90,70,30,0.25)]">{roomCode}</strong>
-          <p className="mt-1 text-sm text-ink-faint">Share this code with your friends.</p>
+          <p className="mt-1 text-sm text-ink-faint">This code opens the shared room for this match.</p>
         </div>
         <div className="grid w-full grid-cols-2 gap-3">
           <button className="btn btn-ghost" onClick={copyCode}>Copy</button>
@@ -188,34 +189,41 @@ export default function RoomPage() {
 
       <div className="bottom-action">
         <div className="bottom-action-inner">
-          {game?.gameId && game.status && RUNNING.has(game.status) ? (
+          {!isJoined ? (
+            <button className="btn btn-primary" onClick={join}>Join room</button>
+          ) : !myReady ? (
+            <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push(`/setup?room=${encodeURIComponent(roomCode)}`)}>
+              Create my colony
+            </button>
+          ) : game?.gameId && game.status && RUNNING.has(game.status) ? (
             <>
               <button className="btn btn-primary" onClick={() => router.replace(`/cockpit/${game.gameId}`)}>
                 Enter live cockpit
               </button>
               <p className="text-center text-sm text-ink-faint">Match is running.</p>
             </>
-          ) : !isJoined ? (
-            <button className="btn btn-primary" onClick={join}>Join room</button>
-          ) : !myReady ? (
-            <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push(`/setup?room=${encodeURIComponent(roomCode)}`)}>
-              Create my colony
-            </button>
           ) : isHost ? (
             <>
               <button className="btn btn-primary" disabled={!canStart || starting} onClick={start}>
-                {starting ? "Starting..." : "Start match"}
+                {starting ? "Starting..." : game?.status === "created" ? "Start now" : "Waiting for kickoff"}
               </button>
               <p className="text-center text-sm text-ink-faint">{startHelper}</p>
             </>
           ) : (
             <>
-              <button className="btn btn-ghost" disabled>Waiting for host</button>
+              <button className="btn btn-ghost" disabled>Waiting for kickoff</button>
               <p className="text-center text-sm text-ink-faint">{startHelper}</p>
             </>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function hasLocalColony(game: GameState, anonId: string): boolean {
+  return Boolean(
+    game.players?.some((p) => p.anonymousId === anonId && p.ready)
+    || game.colonies?.some((c) => c.playerAnonymousId === anonId),
   );
 }

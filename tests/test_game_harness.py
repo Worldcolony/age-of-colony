@@ -2186,7 +2186,39 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(duplicate.status_code, 422)
         self.assertIn("already has a colony", duplicate.json()["detail"])
 
-    def test_live_start_waits_for_future_kickoff_and_locks_lobby(self):
+    def test_public_match_room_is_unique_per_fixture(self):
+        client = TestClient(app)
+        first = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 929291,
+                "participant1": "France",
+                "participant2": "Canada",
+                "creatorName": "Alice",
+                "anonymousId": "anon_single_alice",
+            },
+        )
+        second = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 929291,
+                "participant1": "France",
+                "participant2": "Canada",
+                "creatorName": "Bob",
+                "anonymousId": "anon_single_bob",
+            },
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        first_game = first.json()
+        second_game = second.json()
+        self.assertEqual(second_game["gameId"], first_game["gameId"])
+        self.assertEqual(second_game["roomCode"], first_game["roomCode"])
+        self.assertEqual({player["name"] for player in second_game["players"]}, {"Alice", "Bob"})
+        self.assertEqual(second_game["mode"], "live")
+
+    def test_live_room_auto_waits_for_future_kickoff_and_stays_joinable(self):
         client = TestClient(app)
         kickoff = datetime.now(timezone.utc) + timedelta(minutes=15)
         created = client.post(
@@ -2200,34 +2232,27 @@ class DemoRunApiTest(unittest.TestCase):
                 "anonymousId": "anon_wait_host",
             },
         ).json()
-        colony_response = client.post(
-            f"/api/games/{created['gameId']}/colonies",
-            json={
-                "name": "Kickoff Nest",
-                "size": 20,
-                "style": "balanced",
-                "favoriteContext": "momentum",
-                "infoNeed": "medium",
-                "anonymousId": "anon_wait_host",
-            },
-        )
-        self.assertEqual(colony_response.status_code, 200)
-
-        with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")), patch("app.main._schedule_kickoff_start") as schedule:
-            started = client.post(
-                f"/api/games/{created['gameId']}/start",
-                json={"mode": "live", "source": "updates", "anonymousId": "anon_wait_host"},
+        with patch("app.main._schedule_kickoff_start") as schedule:
+            colony_response = client.post(
+                f"/api/games/{created['gameId']}/colonies",
+                json={
+                    "name": "Kickoff Nest",
+                    "size": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                    "anonymousId": "anon_wait_host",
+                },
             )
-
-        self.assertEqual(started.status_code, 200)
-        self.assertEqual(started.json()["status"], "waiting_kickoff")
+        self.assertEqual(colony_response.status_code, 200)
+        self.assertEqual(colony_response.json()["status"], "waiting_kickoff")
         schedule.assert_called_once()
 
         joined_after_lock = client.post(
             f"/api/rooms/{created['roomCode']}/players",
             json={"name": "Late Bob", "anonymousId": "anon_late_bob"},
         )
-        self.assertEqual(joined_after_lock.status_code, 409)
+        self.assertEqual(joined_after_lock.status_code, 200)
 
         colony_after_lock = client.post(
             f"/api/games/{created['gameId']}/colonies",
@@ -2237,18 +2262,19 @@ class DemoRunApiTest(unittest.TestCase):
                 "style": "cautious",
                 "favoriteContext": "penalties",
                 "infoNeed": "high",
-                "anonymousId": "anon_wait_host",
+                "anonymousId": "anon_late_bob",
             },
         )
-        self.assertEqual(colony_after_lock.status_code, 422)
+        self.assertEqual(colony_after_lock.status_code, 200)
+        self.assertEqual(len(colony_after_lock.json()["colonies"]), 2)
 
-    def test_live_start_for_match_in_progress_runs_immediately(self):
+    def test_live_room_auto_starts_for_match_in_progress(self):
         client = TestClient(app)
         kickoff = datetime.now(timezone.utc) - timedelta(minutes=25)
         created = client.post(
             "/api/games",
             json={
-                "fixtureId": 939393,
+                "fixtureId": 959595,
                 "participant1": "Australia",
                 "participant2": "Egypt",
                 "startTimeIso": kickoff.isoformat(),
@@ -2256,28 +2282,45 @@ class DemoRunApiTest(unittest.TestCase):
                 "anonymousId": "anon_live_host",
             },
         ).json()
-        colony_response = client.post(
-            f"/api/games/{created['gameId']}/colonies",
-            json={
-                "name": "Live Nest",
-                "size": 20,
-                "style": "balanced",
-                "favoriteContext": "momentum",
-                "infoNeed": "medium",
-                "anonymousId": "anon_live_host",
-            },
-        )
-        self.assertEqual(colony_response.status_code, 200)
-
         with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")), patch("app.main._ensure_live_task") as live_task:
-            started = client.post(
-                f"/api/games/{created['gameId']}/start",
-                json={"mode": "live", "source": "updates", "anonymousId": "anon_live_host"},
+            colony_response = client.post(
+                f"/api/games/{created['gameId']}/colonies",
+                json={
+                    "name": "Live Nest",
+                    "size": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                    "anonymousId": "anon_live_host",
+                },
             )
 
-        self.assertEqual(started.status_code, 200)
-        self.assertEqual(started.json()["status"], "running_live")
+        self.assertEqual(colony_response.status_code, 200)
+        self.assertEqual(colony_response.json()["status"], "running_live")
         live_task.assert_called_once()
+
+        late_join = client.post(
+            f"/api/rooms/{created['roomCode']}/players",
+            json={"name": "Late Live", "anonymousId": "anon_late_live"},
+        )
+        self.assertEqual(late_join.status_code, 200)
+
+        with patch("app.main._ensure_live_task") as resumed_live_task:
+            late_colony = client.post(
+                f"/api/games/{created['gameId']}/colonies",
+                json={
+                    "name": "Live Late Nest",
+                    "size": 10,
+                    "style": "aggressive",
+                    "favoriteContext": "chaos",
+                    "infoNeed": "low",
+                    "anonymousId": "anon_late_live",
+                },
+            )
+        self.assertEqual(late_colony.status_code, 200)
+        self.assertEqual(late_colony.json()["status"], "running_live")
+        self.assertEqual(len(late_colony.json()["colonies"]), 2)
+        resumed_live_task.assert_called_once()
 
     def test_error_live_room_recovers_when_state_is_loaded(self):
         client = TestClient(app)

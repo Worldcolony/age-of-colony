@@ -293,19 +293,10 @@ async def create_admin_session(payload: AdminSessionRequest, request: Request) -
 
 @app.post("/api/games")
 async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
-    room = game_manager.create_room(
-        fixture_id=payload.fixtureId,
-        participant1=payload.participant1,
-        participant2=payload.participant2,
-        competition=payload.competition,
-        start_time=payload.startTime,
-        start_time_iso=payload.startTimeIso,
-        seed=payload.seed,
-        owner_anonymous_id=payload.anonymousId,
-        owner_name=payload.creatorName,
-    )
+    room = await _get_or_create_public_match_room(payload)
     if payload.creatorName:
         game_manager.harness(room.game_id).join_player(payload.creatorName or "Host", anonymous_id=payload.anonymousId)
+    await _ensure_public_match_room_armed(room)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -326,6 +317,7 @@ async def create_colony(game_id: str, payload: CreateColonyRequest, request: Req
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _ensure_public_match_room_armed(room)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -357,6 +349,97 @@ async def join_room_by_code(room_code: str, payload: JoinRoomRequest) -> dict[st
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
     return room.public_state()
+
+
+async def _get_or_create_public_match_room(payload: CreateGameRequest) -> GameRoom:
+    room = _active_public_room_for_fixture(payload.fixtureId)
+    if not room:
+        stored = await _stored_public_room_for_fixture_or_none(payload.fixtureId)
+        if stored:
+            room = _restore_room_from_stored_row(stored)
+    if room:
+        _merge_public_fixture_metadata(room, payload)
+        await _ensure_room_progress(room)
+        return room
+
+    room = game_manager.create_room(
+        fixture_id=payload.fixtureId,
+        participant1=payload.participant1,
+        participant2=payload.participant2,
+        competition=payload.competition,
+        start_time=payload.startTime,
+        start_time_iso=payload.startTimeIso,
+        seed=payload.seed,
+        owner_anonymous_id=payload.anonymousId,
+        owner_name=payload.creatorName,
+    )
+    room.mode = "live"
+    return room
+
+
+def _active_public_room_for_fixture(fixture_id: int | str) -> GameRoom | None:
+    for room in game_manager.rooms.values():
+        if str(room.fixture_id) != str(fixture_id):
+            continue
+        if room.status in {"finished", "error", "stopped"}:
+            continue
+        if room.mode == "live":
+            return room
+        if room.mode is not None:
+            continue
+        if not (room.owner_anonymous_id or room.owner_name):
+            continue
+        return room
+    return None
+
+
+async def _stored_public_room_for_fixture_or_none(fixture_id: int | str) -> dict[str, Any] | None:
+    if not supabase_store.configured:
+        return None
+    return await asyncio.to_thread(supabase_store.latest_game_for_fixture, fixture_id, mode="live")
+
+
+def _merge_public_fixture_metadata(room: GameRoom, payload: CreateGameRequest) -> None:
+    if payload.participant1 and not room.participant1:
+        room.participant1 = payload.participant1
+    if payload.participant2 and not room.participant2:
+        room.participant2 = payload.participant2
+    if payload.competition and not room.competition:
+        room.competition = payload.competition
+    if payload.startTime is not None and room.start_time is None:
+        room.start_time = payload.startTime
+    if payload.startTimeIso and not room.start_time_iso:
+        room.start_time_iso = payload.startTimeIso
+    if room.mode is None:
+        room.mode = "live"
+    if room.match_state:
+        if room.participant1 and not room.match_state.participant1:
+            room.match_state.participant1 = room.participant1
+        if room.participant2 and not room.match_state.participant2:
+            room.match_state.participant2 = room.participant2
+
+
+async def _ensure_public_match_room_armed(room: GameRoom) -> None:
+    if room.mode != "live" or not room.colonies:
+        return
+    if room.status in {"waiting_kickoff", "running_live"}:
+        await _ensure_room_progress(room)
+        return
+    if room.status != "created":
+        return
+
+    kickoff_at = _room_kickoff_datetime(room)
+    if kickoff_at and kickoff_at > datetime.now(timezone.utc):
+        room.status = "waiting_kickoff"
+        room.add_log(
+            "game_locked",
+            "Match room ready. Live game will start at kickoff.",
+            {"mode": "live", "kickoffAt": kickoff_at.isoformat(), "autoStart": True},
+        )
+        _schedule_kickoff_start(room)
+        return
+    if kickoff_at:
+        await _start_live_room_now(room)
 
 
 # ---------------------------------------------------------------------------

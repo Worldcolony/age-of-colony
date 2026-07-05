@@ -116,7 +116,7 @@ export default function LobbyPage() {
 
       <section className="mt-6">
         <h1 className="hud-title text-[17px] leading-relaxed">Choose a match</h1>
-        <p className="mt-2 text-base text-ink-soft">Start a room or join your friends.</p>
+        <p className="mt-2 text-base text-ink-soft">One match, one shared colony room.</p>
       </section>
 
       {err && <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
@@ -199,11 +199,11 @@ function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: b
       </div>
       {featured ? (
         <button className="btn btn-primary" onClick={() => onCreate(f)}>
-          Create room
+          Join match
         </button>
       ) : (
         <button className="btn btn-ghost !min-h-0 py-2.5 text-sm" onClick={() => onCreate(f)}>
-          Create room
+          Join match
         </button>
       )}
     </div>

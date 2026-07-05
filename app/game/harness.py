@@ -17,6 +17,7 @@ VALID_SIZES = {10, 20, 50}
 VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
+JOINABLE_STATUSES = {"created", "waiting_kickoff", "running_live"}
 STARTING_COLONY_ANTS = 20
 STARTING_COLONY_FOOD = 20
 STYLE_ALIASES = {
@@ -480,8 +481,8 @@ class GameHarness:
         anonymous_id: str | None = None,
         player_id: str | None = None,
     ) -> ColonyState:
-        if self.room.status != "created":
-            raise ValueError("room is locked; colonies can no longer be changed")
+        if self.room.status not in JOINABLE_STATUSES:
+            raise ValueError("room is closed; colonies can no longer join")
         if size not in VALID_SIZES:
             raise ValueError("size must be one of 10, 20 or 50")
         style = normalize_style(style)
@@ -540,8 +541,8 @@ class GameHarness:
         return colony
 
     def join_player(self, name: str, anonymous_id: str | None = None) -> PlayerState:
-        if self.room.status != "created":
-            raise ValueError("room is locked; new players can no longer join")
+        if self.room.status not in JOINABLE_STATUSES:
+            raise ValueError("room is closed; new players can no longer join")
         clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
         clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
         if clean_anonymous_id:

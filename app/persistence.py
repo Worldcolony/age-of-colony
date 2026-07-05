@@ -173,7 +173,7 @@ class SupabaseGameStore:
             rows = self._request_json(f"aoc_games?select={legacy_fields}&order=updated_at.desc&limit={safe_limit}")
         return {"source": "supabase", "configured": True, "count": len(rows), "games": rows}
 
-    def latest_game_for_fixture(self, fixture_id: str | int, *, limit: int = 20) -> dict[str, Any] | None:
+    def latest_game_for_fixture(self, fixture_id: str | int, *, limit: int = 20, mode: str | None = None) -> dict[str, Any] | None:
         if not self.configured:
             return None
         cleaned = urllib.parse.quote(str(fixture_id), safe="")
@@ -199,6 +199,19 @@ class SupabaseGameStore:
         )
         for row in rows:
             if row.get("status") not in {"finished", "error", "stopped"}:
+                if mode is not None:
+                    public_state = row.get("public_state") or {}
+                    row_mode = public_state.get("mode") if isinstance(public_state, dict) else None
+                    row_mode = row_mode or row.get("mode")
+                    owner = public_state.get("owner") if isinstance(public_state, dict) else None
+                    legacy_public_live = (
+                        mode == "live"
+                        and row_mode is None
+                        and isinstance(owner, dict)
+                        and bool(owner.get("anonymousId") or owner.get("name"))
+                    )
+                    if row_mode != mode and not legacy_public_live:
+                        continue
                 return row
         return None
 

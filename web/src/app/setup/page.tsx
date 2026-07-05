@@ -73,7 +73,7 @@ export default function SetupPage() {
           <span />
         </header>
         <div className="glass p-4 text-center text-sm text-ink-faint">
-          {hydrating ? "Loading room..." : msg || "Pick a match and create a room first."}
+          {hydrating ? "Loading room..." : msg || "Pick a match from the lobby first."}
         </div>
         <div className="bottom-action">
           <div className="bottom-action-inner">
@@ -117,7 +117,7 @@ export default function SetupPage() {
       </header>
 
       <section className="mt-6 text-center">
-        <p className="text-lg text-ink-soft">Create your colony before kickoff.</p>
+        <p className="text-lg text-ink-soft">Create your colony before or during the match.</p>
         <p className="mt-2 text-sm text-ink-faint">Every colony starts fair with 20 ants and 20 food.</p>
       </section>
 
