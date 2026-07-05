@@ -509,11 +509,12 @@ class GameHarness:
             clean_player_id = player.player_id
             clean_anonymous_id = player.anonymous_id
 
+        clean_colony_name = (player.name if player else name).strip() or f"Colony {len(self.room.colonies) + 1}"
         colony_id = f"col_{uuid.uuid4().hex[:10]}"
-        seed = stable_seed(self.room.seed, self.room.game_id, colony_id, name)
+        seed = stable_seed(self.room.seed, self.room.game_id, colony_id, clean_colony_name)
         colony = ColonyState(
             colony_id=colony_id,
-            name=name.strip() or f"Colony {len(self.room.colonies) + 1}",
+            name=clean_colony_name,
             size=STARTING_COLONY_ANTS,
             style=style,
             favorite_context=favorite_context,
@@ -550,6 +551,11 @@ class GameHarness:
                 if player.anonymous_id == clean_anonymous_id:
                     if player.name != clean_name:
                         player.name = clean_name
+                        for colony in self.room.colonies.values():
+                            if colony.player_id == player.player_id or (
+                                player.anonymous_id and colony.player_anonymous_id == player.anonymous_id
+                            ):
+                                colony.name = clean_name
                         self.room.add_log(
                             "player_updated",
                             f"{player.name} updated their player name.",

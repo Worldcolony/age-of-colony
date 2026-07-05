@@ -113,7 +113,7 @@ export default function SetupPage() {
       <header className="page-top">
         <button className="icon-btn" aria-label="Back to room" onClick={() => router.back()}>←</button>
         <h1 className="hud-title text-[13px]">Your colony</h1>
-        <span className="status-pill">Room {game.roomCode}</span>
+        <span className="status-pill">Match</span>
       </header>
 
       <section className="mt-6 text-center">

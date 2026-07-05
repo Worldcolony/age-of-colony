@@ -303,7 +303,7 @@ async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
 
 @app.post("/api/games/{game_id}/colonies")
 async def create_colony(game_id: str, payload: CreateColonyRequest, request: Request) -> dict[str, Any]:
-    room = _get_game_or_404(game_id)
+    room = await _get_game_or_restore_404(game_id)
     if not (payload.anonymousId or "").strip():
         require_admin_tool(request)
     try:
@@ -981,7 +981,11 @@ async def game_state(game_id: str) -> dict[str, Any]:
     replay = await _stored_replay_or_none(game_id)
     if replay:
         stored_game = replay["game"]
-        if _stored_game_can_resume_live(stored_game):
+        stored_status = stored_game.get("status")
+        can_restore = stored_status not in {"finished", "stopped"} and (
+            stored_status != "error" or _stored_game_can_resume_live(stored_game)
+        )
+        if can_restore:
             room = _restore_room_from_stored_row(
                 {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
                 events=replay.get("events") or [],

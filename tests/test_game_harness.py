@@ -2169,7 +2169,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(colony_response.status_code, 200)
         game = colony_response.json()
         self.assertTrue(game["players"][0]["ready"])
-        self.assertEqual(game["players"][0]["colonyName"], "Alice Nest")
+        self.assertEqual(game["players"][0]["colonyName"], "Host Alice")
         self.assertEqual(game["colonies"][0]["playerAnonymousId"], "anon_host_alice")
 
         duplicate = client.post(
@@ -2217,6 +2217,40 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(second_game["roomCode"], first_game["roomCode"])
         self.assertEqual({player["name"] for player in second_game["players"]}, {"Alice", "Bob"})
         self.assertEqual(second_game["mode"], "live")
+
+    def test_player_name_controls_linked_colony_name(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": 929293,
+                "participant1": "Mexico",
+                "participant2": "England",
+                "creatorName": "Host Alice",
+                "anonymousId": "anon_name_link",
+            },
+        ).json()
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Different Colony",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": "anon_name_link",
+            },
+        )
+        self.assertEqual(colony_response.status_code, 200)
+        self.assertEqual(colony_response.json()["colonies"][0]["name"], "Host Alice")
+
+        renamed = client.post(
+            f"/api/rooms/{created['roomCode']}/players",
+            json={"name": "Blue Nest", "anonymousId": "anon_name_link"},
+        )
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.json()["players"][0]["name"], "Blue Nest")
+        self.assertEqual(renamed.json()["colonies"][0]["name"], "Blue Nest")
 
     def test_live_room_auto_waits_for_future_kickoff_and_stays_joinable(self):
         client = TestClient(app)

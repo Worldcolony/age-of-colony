@@ -17,18 +17,21 @@ export default function RoomPage() {
   const mf = useStore((s) => s.matchFixture);
   const game = useStore((s) => s.game);
   const setGame = useStore((s) => s.setGame);
+  const setMyColonyId = useStore((s) => s.setMyColonyId);
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [name, setName] = useState(wallet.name || wallet.short || "");
   const [msg, setMsg] = useState("");
   const [joined, setJoined] = useState(false);
+  const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
 
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
   const kickoffLine = fmtKickoffLine(game?.startTime ?? mf?.startTime, game?.startTimeIso ?? mf?.startTimeIso);
   const anonId = typeof window !== "undefined" ? getAnonId() : "";
-  const roomCode = game?.roomCode || code;
+  const roomKey = String(code || "");
+  const roomCode = game?.roomCode || (isRoomCode(roomKey) ? roomKey : "");
 
   const me = useMemo(() => players.find((p) => p.anonymousId === anonId), [players, anonId]);
   const myColony = useMemo(() => game?.colonies?.find((c) => c.playerAnonymousId === anonId), [game?.colonies, anonId]);
@@ -45,17 +48,27 @@ export default function RoomPage() {
       ? "Create a colony to enter this match room."
       : "Ready. The live game starts automatically.";
 
+  function syncGame(g: GameState) {
+    setGame(g);
+    setPlayers(g.players || []);
+    const player = g.players?.find((p) => p.anonymousId === anonId);
+    const colony = g.colonies?.find((c) => c.playerAnonymousId === anonId);
+    if (player) {
+      setJoined(true);
+      setName((current) => current.trim() || player.name);
+    }
+    if (colony) setMyColonyId(colony.colonyId);
+  }
+
   useEffect(() => {
-    api
-      .getRoomByCode(code)
+    const load = isRoomCode(roomKey) ? api.getRoomByCode(roomKey) : api.getGame(roomKey);
+    load
       .then((g) => {
-        setGame(g);
-        setPlayers(g.players || []);
-        if (g.players?.some((p) => p.anonymousId === anonId)) setJoined(true);
+        syncGame(g);
       })
       .catch((e) => setMsg((e as Error).message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code]);
+  }, [roomKey]);
 
   useEffect(() => {
     if (canEnterCockpit && game?.gameId) router.replace(`/cockpit/${game.gameId}`);
@@ -63,9 +76,7 @@ export default function RoomPage() {
 
   useGameStream(game?.gameId ?? null, {
     onState: (g) => {
-      setGame(g);
-      setPlayers(g.players || []);
-      if (g.players?.some((p) => p.anonymousId === anonId)) setJoined(true);
+      syncGame(g);
       if (g.gameId && g.status && RUNNING.has(g.status) && hasLocalColony(g, anonId)) {
         router.replace(`/cockpit/${g.gameId}`);
       }
@@ -73,36 +84,47 @@ export default function RoomPage() {
     onEvent: (e) => { if (e.kind === "player_joined") setMsg(e.message); },
   });
 
-  async function join() {
-    if (!name.trim()) return setMsg("Enter a name.");
+  async function joinAndCreateColony() {
+    const cleanName = (name.trim() || wallet.name || wallet.short || `Colony ${Date.now().toString().slice(-4)}`).slice(0, 32);
+    if (!game?.gameId) return setMsg("Match room is still loading.");
+    setJoining(true);
+    setMsg("");
     try {
-      const g = await api.joinRoomByCode(roomCode, name.trim(), anonId);
-      setGame(g);
-      setPlayers(g.players || []);
-      useStore.getState().setWallet({ name: name.trim() });
+      let g = game;
+      if (!isJoined || me?.name !== cleanName) {
+        g = roomCode
+          ? await api.joinRoomByCode(roomCode, cleanName, anonId)
+          : await api.joinPlayer(game.gameId, cleanName, anonId);
+        syncGame(g);
+      }
+      useStore.getState().setWallet({ name: cleanName });
       setJoined(true);
-      setMsg(`${name.trim()} joined.`);
+
+      if (!g.colonies?.some((c) => c.playerAnonymousId === anonId)) {
+        g = await api.addColony(g.gameId, {
+          name: cleanName,
+          size: 20,
+          style: "balanced",
+          favoriteContext: "momentum",
+          infoNeed: "medium",
+          anonymousId: anonId,
+        });
+      }
+      syncGame(g);
+      setMsg(`${cleanName} is ready.`);
+      if (g.gameId && g.status && RUNNING.has(g.status)) router.replace(`/cockpit/${g.gameId}`);
     } catch (e) {
-      setMsg((e as Error).message);
+      const message = (e as Error).message;
+      if (message.includes("already has a colony") && game?.gameId) {
+        const fresh = await api.getGame(game.gameId);
+        syncGame(fresh);
+        if (fresh.gameId && fresh.status && RUNNING.has(fresh.status)) router.replace(`/cockpit/${fresh.gameId}`);
+      } else {
+        setMsg(message);
+      }
+    } finally {
+      setJoining(false);
     }
-  }
-
-  async function copyCode() {
-    try {
-      await navigator.clipboard.writeText(roomCode);
-      setMsg("Code copied.");
-    } catch {
-      setMsg(roomCode);
-    }
-  }
-
-  async function share() {
-    const text = `Join the Age of Colony match room - ${p1} vs ${p2}`;
-    const url = typeof location !== "undefined" ? location.href : undefined;
-    try {
-      if (navigator.share) await navigator.share({ title: "Age of Colony", text, url });
-      else { await navigator.clipboard.writeText(url ? `${text} ${url}` : text); setMsg("Invite copied."); }
-    } catch { /* cancelled */ }
   }
 
   async function start() {
@@ -124,7 +146,7 @@ export default function RoomPage() {
     <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
       <header className="page-top">
         <button className="icon-btn" aria-label="Back to lobby" onClick={() => router.push("/lobby")}>←</button>
-        <h1 className="hud-title text-[13px]">Room</h1>
+        <h1 className="hud-title text-[13px]">Match</h1>
         <span className="status-pill">{game?.status === "created" ? "Pre-match" : game?.status?.replace("_", " ") || "Room"}</span>
       </header>
 
@@ -137,34 +159,36 @@ export default function RoomPage() {
         <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p2)}</span>
       </section>
 
-      <section className="glass pheromone-line flex flex-col items-center gap-4 p-5 text-center">
-        <div>
-          <p className="text-sm font-bold text-ink-soft">Room code</p>
-          <strong className="font-mono text-5xl tracking-[0.08em] text-gold-deep [text-shadow:2px_2px_0_rgba(90,70,30,0.25)]">{roomCode}</strong>
-          <p className="mt-1 text-sm text-ink-faint">This code opens the shared room for this match.</p>
-        </div>
-        <div className="grid w-full grid-cols-2 gap-3">
-          <button className="btn btn-ghost" onClick={copyCode}>Copy</button>
-          <button className="btn btn-ghost !border-cyan/50 !text-cyan" onClick={share}>Share</button>
-        </div>
-      </section>
+      {!myReady && (
+        <section className="glass pheromone-line flex flex-col gap-4 p-4">
+          <div>
+            <h2 className="font-bold">Enter the match</h2>
+            <p className="mt-1 text-sm text-ink-faint">One name for you and your colony.</p>
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="input"
+              maxLength={32}
+              placeholder={wallet.short || "Colony name"}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <button className="btn btn-primary !w-auto shrink-0 px-5" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
+              {joining ? "Joining..." : "Join match"}
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="glass flex flex-col gap-3 p-4">
         <div className="flex items-center justify-between">
-          <h2 className="font-bold">Players {players.length ? `(${players.filter((p) => p.ready).length}/${players.length})` : ""}</h2>
+          <h2 className="font-bold">Colonies {players.length ? `(${players.filter((p) => p.ready).length}/${players.length})` : ""}</h2>
           {isHost && <span className="status-pill">Host</span>}
         </div>
 
-        {!isJoined && (
-          <div className="flex gap-2">
-            <input className="input" maxLength={32} placeholder={wallet.short || "Your name"} value={name} onChange={(e) => setName(e.target.value)} />
-            <button className="btn btn-primary !w-auto shrink-0 px-5" onClick={join}>Join</button>
-          </div>
-        )}
-
         <div className="flex flex-col divide-y divide-[color:var(--brd-soft)]">
           {players.length === 0 ? (
-            <span className="py-5 text-center text-sm text-ink-faint">No players yet.</span>
+            <span className="py-5 text-center text-sm text-ink-faint">No colonies yet.</span>
           ) : (
             players.map((p) => (
               <div key={p.playerId || p.name} className="flex items-center gap-3 py-3">
@@ -174,7 +198,7 @@ export default function RoomPage() {
                     <strong className="truncate">{p.name}</strong>
                     {p.isHost && <span className="rounded-md border border-gold/50 px-2 py-0.5 text-xs font-bold text-gold">Host</span>}
                   </div>
-                  {p.colonyName && <p className="truncate text-xs text-ink-faint">{p.colonyName}</p>}
+                  {p.colonyName && p.colonyName !== p.name && <p className="truncate text-xs text-ink-faint">{p.colonyName}</p>}
                 </div>
                 <span className={`text-sm font-bold ${p.ready ? "text-green" : "text-rust"}`}>
                   {p.ready ? "ready" : "needs colony"}
@@ -189,11 +213,9 @@ export default function RoomPage() {
 
       <div className="bottom-action">
         <div className="bottom-action-inner">
-          {!isJoined ? (
-            <button className="btn btn-primary" onClick={join}>Join room</button>
-          ) : !myReady ? (
-            <button className="btn btn-primary" disabled={!game?.gameId} onClick={() => router.push(`/setup?room=${encodeURIComponent(roomCode)}`)}>
-              Create my colony
+          {!myReady ? (
+            <button className="btn btn-primary" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
+              {joining ? "Joining..." : "Join match"}
             </button>
           ) : game?.gameId && game.status && RUNNING.has(game.status) ? (
             <>
@@ -226,4 +248,8 @@ function hasLocalColony(game: GameState, anonId: string): boolean {
     game.players?.some((p) => p.anonymousId === anonId && p.ready)
     || game.colonies?.some((c) => c.playerAnonymousId === anonId),
   );
+}
+
+function isRoomCode(value: string): boolean {
+  return /^\d{6}$/.test(value);
 }

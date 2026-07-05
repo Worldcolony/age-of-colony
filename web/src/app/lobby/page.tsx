@@ -17,8 +17,6 @@ export default function LobbyPage() {
   const [featured, setFeatured] = useState<{ f: Fixture; status?: string } | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showJoin, setShowJoin] = useState(false);
-  const [code, setCode] = useState("");
   const [err, setErr] = useState("");
   const [loadErr, setLoadErr] = useState("");
 
@@ -77,23 +75,10 @@ export default function LobbyPage() {
         startTime: f.startTime ?? null,
         startTimeIso: f.startTimeIso ?? null,
         anonymousId: getAnonId(),
-        creatorName: wallet.name || wallet.short || undefined,
       });
-      router.push(`/room/${game.roomCode || game.gameId}`);
+      router.push(`/room/${game.gameId}`);
     } catch (e) {
       setErr((e as Error).message);
-    }
-  }
-
-  async function joinByCode() {
-    const raw = code.replace(/\D/g, "").slice(0, 6);
-    if (raw.length !== 6) return setErr("Enter the 6-digit room code.");
-    try {
-      const game = await api.getRoomByCode(raw);
-      setMatchFixture({ fixtureId: game.fixtureId!, participant1: game.participant1, participant2: game.participant2 });
-      router.push(`/room/${game.roomCode || raw}`);
-    } catch (e) {
-      setErr("Room not found: " + (e as Error).message);
     }
   }
 
@@ -121,28 +106,6 @@ export default function LobbyPage() {
 
       {err && <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
 
-      {showJoin && (
-        <div className="glass flex flex-col gap-3 p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-bold">Join with code</h2>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-ink-faint">6 digits</span>
-          </div>
-          <div className="flex gap-2">
-            <input
-              className="input text-center font-mono text-xl tracking-[0.45em]"
-              inputMode="numeric"
-              maxLength={6}
-              placeholder="------"
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-            />
-            <button className="btn btn-primary !w-auto shrink-0 px-5" disabled={code.length !== 6} onClick={joinByCode}>
-              Join
-            </button>
-          </div>
-        </div>
-      )}
-
       {loading ? (
         <div className="glass grid h-28 place-items-center p-4 text-ink-faint">Loading matches...</div>
       ) : loadErr ? (
@@ -161,13 +124,6 @@ export default function LobbyPage() {
         </div>
       )}
 
-      <div className="bottom-action">
-        <div className="bottom-action-inner">
-          <button className="quiet-link py-2 text-base" onClick={() => setShowJoin((v) => !v)}>
-            {showJoin ? "Hide code entry" : "Join with code"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
