@@ -46,11 +46,12 @@ INFO_NEED_ALIASES = {
 }
 
 RISK_RULES: dict[str, dict[str, float]] = {
-    "safe": {"multiplier": 1.3, "death_rate": 0.03, "wound_rate": 0.16, "larvae_threshold": 50},
-    "risky": {"multiplier": 4.0, "death_rate": 0.10, "wound_rate": 0.24, "larvae_threshold": 25},
-    "wild": {"multiplier": 7.0, "death_rate": 0.20, "wound_rate": 0.30, "larvae_threshold": 18},
-    "chaos": {"multiplier": 10.0, "death_rate": 0.34, "wound_rate": 0.34, "larvae_threshold": 15},
+    "safe": {"multiplier": 1.3},
+    "risky": {"multiplier": 4.0},
+    "wild": {"multiplier": 7.0},
+    "chaos": {"multiplier": 10.0},
 }
+RESOURCE_LOSS_MULTIPLIER = {"safe": 1.0, "risky": 2.0, "wild": 3.0, "chaos": 4.0}
 
 FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
@@ -736,10 +737,6 @@ class GameHarness:
             )
             return
 
-        for ant_id in prediction.ant_ids:
-            ant = find_ant(colony, ant_id)
-            if ant:
-                ant.engaged_prediction_ids.add(prediction.prediction_id)
         self.room.predictions[prediction.prediction_id] = prediction
         self.room.add_log(
             "prediction",
@@ -1055,16 +1052,12 @@ class GameHarness:
         for ant_id in prediction.ant_ids:
             ant = find_ant(colony, ant_id)
             if ant:
-                ant.engaged_prediction_ids.discard(prediction.prediction_id)
                 ant.memory.attempts_by_context[opportunity.context] = ant.memory.attempts_by_context.get(opportunity.context, 0) + 1
 
         stake = len(prediction.ant_ids)
         if win:
             food_gain = int(round(stake * prediction.option.multiplier))
-            larvae_gain = int(food_gain // RISK_RULES[prediction.option.risk]["larvae_threshold"])
             colony.food += food_gain
-            colony.larvae += larvae_gain
-            colony.larvae_ready_events.extend([self.room.event_index + LARVAE_INCUBATION_EVENTS] * larvae_gain)
             colony.memory.wins += 1
             colony.memory.food_net += food_gain
             colony.memory.context_wins[opportunity.context] = colony.memory.context_wins.get(opportunity.context, 0) + 1
@@ -1076,29 +1069,22 @@ class GameHarness:
                     ant.memory.recent_losses = 0
                     if prediction.info_bought:
                         ant.memory.info_successes += 1
-            message = f"Result {colony.name}: +{food_gain} food, +{larvae_gain} larvae on {prediction.option.label}."
-            data = {"win": True, "food": food_gain, "larvae": larvae_gain, "larvaeHatchInEvents": LARVAE_INCUBATION_EVENTS, "reason": reason}
+            message = f"Result {colony.name}: +{food_gain} resources on {prediction.option.label}."
+            data = {"win": True, "food": food_gain, "resourceDelta": food_gain, "reason": reason}
         else:
-            rules = RISK_RULES[prediction.option.risk]
-            dead_count = min(stake, int(stake * rules["death_rate"]))
-            if prediction.option.risk in {"wild", "chaos"} and stake >= 4 and dead_count == 0:
-                dead_count = 1
-            wound_count = min(stake - dead_count, int(math.ceil(stake * rules["wound_rate"])))
+            food_loss = max(1, int(round(stake * RESOURCE_LOSS_MULTIPLIER[prediction.option.risk])))
+            actual_loss = min(colony.food, food_loss)
+            colony.food -= actual_loss
+            colony.memory.food_net -= actual_loss
             selected = [find_ant(colony, ant_id) for ant_id in prediction.ant_ids]
             selected = [ant for ant in selected if ant is not None]
-            for ant in selected[:dead_count]:
-                ant.alive = False
-                ant.engaged_prediction_ids.clear()
-            for ant in selected[dead_count : dead_count + wound_count]:
-                ant.wounded_until_event = self.room.event_index + 3
-                ant.engaged_prediction_ids.discard(prediction.prediction_id)
             for ant in selected:
                 ant.influence = clamp(ant.influence * 0.94, 0.35, 2.25)
                 ant.memory.losses_by_context[opportunity.context] = ant.memory.losses_by_context.get(opportunity.context, 0) + 1
                 ant.memory.recent_losses += 1
             colony.memory.losses += 1
-            message = f"Result {colony.name}: {dead_count} dead, {wound_count} wounded on {prediction.option.label}."
-            data = {"win": False, "dead": dead_count, "wounded": wound_count, "reason": reason}
+            message = f"Result {colony.name}: -{actual_loss} resources on {prediction.option.label}."
+            data = {"win": False, "food": -actual_loss, "resourceDelta": -actual_loss, "resourceLoss": actual_loss, "reason": reason}
 
         self.room.add_log(
             "settlement",
@@ -1145,10 +1131,6 @@ class GameHarness:
         if not colony:
             return
         prediction.resolved = True
-        for ant_id in prediction.ant_ids:
-            ant = find_ant(colony, ant_id)
-            if ant:
-                ant.engaged_prediction_ids.discard(prediction.prediction_id)
         self.room.add_log(
             "void",
             f"{colony.name}: prediction voided on {prediction.option.label}.",
@@ -1273,7 +1255,7 @@ def colony_ant_counts(colony: ColonyState, event_index: int) -> dict[str, int]:
     return {
         "aliveCount": len(alive_ants),
         "activeCount": len(colony.active_ants(event_index)),
-        "engagedCount": len([ant for ant in alive_ants if ant.engaged_prediction_ids]),
+        "engagedCount": 0,
         "woundedCount": len([ant for ant in alive_ants if ant.wounded_until_event > event_index]),
     }
 
@@ -1575,8 +1557,8 @@ def ant_agent_context(ant: AntState, opportunity: Opportunity) -> dict[str, Any]
         "antId": ant.ant_id,
         "archetype": ant.archetype,
         "objective": (
-            "Help your colony win across the match: produce net food, avoid useless deaths, "
-            "grow when the risk is worth it, and learn from your own results."
+            "Help your colony win across the match: earn resources, avoid bad resource losses, "
+            "take good multipliers when the risk is worth it, and learn from your own results."
         ),
         "personality": {
             "riskAppetite": round(ant.risk_appetite, 3),
@@ -2251,7 +2233,7 @@ def agent_squad_context(colony: ColonyState, event_index: int) -> list[dict[str,
         {
             "squad": "survival",
             "ants": max(1, archetypes.get("cautious", 0)),
-            "objective": "Preserve food and population when the colony is fragile.",
+            "objective": "Preserve resources when the colony is fragile.",
         },
         {
             "squad": "chaos",
@@ -2282,7 +2264,6 @@ def describe_ant_agent_vote(colony: ColonyState, vote: dict[str, Any]) -> str:
     answered_count = int(vote.get("agentDecisionCount", 0) or 0)
     active_count = int(vote.get("activeCount", 0) or 0)
     alive_count = vote.get("aliveCount")
-    engaged_count = int(vote.get("engagedCount", 0) or 0)
     wounded_count = int(vote.get("woundedCount", 0) or 0)
     answer_label = (
         f"{answered_count} voting ants answered"
@@ -2292,8 +2273,6 @@ def describe_ant_agent_vote(colony: ColonyState, vote: dict[str, Any]) -> str:
     status_parts = [f"{coverage}%"]
     if alive_count is not None:
         status_parts.append(f"{alive_count} alive")
-    if engaged_count:
-        status_parts.append(f"{engaged_count} at risk")
     if wounded_count:
         status_parts.append(f"{wounded_count} wounded")
     return f"DeepSeek vote from {colony.name}: {answer_label} ({'; '.join(status_parts)}) on {proposition}: {format_market_vote_summary(vote)}."

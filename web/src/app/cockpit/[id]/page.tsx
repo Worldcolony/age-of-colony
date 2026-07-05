@@ -593,8 +593,10 @@ function SettledRail({
             )}
             {!compact && (
               <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
-                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-green">{summary.food}</b>
-                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-rust">{summary.dead}</b>
+                <b className={`rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 ${summary.resourceDelta < 0 ? "text-rust" : "text-green"}`}>
+                  {signedValue(summary.resourceDelta)}
+                </b>
+                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-rust">{summary.losses}</b>
                 <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-ink">{summary.voided}</b>
               </span>
             )}
@@ -666,8 +668,12 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
       <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
 
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <PulseMetric label="Food" value={summary.food > 0 ? `+${summary.food}` : 0} tone={summary.food > 0 ? "green" : undefined} />
-        <PulseMetric label="Dead" value={summary.dead} />
+        <PulseMetric
+          label="Resources"
+          value={signedValue(summary.resourceDelta)}
+          tone={summary.resourceDelta >= 0 ? "green" : undefined}
+        />
+        <PulseMetric label="Losses" value={summary.losses} />
         <PulseMetric label="Void" value={summary.voided} />
       </div>
 
@@ -860,11 +866,10 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
 function RankCard({ mine, rank, spectator }: { mine?: Colony; rank: number; spectator?: boolean }) {
   if (!mine) return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete.</div>;
   return (
-    <section className="glass grid min-w-0 grid-cols-4 gap-1 p-3 text-center">
+    <section className="glass grid min-w-0 grid-cols-3 gap-1 p-3 text-center">
       <Vital label="Rank" value={`#${rank}`} tone="gold" />
       <Vital label={spectator ? "Lead ants" : "My ants"} value={mine.antsAlive} />
-      <Vital label="Food" value={mine.food} tone="green" />
-      <Vital label="Larvae" value={mine.larvae} />
+      <Vital label="Resources" value={mine.food} tone="green" />
     </section>
   );
 }
@@ -921,11 +926,10 @@ function ColonyRoster({
                 {active && <span className="status-pill">active</span>}
               </div>
 
-              <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <MiniStat label="Score" value={Math.round(colony.score ?? 0)} tone="gold" />
                 <MiniStat label="Ants" value={colony.antsAlive ?? 0} />
-                <MiniStat label="Food" value={colony.food ?? 0} tone="green" />
-                <MiniStat label="Larvae" value={colony.larvae ?? 0} />
+                <MiniStat label="Resources" value={colony.food ?? 0} tone="green" />
               </div>
             </div>
           );
@@ -1094,8 +1098,7 @@ function pendingAntCount(market: MarketModel, answered: number) {
 }
 
 function settlementSummary(market: MarketModel) {
-  let food = 0;
-  let dead = 0;
+  let resourceDelta = 0;
   let voided = 0;
   let wins = 0;
   let losses = 0;
@@ -1103,8 +1106,7 @@ function settlementSummary(market: MarketModel) {
   for (const event of market.settlements) {
     if (event.data?.win) wins += 1;
     else losses += 1;
-    food += Number(event.data?.food ?? 0);
-    dead += Number(event.data?.dead ?? 0);
+    resourceDelta += Number(event.data?.resourceDelta ?? event.data?.food ?? 0);
   }
   for (const event of market.voids) voided += Number(event.data?.ants ?? 0) || 1;
 
@@ -1114,7 +1116,7 @@ function settlementSummary(market: MarketModel) {
     : label === "void"
       ? "border-ink-faint/50 text-ink-faint"
       : "border-gold/50 text-gold";
-  return { food, dead, voided, wins, losses, label, tone };
+  return { resourceDelta, voided, wins, losses, label, tone };
 }
 
 function marketOutcomeSummary(market: MarketModel): MarketOutcome {
@@ -1305,23 +1307,20 @@ function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "set
   const settlement = eventData(activity.settlementEvent);
   const voided = eventData(activity.voidEvent);
   if (activity.settlementEvent) {
+    const resourceDelta = Number(settlement?.resourceDelta ?? settlement?.food ?? 0);
     if (settlement?.win) {
-      const food = Number(settlement.food ?? 0);
-      const larvae = Number(settlement.larvae ?? 0);
       return {
         badge: "won",
-        value: food > 0 ? `+${food} food` : "Won",
-        detail: larvae > 0 ? `+${larvae} larvae` : eventOptionLabel(activity.settlementEvent) || "resolved",
+        value: resourceDelta > 0 ? `${signedValue(resourceDelta)} resources` : "Won",
+        detail: eventOptionLabel(activity.settlementEvent) || "resolved",
         tone: "!border-green/50 !text-green",
         cellTone: "green" as const,
       };
     }
-    const dead = Number(settlement?.dead ?? 0);
-    const wounded = Number(settlement?.wounded ?? 0);
     return {
       badge: "lost",
-      value: dead > 0 ? `${dead} dead` : "Lost",
-      detail: wounded > 0 ? `${wounded} wounded` : eventOptionLabel(activity.settlementEvent) || "resolved",
+      value: resourceDelta < 0 ? `${signedValue(resourceDelta)} resources` : "Lost",
+      detail: eventOptionLabel(activity.settlementEvent) || "resolved",
       tone: "!border-rust/50 !text-rust",
       cellTone: "rust" as const,
     };
@@ -1371,6 +1370,8 @@ function eventData(event?: GameEvent) {
         larvae?: number;
         option?: { label?: string; optionId?: string };
         reason?: string;
+        resourceDelta?: number;
+        resourceLoss?: number;
         resolvedOutcome?: { label?: string; detail?: string };
         win?: boolean;
         wounded?: number;
@@ -1381,6 +1382,10 @@ function eventData(event?: GameEvent) {
 function eventOptionLabel(event?: GameEvent) {
   const option = eventData(event)?.option;
   return option?.label || option?.optionId || "";
+}
+
+function signedValue(value: number): string {
+  return value > 0 ? `+${value}` : String(value);
 }
 
 function firstReason(events: GameEvent[]) {

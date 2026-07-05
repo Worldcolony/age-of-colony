@@ -1,4 +1,5 @@
 import unittest
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -22,7 +23,6 @@ from app.main import (
 from app.game.harness import (
     GameHarness,
     GameManager,
-    LARVAE_INCUBATION_EVENTS,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     build_info_packet,
@@ -433,8 +433,36 @@ class GameHarnessTest(unittest.TestCase):
         self.assertNotIn("ant_0002", active_ids)
         self.assertEqual(public["antsAlive"], STARTING_COLONY_ANTS - 1)
         self.assertEqual(public["antsActive"], STARTING_COLONY_ANTS - 2)
-        self.assertEqual(public["antsEngaged"], 1)
+        self.assertEqual(public["antsEngaged"], 0)
         self.assertEqual(public["antsWounded"], 1)
+
+    def test_same_ant_can_vote_on_multiple_markets(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Multi Market Nest", 20, "balanced", "momentum", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "highlights": [],
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+
+        predictions = [prediction for prediction in room.predictions.values() if prediction.colony_id == colony.colony_id]
+        self.assertGreaterEqual(len(predictions), 2)
+        ant_usage = Counter(ant_id for prediction in predictions for ant_id in prediction.ant_ids)
+        self.assertTrue(any(count > 1 for count in ant_usage.values()))
+        self.assertEqual(colony.public_state(room.event_index)["antsEngaged"], 0)
 
     def test_legacy_french_config_values_are_normalized(self):
         _, harness = self.make_room()
@@ -1050,7 +1078,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual([opportunity.opportunity_id for opportunity in foul_opportunities], [first_foul_id])
         self.assertTrue(open_foul_predictions)
 
-    def test_successful_prediction_adds_food_and_larvae(self):
+    def test_successful_prediction_adds_resources_only(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
@@ -1095,15 +1123,20 @@ class GameHarnessTest(unittest.TestCase):
         )
 
         self.assertGreaterEqual(colony.memory.attempts, 1)
-        self.assertGreater(colony.food + colony.memory.losses, starting_food - 1)
-        self.assertTrue(any(event.kind == "settlement" for event in room.log))
+        self.assertGreater(colony.food, starting_food)
+        self.assertEqual(colony.larvae, 0)
+        settlement = next(event for event in room.log if event.kind == "settlement")
+        self.assertTrue(settlement.data.get("win"))
+        self.assertGreater(settlement.data.get("resourceDelta"), 0)
+        self.assertNotIn("dead", settlement.data)
+        self.assertNotIn("wounded", settlement.data)
 
-    def test_larvae_hatch_into_new_ants_after_incubation(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+    def test_losing_prediction_removes_resources_only(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
         colony = harness.add_colony(
-            name="Nursery Nest",
+            name="Resource Risk Nest",
             size=50,
             style="aggressive",
             favorite_context="momentum",
@@ -1125,6 +1158,7 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - France",
             }
         )
+        starting_food = colony.food
         harness.process_event(
             {
                 "fixtureId": 42,
@@ -1141,26 +1175,16 @@ class GameHarnessTest(unittest.TestCase):
             }
         )
 
-        self.assertGreater(colony.larvae, 0)
-        self.assertEqual(len(colony.ants), colony.size)
-
-        for offset in range(LARVAE_INCUBATION_EVENTS + 1):
-            harness.process_event(
-                {
-                    "fixtureId": 42,
-                    "seq": 3 + offset,
-                    "action": "clock",
-                    "highlights": [],
-                    "minute": 11 + offset // 6,
-                    "clockSeconds": 660 + offset * 10,
-                    "description": "Clock tick",
-                }
-            )
-
         public_state = colony.public_state(room.event_index)
-        self.assertGreater(len(colony.ants), colony.size)
-        self.assertGreater(public_state["antsBorn"], 0)
-        self.assertTrue(any(event.kind == "hatch" for event in room.log))
+        settlement = next(event for event in room.log if event.kind == "settlement")
+        self.assertFalse(settlement.data.get("win"))
+        self.assertLess(colony.food, starting_food)
+        self.assertLess(settlement.data.get("resourceDelta"), 0)
+        self.assertEqual(public_state["antsAlive"], STARTING_COLONY_ANTS)
+        self.assertEqual(public_state["antsDead"], 0)
+        self.assertEqual(public_state["antsWounded"], 0)
+        self.assertNotIn("dead", settlement.data)
+        self.assertNotIn("wounded", settlement.data)
 
     def test_unconfirmed_goal_does_not_resolve_pending_prediction(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
