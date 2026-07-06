@@ -179,7 +179,7 @@ export default function RoomPage() {
       type="button"
       className="g-cta"
       disabled={joining || !game?.gameId}
-      onClick={() => (sheetOpen ? joinAndCreateColony() : setSheetOpen(true))}
+      onClick={joinAndCreateColony}
     >
       {joining ? "Joining..." : "⚔️ Join match"}
     </button>
@@ -239,6 +239,9 @@ export default function RoomPage() {
           <Field label="Risk level">
             <Segmented options={INFO} value={info} onChange={setInfo} />
           </Field>
+          <button className="btn btn-primary" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
+            {joining ? "Joining..." : "⚔️ Found colony & join"}
+          </button>
         </div>
       )}
 
