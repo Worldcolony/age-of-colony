@@ -451,6 +451,7 @@ def normalize_score_record(
         "ts": pick(payload, "ts", "Ts"),
         "tsIso": epoch_to_iso(pick(payload, "ts", "Ts")),
         "gameState": pick(payload, "gameState", "GameState"),
+        "statusId": pick(payload, "statusId", "StatusId"),
         "action": action,
         "type": event_type,
         "outcome": outcome,

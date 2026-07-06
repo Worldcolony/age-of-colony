@@ -162,6 +162,8 @@ export default function CockpitPage() {
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
   const status = game?.status ?? "";
+  const txlineWaiting = isTxlineWaiting(game);
+  const txlineStateLabel = matchStateLabel(game);
   const markets = useMemo(() => buildMarkets(game?.activeOpportunities ?? [], events), [game?.activeOpportunities, events]);
   const openMarkets = markets.filter((market) => market.status === "open");
   const settledMarkets = markets.filter((market) => market.status !== "open" && (market.settlements.length || market.voids.length));
@@ -201,7 +203,7 @@ export default function CockpitPage() {
               <div className="min-w-0 flex-1 text-center">
                 <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
                 <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
-                <p className="truncate font-mono text-xs text-cyan">{game?.match?.possessionLabel || "TXLine live"}</p>
+                <p className="truncate font-mono text-xs text-cyan">{game?.match?.possessionLabel || txlineStateLabel}</p>
               </div>
               <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p2)}</span>
             </div>
@@ -254,6 +256,8 @@ export default function CockpitPage() {
                   settledMarkets={settledMarkets}
                   colony={mine}
                   colonyLabel={colonyFocusLabel}
+                  waitingForKickoff={txlineWaiting}
+                  matchStateLabel={txlineStateLabel}
                   onSelectMarket={setSelectedMarketId}
                   onSelectSettled={(marketId) => {
                     setSelectedSettledId(marketId);
@@ -392,6 +396,8 @@ function LiveTab({
   settledMarkets,
   colony,
   colonyLabel,
+  waitingForKickoff,
+  matchStateLabel,
   onSelectMarket,
   onSelectSettled,
 }: {
@@ -402,6 +408,8 @@ function LiveTab({
   settledMarkets: MarketModel[];
   colony?: Colony;
   colonyLabel: string;
+  waitingForKickoff: boolean;
+  matchStateLabel: string;
   onSelectMarket: (marketId: string) => void;
   onSelectSettled: (marketId: string) => void;
 }) {
@@ -419,7 +427,10 @@ function LiveTab({
           {selectedMarket && <FocusedMarketPanel market={selectedMarket} colony={colony} colonyLabel={colonyLabel} />}
         </>
       ) : (
-        <EmptyState title="No market open" body="The next prediction window will appear here." />
+        <EmptyState
+          title={waitingForKickoff ? "Waiting for kickoff" : "No market open"}
+          body={waitingForKickoff ? `TXLine reports ${matchStateLabel}. Markets open once the match is live.` : "The next prediction window will appear here."}
+        />
       )}
 
       {settledMarkets.length > 0 && (
@@ -501,6 +512,26 @@ function FeedTab({ feedRows, onOpenRanks }: { feedRows: GameEvent[]; onOpenRanks
       </div>
     </div>
   );
+}
+
+function isTxlineWaiting(game?: GameState | null) {
+  const state = normalizeMatchState(game?.match?.gameState);
+  const statusId = Number(game?.match?.statusId);
+  return state === "scheduled" || state === "pre_match" || state === "prematch" || statusId === 1;
+}
+
+function matchStateLabel(game?: GameState | null) {
+  const state = game?.match?.gameState;
+  if (state !== undefined && state !== null && String(state).trim()) {
+    return String(state).replace(/_/g, " ");
+  }
+  const statusId = game?.match?.statusId;
+  if (statusId !== undefined && statusId !== null) return `TXLine status ${statusId}`;
+  return "TXLine live";
+}
+
+function normalizeMatchState(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/[-\s]+/g, "_");
 }
 
 function CompactStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "cyan" }) {

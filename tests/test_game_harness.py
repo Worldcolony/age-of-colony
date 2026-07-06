@@ -11,6 +11,7 @@ from app.main import (
     ADMIN_TOKEN_HEADER,
     app,
     _finish_live_game,
+    _live_timeline_active,
     _live_timeline_finished,
     _merge_restored_events,
     _open_live_baseline_markets,
@@ -2570,6 +2571,33 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual({opportunity.context for opportunity in room.opportunities.values()}, {"goal_next_10", "next_goal_team", "next_foul"})
         self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 3)
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("source") == "baseline" for event in room.log))
+
+    def test_scheduled_txline_state_waits_before_live_markets(self):
+        scheduled_timeline = {
+            "events": [
+                {
+                    "fixtureId": 42,
+                    "seq": 1,
+                    "gameState": "scheduled",
+                    "statusId": 1,
+                    "action": "lineups",
+                }
+            ]
+        }
+        active_timeline = {
+            "events": [
+                {
+                    "fixtureId": 42,
+                    "seq": 2,
+                    "gameState": "inplay",
+                    "statusId": 2,
+                    "action": "connected",
+                }
+            ]
+        }
+
+        self.assertFalse(_live_timeline_active(scheduled_timeline))
+        self.assertTrue(_live_timeline_active(active_timeline))
 
     def test_live_catchup_resets_stale_score_when_no_official_score_exists(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))

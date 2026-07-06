@@ -335,10 +335,16 @@ class MatchState:
     participant1: str | None = None
     participant2: str | None = None
     score: dict[str, Any] | None = None
+    game_state: Any = None
+    status_id: Any = None
     possession_label: str | None = None
     recent_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=30))
 
     def update(self, event: dict[str, Any]) -> None:
+        if event.get("gameState") is not None:
+            self.game_state = event.get("gameState")
+        if event.get("statusId") is not None:
+            self.status_id = event.get("statusId")
         if event.get("score") and (event["score"].get("participant1") is not None or event["score"].get("participant2") is not None):
             current = self.score or {"participant1": 0, "participant2": 0}
             self.score = {
@@ -433,6 +439,8 @@ class GameRoom:
             "players": [self._public_player_state(player, player_colonies) for player in self.players],
             "match": {
                 "score": self.match_state.score if self.match_state else None,
+                "gameState": self.match_state.game_state if self.match_state else None,
+                "statusId": self.match_state.status_id if self.match_state else None,
                 "possessionLabel": self.match_state.possession_label if self.match_state else None,
             },
             "colonies": colonies,

@@ -89,7 +89,7 @@ export interface GameState {
   mode?: string | null;
   eventIndex?: number;
   players: Player[];
-  match?: { score?: MatchScore | null; possessionLabel?: string | null };
+  match?: { score?: MatchScore | null; gameState?: string | number | null; statusId?: string | number | null; possessionLabel?: string | null };
   colonies: Colony[];
   activeOpportunities: Opportunity[];
   agentUsage?: unknown;

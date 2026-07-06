@@ -74,6 +74,8 @@ AUTORUN_COLONIES = (
 )
 LIVE_SCORE_POLL_SECONDS = 2.5
 LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
+LIVE_WAITING_GAME_STATES = {"scheduled", "pre_match", "prematch", "not_started", "notstarted", "pre_game", "pregame"}
+LIVE_WAITING_STATUS_IDS = {1}
 REPLAY_MAX_DELAY_SECONDS = 8.0
 ADMIN_TOKEN_HEADER = "x-aoc-admin-token"
 ADMIN_SESSION_COOKIE = "aoc_admin_session"
@@ -1813,6 +1815,8 @@ async def _run_live_game(game_id: str) -> None:
     harness = game_manager.harness(game_id)
     seen_event_keys: set[tuple[Any, ...]] = set()
     first_batch = True
+    baseline_opened = False
+    waiting_logged = False
     poll_failures = 0
     try:
         while True:
@@ -1838,7 +1842,13 @@ async def _run_live_game(game_id: str) -> None:
                     await asyncio.to_thread(_finish_live_game, harness)
                     await _sync_room_to_supabase_async(room)
                     break
-                baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
+                baseline_count = 0
+                if _live_timeline_active(timeline):
+                    baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
+                    baseline_opened = baseline_opened or bool(baseline_count)
+                elif not waiting_logged:
+                    _log_live_waiting_for_kickoff(room, timeline)
+                    waiting_logged = True
                 if catchup_count or baseline_count:
                     await _sync_room_to_supabase_async(room)
                 first_batch = False
@@ -1857,6 +1867,11 @@ async def _run_live_game(game_id: str) -> None:
                 await asyncio.to_thread(_finish_live_game, harness)
                 await _sync_room_to_supabase_async(room)
                 break
+            if not baseline_opened and _live_timeline_active(timeline):
+                baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
+                baseline_opened = baseline_opened or bool(baseline_count)
+                if baseline_count:
+                    await _sync_room_to_supabase_async(room)
             first_batch = False
             await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
     except asyncio.CancelledError:
@@ -1934,6 +1949,62 @@ def _prime_live_catchup(
             },
         )
     return len(catchup_events)
+
+
+def _live_timeline_active(timeline: dict[str, Any] | None) -> bool:
+    status = _live_timeline_status(timeline)
+    state = _normalize_live_game_state(status.get("gameState"))
+    if state in LIVE_WAITING_GAME_STATES:
+        return False
+    status_id = _safe_int(status.get("statusId"))
+    if status_id in LIVE_WAITING_STATUS_IDS:
+        return False
+    if state:
+        return True
+    return status_id is not None and status_id not in LIVE_FINAL_STATUS_IDS
+
+
+def _log_live_waiting_for_kickoff(room: GameRoom, timeline: dict[str, Any] | None) -> None:
+    status = _live_timeline_status(timeline)
+    state = status.get("gameState") or "scheduled"
+    room.add_log(
+        "live_sync",
+        f"TXLine still reports the fixture as {state}; waiting before opening markets.",
+        {
+            "fixtureId": room.fixture_id,
+            "processedAsMarkets": False,
+            "source": (timeline or {}).get("resolvedSource"),
+            "gameState": status.get("gameState"),
+            "statusId": status.get("statusId"),
+        },
+    )
+
+
+def _live_timeline_status(timeline: dict[str, Any] | None) -> dict[str, Any]:
+    for event in reversed((timeline or {}).get("events") or []):
+        if not isinstance(event, dict):
+            continue
+        game_state = event.get("gameState")
+        status_id = event.get("statusId")
+        raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
+        if game_state is None:
+            game_state = raw.get("GameState") or raw.get("gameState")
+        if status_id is None:
+            status_id = raw.get("StatusId") or raw.get("statusId")
+        if game_state is not None or status_id is not None:
+            return {"gameState": game_state, "statusId": status_id}
+    return {}
+
+
+def _normalize_live_game_state(value: Any) -> str:
+    return str(value or "").strip().casefold().replace("-", "_").replace(" ", "_")
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, Any]] | None = None) -> int:
