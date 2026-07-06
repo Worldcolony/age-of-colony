@@ -628,6 +628,13 @@ class GameHarness:
             self.process_event(event)
         self.finish_game(mode="replay")
 
+    def open_baseline_markets(self, source_event: dict[str, Any] | None = None, *, reason: str = "live_baseline") -> int:
+        if not self.room.colonies:
+            return 0
+        before_log_count = len(self.room.log)
+        self.process_event(build_baseline_market_event(self.room, source_event, reason=reason))
+        return len([event for event in self.room.log[before_log_count:] if event.kind == "opportunity"])
+
     def finish_game(self, *, mode: str = "replay") -> None:
         if self.room.status == "finished":
             return
@@ -1351,6 +1358,30 @@ def build_opportunity(event: dict[str, Any], event_index: int, match_state: Matc
     return opportunities[0] if opportunities else None
 
 
+def build_baseline_market_event(room: GameRoom, source_event: dict[str, Any] | None = None, *, reason: str = "live_baseline") -> dict[str, Any]:
+    source = source_event or {}
+    event: dict[str, Any] = {
+        "fixtureId": room.fixture_id,
+        "seq": f"{reason}_{room.event_index + 1}",
+        "action": "market_tick",
+        "type": "market_tick",
+        "highlights": ["market_tick"],
+        "minute": source.get("minute"),
+        "clockSeconds": source.get("clockSeconds"),
+        "description": "Live market refresh",
+        "synthetic": True,
+        "reason": reason,
+    }
+    for key in ("participant", "participantLabel", "possession", "possessionLabel"):
+        if source.get(key) is not None:
+            event[key] = source[key]
+    if source.get("score") is not None:
+        event["score"] = source.get("score")
+    elif room.match_state and room.match_state.score:
+        event["score"] = dict(room.match_state.score)
+    return event
+
+
 def build_opportunities(event: dict[str, Any], event_index: int, match_state: MatchState | None = None) -> list[Opportunity]:
     contexts = event_contexts(event)
     if not contexts:
@@ -1396,6 +1427,8 @@ def event_context(event: dict[str, Any]) -> str | None:
 
 def event_contexts(event: dict[str, Any]) -> list[str]:
     flags = set(event.get("highlights") or [])
+    if event.get("synthetic") and (_event_token(event.get("action")) == "market_tick" or "market_tick" in flags):
+        return ["goal_next_10", "next_goal_team", "next_foul"]
     if _event_is_penalty_award(event):
         targets = event_targets(event)
         if targets.intersection({"goal", "miss", "saved", "cancel"}):

@@ -1832,12 +1832,15 @@ async def _run_live_game(game_id: str) -> None:
             timeline_events = timeline["events"]
             if first_batch:
                 catchup_count = _prime_live_catchup(room, seen_event_keys, timeline_events, timeline)
-                if catchup_count:
-                    await _sync_room_to_supabase_async(room)
                 if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
+                    if catchup_count:
+                        await _sync_room_to_supabase_async(room)
                     await asyncio.to_thread(_finish_live_game, harness)
                     await _sync_room_to_supabase_async(room)
                     break
+                baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
+                if catchup_count or baseline_count:
+                    await _sync_room_to_supabase_async(room)
                 first_batch = False
                 await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
                 continue
@@ -1931,6 +1934,32 @@ def _prime_live_catchup(
             },
         )
     return len(catchup_events)
+
+
+def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, Any]] | None = None) -> int:
+    room = harness.room
+    if any(not prediction.resolved for prediction in room.predictions.values()):
+        return 0
+    latest_event = _latest_fixture_event(room, timeline_events or [])
+    try:
+        opened = harness.open_baseline_markets(latest_event, reason="live_baseline")
+    except Exception as exc:
+        room.add_log("game_error", f"Live baseline markets skipped: {exc}", _error_log_data(exc))
+        return 0
+    if opened:
+        room.add_log(
+            "live_sync",
+            f"Opened {opened} live market(s) from the current match state.",
+            {"fixtureId": room.fixture_id, "processedAsMarkets": True, "source": "baseline"},
+        )
+    return opened
+
+
+def _latest_fixture_event(room: GameRoom, events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if str(event.get("fixtureId")) == str(room.fixture_id):
+            return event
+    return None
 
 
 def _timeline_score_or_zero(timeline: dict[str, Any] | None) -> dict[str, Any]:

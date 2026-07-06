@@ -13,6 +13,7 @@ from app.main import (
     _finish_live_game,
     _live_timeline_finished,
     _merge_restored_events,
+    _open_live_baseline_markets,
     _pick_live_target_fixture,
     _prime_live_catchup,
     _process_live_events,
@@ -2534,6 +2535,41 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertFalse(any(event.kind == "settlement" for event in room.log))
         self.assertEqual(room.match_state.score, {"participant1": 1, "participant2": 0})
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("processedAsMarkets") is False for event in room.log))
+
+    def test_live_baseline_markets_open_after_catchup(self):
+        def first_available_vote(_ant, context):
+            return context["market"]["availableVotes"][0]["vote"]
+
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent(first_available_vote))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Live Nest", 20, "balanced", "momentum", "medium")
+        seen: set[tuple] = set()
+        catchup_events = [
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "clock",
+                "highlights": [],
+                "minute": 5,
+                "clockSeconds": 300,
+                "score": {"participant1": 0, "participant2": 0},
+                "description": "Clock tick",
+            }
+        ]
+
+        _prime_live_catchup(
+            room,
+            seen,
+            catchup_events,
+            {"resolvedSource": "updates", "rawCount": 1, "score": {"participant1": 0, "participant2": 0}},
+        )
+        opened = _open_live_baseline_markets(harness, catchup_events)
+
+        self.assertEqual(opened, 3)
+        self.assertEqual({opportunity.context for opportunity in room.opportunities.values()}, {"goal_next_10", "next_goal_team", "next_foul"})
+        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 3)
+        self.assertTrue(any(event.kind == "live_sync" and event.data.get("source") == "baseline" for event in room.log))
 
     def test_live_catchup_resets_stale_score_when_no_official_score_exists(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
