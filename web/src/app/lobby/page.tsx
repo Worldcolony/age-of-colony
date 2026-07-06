@@ -85,6 +85,7 @@ export default function LobbyPage() {
       router.push(`/room/${game.gameId}`);
     } catch (e) {
       setErr((e as Error).message);
+      setSheetOpen(true); // errors must be visible even if the sheet was down
       setJoining(false);
     }
   }
@@ -104,10 +105,10 @@ export default function LobbyPage() {
         <button
           type="button"
           className={`g-cta ${headLive ? "rust" : ""}`}
-          disabled={joining || loading}
+          disabled={joining}
           onClick={() => {
-            if (headline) joinMatch(headline.f);
-            else setSheetOpen(true);
+            if (headline && !loading) joinMatch(headline.f);
+            else setSheetOpen(true); // loading/offline: the sheet explains itself
           }}
         >
           {joining

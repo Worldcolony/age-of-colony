@@ -148,6 +148,8 @@ export default function RoomPage() {
         if (fresh.gameId && fresh.status && RUNNING.has(fresh.status)) router.replace(`/cockpit/${fresh.gameId}`);
       } else {
         setMsg(message);
+        setSheetOpen(true); // surface the failure even if the sheet was down
+        push(`⚠️ ${message}`, "loss");
       }
     } finally {
       setJoining(false);
