@@ -1241,10 +1241,34 @@ function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null 
       tone: "gold",
     };
   }
+  if ((context === "next_corner" || label.includes("who wins the next corner")) && reason === "full_time") {
+    return {
+      label: "no corner before full time",
+      detail: "Inferred from full time.",
+      badge: "inferred",
+      tone: "gold",
+    };
+  }
+  if ((context === "next_free_kick" || label.includes("who wins the next free kick")) && reason === "full_time") {
+    return {
+      label: "no free kick before full time",
+      detail: "Inferred from full time.",
+      badge: "inferred",
+      tone: "gold",
+    };
+  }
+  if ((context === "next_yellow_card" || label.includes("who gets the next yellow card")) && reason === "full_time") {
+    return {
+      label: "no yellow card before full time",
+      detail: "Inferred from full time.",
+      badge: "inferred",
+      tone: "gold",
+    };
+  }
   if ((context === "next_foul" || label.includes("who commits the next foul")) && reason === "expired_no_foul") {
     return {
-      label: "no foul before full time",
-      detail: "The foul market expired without a qualifying foul.",
+      label: "no matching legacy foul before full time",
+      detail: "Legacy foul market expired without a matching signal.",
       badge: "void",
       tone: "muted",
     };
@@ -1275,7 +1299,7 @@ function inferOutcomeFromSettlements(market: MarketModel): MarketOutcome | null 
 function voidOutcomeLabel(market: MarketModel, reason?: string) {
   const label = cleanMarketLabel(market.label).toLowerCase();
   if (reason === "penalty_cancelled") return "penalty cancelled";
-  if (reason === "expired_no_foul" || label.includes("who commits the next foul")) return "no foul before full time";
+  if (reason === "expired_no_foul" || label.includes("who commits the next foul")) return "no matching legacy foul before full time";
   if (reason === "full_time") return "voided at full time";
   return "market voided";
 }
@@ -1369,7 +1393,7 @@ function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "set
   if (mode === "open") {
     return {
       badge: "open",
-      value: activity.predictionEvent ? "At risk" : "Pending",
+      value: activity.predictionEvent ? "Committed" : "Pending",
       detail: activity.predictionEvent ? "waiting for result" : "no position yet",
       tone: "!border-gold/50 !text-gold",
       cellTone: activity.predictionEvent ? "gold" as const : "muted" as const,
@@ -1500,9 +1524,11 @@ function compactMarketName(market: MarketModel) {
 
 function marketKindName(label: string) {
   const clean = cleanMarketLabel(label).toLowerCase();
-  if (clean.includes("commits the next foul")) return "Foul";
+  if (clean.includes("commits the next foul")) return "Legacy foul";
+  if (clean.includes("wins the next free kick")) return "Free kick";
   if (clean.includes("scores the next goal")) return "Next goal";
   if (clean.includes("goal in the next 10")) return "Goal 10m";
+  if (clean.includes("yellow card")) return "Yellow card";
   if (clean.includes("penalty")) return "Penalty";
   if (clean.includes("corner")) return "Corner";
   if (clean.includes("card")) return "Card";
