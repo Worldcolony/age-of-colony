@@ -20,6 +20,7 @@ from app.main import (
     _process_live_events,
     _replay_delay_after_event,
     _stored_game_can_resume_live,
+    _sync_live_match_state_from_timeline,
     game_manager,
 )
 from app.game.harness import (
@@ -2763,6 +2764,41 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertFalse(_live_timeline_active(status_id_timeline))
         self.assertTrue(_live_timeline_finished(text_state_timeline))
         self.assertFalse(_live_timeline_active(text_state_timeline))
+
+    def test_stale_scheduled_latest_state_does_not_hide_live_activity(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="Portugal", participant2="Spain", seed=123)
+        timeline = {
+            "latestState": {
+                "fixtureId": 42,
+                "gameState": "scheduled",
+                "statusId": 1,
+                "action": "coverage_update",
+            },
+            "score": {"participant1": 0, "participant2": 1},
+            "events": [
+                {
+                    "fixtureId": 42,
+                    "seq": 330,
+                    "gameState": "scheduled",
+                    "statusId": 1,
+                    "action": "free_kick",
+                    "highlights": ["free_kick"],
+                    "minute": 88,
+                    "clockSeconds": 5280,
+                    "participant": 2,
+                    "participantLabel": "Spain",
+                    "score": {"participant1": 0, "participant2": 1},
+                }
+            ],
+        }
+
+        self.assertTrue(_live_timeline_active(timeline))
+        _prime_live_catchup(room, set(), timeline["events"], timeline)
+
+        self.assertEqual(room.match_state.score, {"participant1": 0, "participant2": 1})
+        self.assertEqual(room.match_state.game_state, "inplay")
+        self.assertNotEqual(room.public_state()["match"]["gameState"], "scheduled")
 
     def test_live_catchup_resets_stale_score_when_no_official_score_exists(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
