@@ -8,7 +8,7 @@ import { getAnonId } from "@/lib/anon";
 import { flag, fmtKickoffLine, teamName } from "@/lib/format";
 import { Segmented, Chips } from "@/components/Segmented";
 import { worldLink } from "@/three/worldLink";
-import { WorldViewButton } from "@/components/WorldView";
+import { GameShell, GameChip } from "@/components/GameShell";
 import type { FavoriteContext, GameState, InfoNeed, Player, Style } from "@/lib/types";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
@@ -39,6 +39,7 @@ export default function RoomPage() {
   const [joined, setJoined] = useState(false);
   const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(true);
   const [style, setStyle] = useState<Style>("balanced");
   const [ground, setGround] = useState<FavoriteContext>("momentum");
   const [info, setInfo] = useState<InfoNeed>("medium");
@@ -135,6 +136,7 @@ export default function RoomPage() {
       }
       syncGame(g);
       setMsg(`${cleanName} is ready.`);
+      setSheetOpen(false); // drop the sheet so the founding animation plays center stage
       if (g.gameId && g.status && RUNNING.has(g.status)) router.replace(`/cockpit/${g.gameId}`);
     } catch (e) {
       const message = (e as Error).message;
@@ -165,29 +167,52 @@ export default function RoomPage() {
     }
   }
 
+  const readyCount = players.filter((p) => p.ready).length;
+  const running = Boolean(game?.gameId && game.status && RUNNING.has(game.status));
+
+  const cta = !myReady ? (
+    <button
+      type="button"
+      className="g-cta"
+      disabled={joining || !game?.gameId}
+      onClick={() => (sheetOpen ? joinAndCreateColony() : setSheetOpen(true))}
+    >
+      {joining ? "Joining..." : "⚔️ Join match"}
+    </button>
+  ) : running ? (
+    <button type="button" className="g-cta rust" onClick={() => router.replace(`/cockpit/${game!.gameId}`)}>
+      🔴 Enter live cockpit
+    </button>
+  ) : isHost && game?.status === "created" ? (
+    <button type="button" className="g-cta" disabled={!canStart || starting} onClick={start}>
+      {starting ? "Starting..." : "🚀 Start now"}
+    </button>
+  ) : (
+    <button type="button" className="g-cta" disabled>
+      ⏳ Waiting for kickoff
+    </button>
+  );
+
   return (
-    <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
-      <header className="page-top">
-        <button className="icon-btn" aria-label="Back to lobby" onClick={() => router.push("/lobby")}>←</button>
-        <h1 className="hud-title text-[13px]">Match</h1>
-        <span className="status-pill">{game?.status === "created" ? "Pre-match" : game?.status?.replace("_", " ") || "Room"}</span>
-      </header>
-
-      <section className="glass match-card-media flex items-center justify-between gap-3 p-4">
-        <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p1)}</span>
-        <div className="min-w-0 flex-1 text-center">
-          <p className="truncate text-2xl font-bold">{p1} <span className="text-base text-gold">vs</span> {p2}</p>
-          <p className="truncate text-sm font-bold text-gold">{kickoffLine}</p>
-        </div>
-        <span className="plate grid h-11 w-14 place-items-center text-2xl">{flag(p2)}</span>
-      </section>
-
+    <GameShell
+      chip={<GameChip emblem={flag(p1)} title={`${p1} vs ${p2}`} sub={game?.status === "created" ? kickoffLine : game?.status?.replace("_", " ") || "match room"} />}
+      resources={[
+        { icon: "🐜", value: myColony ? myColony.antsAlive : "—", title: "Your ants" },
+        { icon: "🏠", value: players.length ? `${readyCount}/${players.length}` : 0, title: "Colonies ready" },
+      ]}
+      nav={[
+        { icon: "🏟️", label: "Matches", onClick: () => router.push("/lobby") },
+        { icon: "👑", label: "Queen", onClick: () => router.push("/queen") },
+      ]}
+      cta={cta}
+      sheetTitle={myReady ? "Match camp" : "Found your colony"}
+      open={sheetOpen}
+      onOpenChange={setSheetOpen}
+      hint={myReady ? "your mound is on the map · drag to explore" : "join to raise your mound on the map"}
+    >
       {!myReady && (
-        <section className="glass pheromone-line flex flex-col gap-4 p-4">
-          <div>
-            <h2 className="font-bold">Enter the match</h2>
-            <p className="mt-1 text-sm text-ink-faint">One name for you and your colony, with tactics set before launch.</p>
-          </div>
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-ink-soft">One name for you and your colony, with tactics set before launch.</p>
           <Field label="Colony name">
             <input
               className="input"
@@ -206,25 +231,21 @@ export default function RoomPage() {
           <Field label="Risk level">
             <Segmented options={INFO} value={info} onChange={setInfo} />
           </Field>
-          <button className="btn btn-primary" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
-            {joining ? "Joining..." : "Join match"}
-          </button>
-        </section>
+        </div>
       )}
 
-      <section className="glass flex flex-col gap-3 p-4">
+      <div className="well flex flex-col gap-1 p-3">
         <div className="flex items-center justify-between">
-          <h2 className="font-bold">Colonies {players.length ? `(${players.filter((p) => p.ready).length}/${players.length})` : ""}</h2>
+          <h2 className="font-bold">Colonies {players.length ? `(${readyCount}/${players.length})` : ""}</h2>
           {isHost && <span className="status-pill">Host</span>}
         </div>
-
         <div className="flex flex-col divide-y divide-[color:var(--brd-soft)]">
           {players.length === 0 ? (
-            <span className="py-5 text-center text-sm text-ink-faint">No colonies yet.</span>
+            <span className="py-4 text-center text-sm text-ink-faint">No colonies yet — be the first mound on the map.</span>
           ) : (
             players.map((p) => (
-              <div key={p.playerId || p.name} className="flex items-center gap-3 py-3">
-                <span className={`grid h-10 w-10 place-items-center rounded-full border ${p.ready ? "border-green/70 text-green" : "border-rust/70 text-rust"}`}>🐜</span>
+              <div key={p.playerId || p.name} className="flex items-center gap-3 py-2.5">
+                <span className={`grid h-9 w-9 place-items-center rounded-full border-2 ${p.ready ? "border-green/70 text-green" : "border-rust/70 text-rust"}`}>🐜</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <strong className="truncate">{p.name}</strong>
@@ -239,41 +260,11 @@ export default function RoomPage() {
             ))
           )}
         </div>
-      </section>
-
-      {msg && <p className="well px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
-
-      <WorldViewButton focusColonyId={myColony?.colonyId ?? null} />
-
-      <div className="bottom-action">
-        <div className="bottom-action-inner">
-          {!myReady ? (
-            <button className="btn btn-primary" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
-              {joining ? "Joining..." : "Join match"}
-            </button>
-          ) : game?.gameId && game.status && RUNNING.has(game.status) ? (
-            <>
-              <button className="btn btn-primary" onClick={() => router.replace(`/cockpit/${game.gameId}`)}>
-                Enter live cockpit
-              </button>
-              <p className="text-center text-sm text-ink-faint">Match is running.</p>
-            </>
-          ) : isHost ? (
-            <>
-              <button className="btn btn-primary" disabled={!canStart || starting} onClick={start}>
-                {starting ? "Starting..." : game?.status === "created" ? "Start now" : "Waiting for kickoff"}
-              </button>
-              <p className="text-center text-sm text-ink-faint">{startHelper}</p>
-            </>
-          ) : (
-            <>
-              <button className="btn btn-ghost" disabled>Waiting for kickoff</button>
-              <p className="text-center text-sm text-ink-faint">{startHelper}</p>
-            </>
-          )}
-        </div>
       </div>
-    </div>
+
+      <p className="text-center text-xs text-ink-faint">{startHelper}</p>
+      {msg && <p className="well px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
+    </GameShell>
   );
 }
 

@@ -8,7 +8,7 @@ import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
-import { WorldViewButton } from "@/components/WorldView";
+import { GameShell, GameChip } from "@/components/GameShell";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
@@ -77,6 +77,7 @@ export default function CockpitPage() {
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<CockpitTab>("live");
+  const [sheetOpen, setSheetOpen] = useState(true);
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
@@ -180,8 +181,93 @@ export default function CockpitPage() {
     if (game?.colonies?.length) worldLink.syncColonies(game.colonies, mine?.colonyId ?? null);
   }, [game?.colonies, mine?.colonyId]);
 
+  const mobileTabs = (
+    <>
+      <CockpitTabs
+        active={activeTab}
+        counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+        onChange={setActiveTab}
+      />
+      {activeTab === "live" && (
+        <LiveTab
+          openMarkets={openMarkets}
+          openSummary={openSummary}
+          selectedMarket={selectedMarket}
+          selectedMarketId={effectiveSelectedMarketId}
+          settledMarkets={settledMarkets}
+          colony={mine}
+          colonyLabel={colonyFocusLabel}
+          waitingForKickoff={txlineWaiting}
+          matchStateLabel={txlineStateLabel}
+          onSelectMarket={setSelectedMarketId}
+          onSelectSettled={(marketId) => {
+            setSelectedSettledId(marketId);
+            setActiveTab("settled");
+          }}
+        />
+      )}
+      {activeTab === "settled" && (
+        <SettledTab
+          settledMarkets={settledMarkets}
+          selectedSettled={selectedSettled}
+          selectedSettledId={effectiveSelectedSettledId}
+          colony={mine}
+          colonyLabel={colonyFocusLabel}
+          onSelectSettled={setSelectedSettledId}
+        />
+      )}
+      {activeTab === "feed" && <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />}
+    </>
+  );
+
+  const mobileShell = (
+    <div className="xl:hidden">
+      <GameShell
+        chip={
+          <GameChip
+            emblem={flag(p1)}
+            title={`${p1} ${fmtScore(game?.match?.score)} ${p2}`}
+            sub={streamState === "reconnecting" ? "reconnecting..." : status.replace(/_/g, " ") || "live"}
+          />
+        }
+        resources={[
+          { icon: "🏆", value: rank ? `#${rank}` : "—", title: "Rank" },
+          { icon: "🐜", value: mine?.antsAlive ?? "—", title: "Ants alive" },
+          { icon: "🍖", value: mine?.food ?? "—", title: "Food stores" },
+        ]}
+        nav={[
+          { icon: "🏟️", label: "Room", onClick: () => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby") },
+          { icon: "🏆", label: "Ranks", onClick: () => router.push(`/results/${id}`) },
+        ]}
+        cta={
+          <button type="button" className={`g-cta ${openMarkets.length ? "rust" : ""}`} onClick={() => setSheetOpen((v) => !v)}>
+            {sheetOpen ? "⛰️ View the map" : openMarkets.length ? `🎯 Markets · ${openMarkets.length} live` : "📊 Decision board"}
+          </button>
+        }
+        sheetTitle="Decision board"
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        hint={RUNNING.has(status) ? "colony rings flash as your ants vote" : "drag to orbit · tap a mound"}
+      >
+        {status === "created" ? (
+          <div className="flex flex-col gap-3 text-center">
+            <p className="text-lg font-bold">Room is not live yet</p>
+            <p className="text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
+            <button className="btn btn-primary" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>
+              Back to room
+            </button>
+          </div>
+        ) : (
+          mobileTabs
+        )}
+      </GameShell>
+    </div>
+  );
+
   return (
-    <div className="flex min-h-[calc(100dvh-36px)] w-full flex-col gap-4 pb-6 xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
+    <>
+    {mobileShell}
+    <div className="flex min-h-[calc(100dvh-36px)] w-full flex-col gap-4 pb-6 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
       <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
         <button className="icon-btn" aria-label="Back" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>←</button>
         <div className="text-center">
@@ -293,9 +379,8 @@ export default function CockpitPage() {
         <span>{streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}</span>
         <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>Ranks</button>
       </footer>
-
-      <WorldViewButton focusColonyId={mine?.colonyId ?? null} />
     </div>
+    </>
   );
 }
 

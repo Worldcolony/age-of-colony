@@ -5,7 +5,7 @@ import { api, API_BASE } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fixtureId, fmtKickoffLine } from "@/lib/format";
-import { AntMarch } from "@/components/AntMarch";
+import { GameShell, GameChip } from "@/components/GameShell";
 import type { Fixture } from "@/lib/types";
 
 export default function LobbyPage() {
@@ -17,6 +17,8 @@ export default function LobbyPage() {
   const [featured, setFeatured] = useState<{ f: Fixture; status?: string } | null>(null);
   const [fixtures, setFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(true);
+  const [joining, setJoining] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [err, setErr] = useState("");
   const [loadErr, setLoadErr] = useState("");
 
@@ -41,6 +43,8 @@ export default function LobbyPage() {
     return list;
   }, [featured, fixtures]);
 
+  const headline = matches[0];
+
   async function load() {
     setLoading(true);
     setLoadErr("");
@@ -61,9 +65,11 @@ export default function LobbyPage() {
     setLoading(false);
   }
 
-  async function createRoom(f: Fixture) {
+  async function joinMatch(f: Fixture) {
     const id = fixtureId(f);
     if (!id) return setErr("Fixture has no id.");
+    setJoining(true);
+    setErr("");
     resetGame();
     setMatchFixture(f);
     try {
@@ -79,89 +85,87 @@ export default function LobbyPage() {
       router.push(`/room/${game.gameId}`);
     } catch (e) {
       setErr((e as Error).message);
+      setJoining(false);
     }
   }
 
+  const headLive = headline?.status === "current";
+
   return (
-    <div className="flex min-h-[calc(100dvh-36px)] flex-col gap-4">
-      <header className="page-top">
-        <div className="flex items-center gap-3">
-          <div className="plate grid h-9 w-9 place-items-center text-lg">
-            🐜
-          </div>
-          <div>
-            <p className="eyebrow">Age of Colony</p>
-            <p className="text-xs text-ink-faint">{wallet.connected ? wallet.short : "guest"}</p>
-          </div>
-        </div>
-        <button className="quiet-link text-sm" onClick={() => router.push("/queen")}>
-          Queen
+    <GameShell
+      chip={<GameChip emblem="🐜" title="Age of Colony" sub={wallet.connected ? wallet.short : "guest commander"} />}
+      resources={[{ icon: "⚽", value: matches.length, title: "Matches open" }]}
+      nav={[
+        { icon: "🗓️", label: "Matches", active: sheetOpen, onClick: () => setSheetOpen((v) => !v) },
+        { icon: "👑", label: "Queen", onClick: () => router.push("/queen") },
+        { icon: "🛠️", label: "Admin", onClick: () => router.push("/admin") },
+      ]}
+      cta={
+        <button
+          type="button"
+          className={`g-cta ${headLive ? "rust" : ""}`}
+          disabled={joining || loading}
+          onClick={() => {
+            if (headline) joinMatch(headline.f);
+            else setSheetOpen(true);
+          }}
+        >
+          {joining
+            ? "Entering..."
+            : headline
+              ? `${headLive ? "🔴 Live" : "⚔️"}  ${teamName(headline.f.participant1)} vs ${teamName(headline.f.participant2)}`
+              : loading
+                ? "Scouting matches..."
+                : "⚔️ Play"}
         </button>
-      </header>
-
-      <section className="mt-6">
-        <h1 className="hud-title text-[17px] leading-relaxed">Choose a match</h1>
-        <p className="mt-2 text-base text-ink-soft">One match, one shared colony room.</p>
-      </section>
-
-      {err && <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
+      }
+      sheetTitle="Choose a match"
+      open={sheetOpen}
+      onOpenChange={setSheetOpen}
+      hint="drag to orbit · pinch to zoom · tap a mound"
+    >
+      {err && <p className="rounded-lg border-2 border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
 
       {loading ? (
-        <div className="glass grid h-28 place-items-center p-4 text-ink-faint">Loading matches...</div>
+        <div className="well grid h-24 place-items-center text-ink-faint">Loading matches...</div>
       ) : loadErr ? (
-        <div className="glass flex flex-col gap-3 border-l-4 border-l-danger p-4">
+        <div className="well flex flex-col gap-3 border-l-4 border-l-danger p-4">
           <p className="font-bold">Can&apos;t reach the game engine</p>
           <p className="break-all font-mono text-xs text-ink-soft">{loadErr}</p>
           <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={load}>Retry</button>
         </div>
       ) : matches.length === 0 ? (
-        <div className="glass p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days.</div>
+        <div className="well p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days.</div>
       ) : (
-        <div className="flex flex-col gap-3">
-          {matches.slice(0, 8).map((item) => (
-            <MatchCard key={String(fixtureId(item.f))} {...item} onCreate={createRoom} />
-          ))}
-        </div>
+        matches.slice(0, 10).map((item) => (
+          <MatchRow key={String(fixtureId(item.f))} {...item} busy={joining} onJoin={joinMatch} />
+        ))
       )}
-
-    </div>
+    </GameShell>
   );
 }
 
-function MatchCard({ f, featured, status, onCreate }: { f: Fixture; featured?: boolean; status?: string; onCreate: (f: Fixture) => void }) {
+function MatchRow({ f, status, busy, onJoin }: { f: Fixture; featured?: boolean; status?: string; busy: boolean; onJoin: (f: Fixture) => void }) {
   const p1 = teamName(f.participant1);
   const p2 = teamName(f.participant2);
   const live = status === "current";
   return (
-    <div className={`glass match-card-media flex flex-col gap-4 ${featured ? "pheromone-line overflow-hidden !pt-0 p-4" : "p-4"}`}>
-      {featured && <AntMarch className="-mx-4 border-b-2 border-[color:var(--brd-soft)] bg-[color:var(--color-slot)] py-1.5" />}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-3 font-bold">
-          <span className="plate grid h-12 w-14 shrink-0 place-items-center text-2xl">{flag(p1)}</span>
-          <span className="truncate text-lg">{p1}</span>
-        </div>
-        <span className="font-mono text-sm font-bold uppercase text-gold">vs</span>
-        <div className="flex min-w-0 flex-1 flex-row-reverse items-center gap-3 text-right font-bold">
-          <span className="plate grid h-12 w-14 shrink-0 place-items-center text-2xl">{flag(p2)}</span>
-          <span className="truncate text-lg">{p2}</span>
-        </div>
-      </div>
-      <div className="flex items-center justify-between gap-3 text-sm text-ink-soft">
-        <span className="truncate">{f.competition ?? (featured ? "Featured match" : "Upcoming")}</span>
-        <span className={`status-pill ${live ? "!border-rust/50 !text-rust" : ""}`}>
-          {live && <span className="live-dot" />}
-          {live ? "Live" : fmtKickoffLine(f.startTime, f.startTimeIso)}
-        </span>
-      </div>
-      {featured ? (
-        <button className="btn btn-primary" onClick={() => onCreate(f)}>
-          Join match
-        </button>
-      ) : (
-        <button className="btn btn-ghost !min-h-0 py-2.5 text-sm" onClick={() => onCreate(f)}>
-          Join match
-        </button>
-      )}
-    </div>
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => onJoin(f)}
+      className="glass match-card-media flex items-center gap-3 p-3 text-left"
+    >
+      <span className="plate grid h-11 w-12 shrink-0 place-items-center text-xl">{flag(p1)}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-base font-bold">{p1} <span className="text-gold">vs</span> {p2}</span>
+        <span className="block truncate text-xs text-ink-faint">{f.competition ?? "Upcoming"}</span>
+      </span>
+      <span className={`status-pill shrink-0 ${live ? "!border-rust/50 !text-rust" : ""}`}>
+        {live && <span className="live-dot" />}
+        {live ? "Live" : fmtKickoffLine(f.startTime, f.startTimeIso)}
+      </span>
+      <span className="plate grid h-11 w-12 shrink-0 place-items-center text-xl">{flag(p2)}</span>
+    </button>
   );
 }
