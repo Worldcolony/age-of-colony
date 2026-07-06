@@ -159,6 +159,12 @@ class UpdateColonyStrategyRequest(BaseModel):
     anonymousId: str | None = None
 
 
+class RallyRequest(BaseModel):
+    colonyId: str
+    opportunityId: str
+    anonymousId: str | None = None
+
+
 class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
@@ -513,6 +519,18 @@ async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateCo
             favorite_context=payload.favoriteContext,
             info_need=payload.infoNeed,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+@app.post("/api/games/{game_id}/rally")
+async def rally(game_id: str, payload: RallyRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="rally this colony")
+    try:
+        game_manager.harness(game_id).rally(payload.colonyId, payload.opportunityId)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)

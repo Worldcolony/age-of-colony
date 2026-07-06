@@ -55,7 +55,7 @@ export const worldLink = {
     post({ type: "aoc:pulse", n });
   },
   /** Floating combat text over a mound: "+12 food", "-3 ants", "market open". */
-  fx(colonyId: string | null, kind: "gain" | "loss" | "market" | "info", text: string) {
+  fx(colonyId: string | null, kind: "gain" | "loss" | "market" | "info" | "rally" | "death", text: string) {
     post({ type: "aoc:fx", id: colonyId ?? undefined, kind, text });
   },
   /** Fly the world camera to one game colony and select it. */

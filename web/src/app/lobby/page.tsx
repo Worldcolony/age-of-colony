@@ -128,7 +128,17 @@ export default function LobbyPage() {
       {err && <p className="rounded-lg border-2 border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
 
       {loading ? (
-        <div className="well grid h-24 place-items-center text-ink-faint">Loading matches...</div>
+        <div className="flex flex-col gap-3" role="status" aria-label="Loading matches">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="g-skel-row">
+              <div className="g-skel-chip" style={{ animationDelay: `${i * 0.12}s` }} />
+              <div className="g-skel-lines">
+                <div className="g-skel-line" style={{ animationDelay: `${i * 0.12}s` }} />
+                <div className="g-skel-line short" style={{ animationDelay: `${i * 0.12}s` }} />
+              </div>
+            </div>
+          ))}
+        </div>
       ) : loadErr ? (
         <div className="well flex flex-col gap-3 border-l-4 border-l-danger p-4">
           <p className="font-bold">Can&apos;t reach the game engine</p>

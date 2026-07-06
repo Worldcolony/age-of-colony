@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
@@ -17,6 +17,7 @@ const KIND_EDGE: Record<string, string> = {
   settlement: "#4e7e2a", hatch: "#4e7e2a", info_result: "#4e7e2a",
   vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
   game_error: "#c25a3a", starvation: "#c25a3a", void: "#c25a3a",
+  rally: "#b07e1c",
 };
 
 interface PublicVote {
@@ -42,10 +43,27 @@ interface MarketModel {
   predictions: GameEvent[];
   settlements: GameEvent[];
   voids: GameEvent[];
+  rallies: GameEvent[];
   lastIndex: number;
 }
 
 type CockpitTab = "live" | "settled" | "feed";
+
+// A row in the aggregated event stream — one or more consecutive raw engine
+// events of the same kind + colony, folded together so spam (e.g. four
+// starvation ticks in a row) reads as one legible line with a ×N count.
+interface FeedRow {
+  key: string;
+  kind: string;
+  colonyId: string | null;
+  colonyName: string | null;
+  message: string;
+  detail: string | null;
+  delta: { value: number; unit: string } | null;
+  count: number;
+  firstIndex: number;
+  lastIndex: number;
+}
 
 interface ColonyMarketActivity {
   colony?: Colony;
@@ -80,6 +98,8 @@ export default function CockpitPage() {
   const [sheetOpen, setSheetOpen] = useState(true);
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
+  const [ralliedMarkets, setRalliedMarkets] = useState<Set<string>>(new Set());
+  const [rallyBusyId, setRallyBusyId] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const anonId = useMemo(() => getAnonId(), []);
 
@@ -114,8 +134,11 @@ export default function CockpitPage() {
       worldLink.fx(colonyId, "gain", "🥚 +larvae");
       if (isMine) push("🥚 Your colony hatched new ants", "gain");
     } else if (event.kind === "starvation") {
-      worldLink.fx(colonyId, "loss", "☠️ starving");
+      worldLink.fx(colonyId, "death", "☠️ −1 ant");
       if (isMine) push("☠️ Your ants are starving — win markets to feed them", "loss");
+    } else if (event.kind === "rally") {
+      worldLink.fx(colonyId, "rally", "📣 rally!");
+      if (!isMine) push(`📣 ${event.message}`, "market");
     } else if (event.kind === "game_finished") {
       push("🏁 Full time — final standings are in", "info");
     }
@@ -204,7 +227,33 @@ export default function CockpitPage() {
   const effectiveSelectedSettledId = selectedSettled?.id ?? null;
   const openSummary = useMemo(() => summarizeOpenMarkets(openMarkets), [openMarkets]);
   const usefulEvents = events.filter((e) => isUsefulLiveEvent(e));
-  const feedRows = usefulEvents.slice(0, activeTab === "feed" ? 18 : 5);
+  const colonyNames = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const colony of game?.colonies ?? []) map[colony.colonyId] = colony.name;
+    return map;
+  }, [game?.colonies]);
+  const aggregatedFeed = useMemo(() => aggregateFeed(usefulEvents, colonyNames), [usefulEvents, colonyNames]);
+  const feedRows = aggregatedFeed.slice(0, activeTab === "feed" ? 18 : 5);
+
+  // The player's first mid-match action: throw 5 more ants at a market you
+  // already believe in. Costs food, raises the stakes, one rally per market.
+  async function handleRally(market: MarketModel) {
+    if (!mine) return;
+    if (rallyBusyId) return;
+    setRallyBusyId(market.id);
+    try {
+      const g = await api.rally(id, { colonyId: mine.colonyId, opportunityId: market.id, anonymousId: anonId });
+      setGame(g);
+      setRalliedMarkets((prev) => new Set(prev).add(market.id));
+      push("📣 Rally! 5 more ants pile onto this market", "market");
+      worldLink.fx(mine.colonyId, "rally", "📣 rally!");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Rally failed — try again.";
+      push(message, "loss");
+    } finally {
+      setRallyBusyId(null);
+    }
+  }
 
   useEffect(() => {
     if (ownColony?.colonyId && myColonyId !== ownColony.colonyId) {
@@ -270,6 +319,9 @@ export default function CockpitPage() {
           colonyLabel={colonyFocusLabel}
           waitingForKickoff={txlineWaiting}
           matchStateLabel={txlineStateLabel}
+          ralliedMarkets={ralliedMarkets}
+          rallyBusyId={rallyBusyId}
+          onRally={handleRally}
           onSelectMarket={setSelectedMarketId}
           onSelectSettled={(marketId) => {
             setSelectedSettledId(marketId);
@@ -419,6 +471,9 @@ export default function CockpitPage() {
                   colonyLabel={colonyFocusLabel}
                   waitingForKickoff={txlineWaiting}
                   matchStateLabel={txlineStateLabel}
+                  ralliedMarkets={ralliedMarkets}
+                  rallyBusyId={rallyBusyId}
+                  onRally={handleRally}
                   onSelectMarket={setSelectedMarketId}
                   onSelectSettled={(marketId) => {
                     setSelectedSettledId(marketId);
@@ -447,7 +502,7 @@ export default function CockpitPage() {
 
         <aside className="grid min-w-0 content-start gap-4">
           <ColonyRoster colonies={sorted} activeColonyId={mine?.colonyId} onOpenRanks={() => router.push(`/results/${id}`)} />
-          <EventStreamCard feedRows={usefulEvents.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
+          <EventStreamCard feedRows={aggregatedFeed.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
         </aside>
       </div>
 
@@ -490,7 +545,7 @@ function RunStatusCard({
   );
 }
 
-function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: GameEvent[]; onOpenFeed: () => void }) {
+function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: FeedRow[]; onOpenFeed: () => void }) {
   return (
     <section className="glass flex min-w-0 flex-col gap-3 p-3">
       <div className="flex items-center justify-between gap-3">
@@ -505,16 +560,39 @@ function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: GameEvent[]; onOp
         {feedRows.length === 0 ? (
           <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
         ) : (
-          feedRows.map((event) => (
-            <div key={event.index} className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
-              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(74,58,30,0.25)" }} />
-              <span className="min-w-0 text-sm leading-snug text-ink-soft">{compactEventMessage(event)}</span>
-              <span className="font-mono text-[10px] text-ink-faint">#{event.index}</span>
-            </div>
-          ))
+          feedRows.map((row) => <FeedRowLine key={row.key} row={row} />)
         )}
       </div>
     </section>
+  );
+}
+
+// A single aggregated feed row: color edge by kind, bold colony name, a
+// colored delta (green gain / rust loss), muted context, and a ×N badge when
+// several consecutive same-kind-same-colony events were folded into one line.
+function FeedRowLine({ row }: { row: FeedRow }) {
+  return (
+    <div className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
+      <span className="rounded-full" style={{ background: KIND_EDGE[row.kind] ?? "rgba(74,58,30,0.25)" }} />
+      <span className="min-w-0 text-sm leading-snug text-ink-soft">
+        <span className="mr-1">{kindIcon(row.kind)}</span>
+        {row.colonyName && (row.delta || row.detail) ? (
+          <>
+            <b className="text-ink">{row.colonyName}</b>{" "}
+            {row.delta && (
+              <span className={`font-mono font-bold ${row.delta.value < 0 ? "text-rust" : "text-green"}`}>
+                {signedValue(row.delta.value)} {row.delta.unit}
+              </span>
+            )}
+            {row.detail && <span className="text-ink-faint"> — {row.detail}</span>}
+          </>
+        ) : (
+          <span>{row.message}</span>
+        )}
+        {row.count > 1 && <span className="ml-1 text-ink-faint">×{row.count}</span>}
+      </span>
+      <span className="font-mono text-[10px] text-ink-faint">#{row.lastIndex}</span>
+    </div>
   );
 }
 
@@ -560,6 +638,9 @@ function LiveTab({
   colonyLabel,
   waitingForKickoff,
   matchStateLabel,
+  ralliedMarkets,
+  rallyBusyId,
+  onRally,
   onSelectMarket,
   onSelectSettled,
 }: {
@@ -572,6 +653,9 @@ function LiveTab({
   colonyLabel: string;
   waitingForKickoff: boolean;
   matchStateLabel: string;
+  ralliedMarkets: Set<string>;
+  rallyBusyId: string | null;
+  onRally: (market: MarketModel) => void;
   onSelectMarket: (marketId: string) => void;
   onSelectSettled: (marketId: string) => void;
 }) {
@@ -586,7 +670,16 @@ function LiveTab({
       {openMarkets.length ? (
         <>
           <MarketRail markets={openMarkets} selectedId={selectedMarketId} onSelect={onSelectMarket} />
-          {selectedMarket && <FocusedMarketPanel market={selectedMarket} colony={colony} colonyLabel={colonyLabel} />}
+          {selectedMarket && (
+            <FocusedMarketPanel
+              market={selectedMarket}
+              colony={colony}
+              colonyLabel={colonyLabel}
+              ralliedMarkets={ralliedMarkets}
+              rallyBusyId={rallyBusyId}
+              onRally={onRally}
+            />
+          )}
         </>
       ) : (
         <EmptyState
@@ -649,7 +742,7 @@ function SettledTab({
   );
 }
 
-function FeedTab({ feedRows, onOpenRanks }: { feedRows: GameEvent[]; onOpenRanks: () => void }) {
+function FeedTab({ feedRows, onOpenRanks }: { feedRows: FeedRow[]; onOpenRanks: () => void }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
@@ -663,13 +756,7 @@ function FeedTab({ feedRows, onOpenRanks }: { feedRows: GameEvent[]; onOpenRanks
         {feedRows.length === 0 ? (
           <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
         ) : (
-          feedRows.map((event) => (
-            <div key={event.index} className="grid grid-cols-[4px_1fr_auto] gap-3 border-b border-[color:var(--brd-soft)] py-2 last:border-b-0">
-              <span className="rounded-full" style={{ background: KIND_EDGE[event.kind] ?? "rgba(74,58,30,0.25)" }} />
-              <span className="text-sm leading-snug text-ink-soft">{compactEventMessage(event)}</span>
-              <span className="font-mono text-[10px] text-ink-faint">#{event.index}</span>
-            </div>
-          ))
+          feedRows.map((row) => <FeedRowLine key={row.key} row={row} />)
         )}
       </div>
     </div>
@@ -800,7 +887,21 @@ function SettledRail({
   );
 }
 
-function FocusedMarketPanel({ market, colony, colonyLabel }: { market: MarketModel; colony?: Colony; colonyLabel: string }) {
+function FocusedMarketPanel({
+  market,
+  colony,
+  colonyLabel,
+  ralliedMarkets,
+  rallyBusyId,
+  onRally,
+}: {
+  market: MarketModel;
+  colony?: Colony;
+  colonyLabel: string;
+  ralliedMarkets: Set<string>;
+  rallyBusyId: string | null;
+  onRally: (market: MarketModel) => void;
+}) {
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
   const pending = pendingAntCount(market, distribution.total);
@@ -833,7 +934,54 @@ function FocusedMarketPanel({ market, colony, colonyLabel }: { market: MarketMod
         </span>
         {pending > 0 && <span className="rounded-full bg-[rgba(74,58,30,0.1)] px-2 py-1">{pending} calls pending</span>}
       </div>
+
+      <RallyControl market={market} colony={colony} ralliedMarkets={ralliedMarkets} rallyBusyId={rallyBusyId} onRally={onRally} />
     </article>
+  );
+}
+
+// Job 1: the player's first mid-match action. One rally per market, per
+// colony — commits 5 more ants for a bigger win/loss on a call you already made.
+function RallyControl({
+  market,
+  colony,
+  ralliedMarkets,
+  rallyBusyId,
+  onRally,
+}: {
+  market: MarketModel;
+  colony?: Colony;
+  ralliedMarkets: Set<string>;
+  rallyBusyId: string | null;
+  onRally: (market: MarketModel) => void;
+}) {
+  if (!colony) return null;
+  const alreadyRallied = ralliedMarkets.has(market.id)
+    || market.rallies.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
+  const canAfford = (colony.food ?? 0) >= 3;
+  const isOpen = market.status === "open";
+  const busy = rallyBusyId === market.id;
+  // Rally piles onto an existing stake — the colony must have predicted this
+  // market (a colony that joined after the market opened never voted on it).
+  const hasPrediction = market.predictions.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
+  const disabled = !isOpen || !canAfford || alreadyRallied || busy || !hasPrediction;
+  const label = busy ? "Rallying..." : alreadyRallied ? "📣 Rallied" : "📣 Rally · −3 🍖";
+  return (
+    <div className="mt-3 flex flex-col gap-1 border-t border-[color:var(--brd-soft)] pt-3">
+      <button
+        type="button"
+        className="btn btn-primary w-full px-4 py-2 text-sm sm:w-auto"
+        disabled={disabled}
+        onClick={() => onRally(market)}
+      >
+        {label}
+      </button>
+      <p className="text-[11px] text-ink-faint">
+        Commit 5 more ants to your colony&apos;s call — bigger win, bigger loss.
+        {!hasPrediction && isOpen && " Your ants haven't staked this market — rally unlocks on their next call."}
+        {hasPrediction && !canAfford && !alreadyRallied && " Not enough food."}
+      </p>
+    </div>
   );
 }
 
@@ -1182,6 +1330,7 @@ function buildMarkets(activeOpportunities: Opportunity[], events: GameEvent[]): 
       predictions: [],
       settlements: [],
       voids: [],
+      rallies: [],
       lastIndex: -1,
     };
     map.set(id, market);
@@ -1214,6 +1363,7 @@ function buildMarkets(activeOpportunities: Opportunity[], events: GameEvent[]): 
     if (event.kind === "prediction") market.predictions.push(event);
     if (event.kind === "settlement") market.settlements.push(event);
     if (event.kind === "void") market.voids.push(event);
+    if (event.kind === "rally") market.rallies.push(event);
   }
 
   return [...map.values()]
@@ -1704,5 +1854,90 @@ function formatClock(ms: number) {
 }
 
 function isUsefulLiveEvent(e: GameEvent) {
-  return ["opportunity", "settlement", "void", "hatch", "starvation", "game_error", "game_started", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
+  return ["opportunity", "settlement", "void", "hatch", "starvation", "rally", "game_error", "game_started", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
+}
+
+// Job 2: turn the raw event log into a legible, game-feeling stream.
+// Folds consecutive same-kind-same-colony events (e.g. repeated starvation
+// ticks) into one row with a count, and extracts a structured delta
+// (+green / -rust) plus muted context instead of a dry sentence. Parses
+// event.data defensively — the engine event shapes are not touched here.
+function aggregateFeed(events: GameEvent[], colonyNames: Record<string, string> = {}): FeedRow[] {
+  const rows: FeedRow[] = [];
+  for (const event of events) {
+    const parsed = parseFeedEvent(event, colonyNames);
+    const prev = rows[rows.length - 1];
+    if (prev && prev.kind === event.kind && prev.colonyId !== null && prev.colonyId === parsed.colonyId) {
+      prev.count += 1;
+      prev.firstIndex = Math.min(prev.firstIndex, event.index);
+      prev.lastIndex = Math.max(prev.lastIndex, event.index);
+      if (parsed.delta) {
+        prev.delta = prev.delta && prev.delta.unit === parsed.delta.unit
+          ? { value: prev.delta.value + parsed.delta.value, unit: prev.delta.unit }
+          : prev.delta ?? parsed.delta;
+      }
+      continue;
+    }
+    rows.push({
+      key: `${event.kind}:${parsed.colonyId ?? "none"}:${event.index}`,
+      kind: event.kind,
+      colonyId: parsed.colonyId,
+      colonyName: parsed.colonyName,
+      message: parsed.message,
+      detail: parsed.detail,
+      delta: parsed.delta,
+      count: 1,
+      firstIndex: event.index,
+      lastIndex: event.index,
+    });
+  }
+  return rows;
+}
+
+function parseFeedEvent(
+  event: GameEvent,
+  colonyNames: Record<string, string>,
+): { colonyId: string | null; colonyName: string | null; message: string; detail: string | null; delta: { value: number; unit: string } | null } {
+  const data = event.data ?? {};
+  const colonyId = typeof data.colonyId === "string" ? data.colonyId : null;
+  const colonyName = (colonyId && colonyNames[colonyId]) || extractColonyNameFromMessage(event.message);
+  const message = compactEventMessage(event);
+  const option = data.option as { label?: string } | undefined;
+
+  switch (event.kind) {
+    case "starvation": {
+      const deaths = Number(data.deaths ?? 0);
+      return { colonyId, colonyName, message, detail: "food shortage", delta: deaths ? { value: -deaths, unit: "ants" } : null };
+    }
+    case "settlement": {
+      const food = Number(data.food ?? data.resourceDelta ?? 0);
+      return { colonyId, colonyName, message, detail: option?.label ? `on ${option.label}` : null, delta: food ? { value: food, unit: "food" } : null };
+    }
+    case "hatch": {
+      const hatched = Number(data.hatched ?? 0);
+      return { colonyId, colonyName, message, detail: "hatched", delta: hatched ? { value: hatched, unit: "ants" } : null };
+    }
+    case "void": {
+      return { colonyId, colonyName, message, detail: option?.label ? `voided · ${option.label}` : "voided", delta: null };
+    }
+    case "rally": {
+      const ants = Number(data.ants ?? 0);
+      const cost = Number(data.cost ?? 0);
+      return { colonyId, colonyName, message, detail: cost ? `−${cost} food` : "rally", delta: ants ? { value: ants, unit: "ants" } : null };
+    }
+    default:
+      return { colonyId, colonyName: null, message, detail: null, delta: null };
+  }
+}
+
+// Fallback only: colonyNames (built from game.colonies) covers almost every
+// case. This just guards against a colony that dropped out of the roster.
+function extractColonyNameFromMessage(message: string): string | null {
+  const result = message.match(/^Result\s+([^:]+):/);
+  if (result) return result[1].trim();
+  const loses = message.match(/^(.+?)\s+loses\s+\d+\s+ants/);
+  if (loses) return loses[1].trim();
+  const colon = message.match(/^([^:]{2,40}):\s/);
+  if (colon) return colon[1].trim();
+  return null;
 }

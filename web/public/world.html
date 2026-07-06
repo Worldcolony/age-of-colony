@@ -303,9 +303,22 @@
   }
 
   // ---- floating combat text: "+12 food" rises off a mound and fades ----
-  var FX_COLORS = { gain: '#8ee06a', loss: '#ff7a5c', market: '#ffd76a', info: '#f3ebd3' };
+  var FX_COLORS = {
+    gain: '#8ee06a', loss: '#ff7a5c', market: '#ffd76a', info: '#f3ebd3',
+    rally: '#ffd76a',  // war-drum moment reads as gold, same family as market
+    death: '#ff7a5c'   // dark event, text still reads in the loss color
+  };
+  // per-kind glow-burst styling (scaleBase/growth drive the additive sprite's
+  // grow-and-fade so "rally" flares bigger/brighter and "death" reads as a
+  // quick, small, dark puff instead of the usual bright payout burst)
+  var BURST_STYLE = {
+    rally: { scaleBase: 8, growth: 40, opacity: 1.0, fade: 0.85, color: '#ffe08a' },
+    death: { scaleBase: 3, growth: 10, opacity: 0.55, fade: 0.9, color: '#2a1e12' },
+    _default: { scaleBase: 6, growth: 26, opacity: 0.8, fade: 1.4, color: null }
+  };
   var fxList = [];
   var fxTicking = false;
+  var MAX_FX = 24; // performance guard: cap simultaneous fx items
 
   function makeTextSprite(text, color) {
     var cv = document.createElement('canvas');
@@ -326,8 +339,87 @@
     return sp;
   }
 
+  // shared cleanup for one fxList item — disposes only what's uniquely ours;
+  // DN.util.softSprite() is a memoized singleton texture shared across the
+  // whole engine, so its .map is never disposed here.
+  function disposeFxItem(item) {
+    if (!item) return;
+    if (item.sp) {
+      DN.world.scene.remove(item.sp);
+      if (item.sp.material.map) item.sp.material.map.dispose();
+      item.sp.material.dispose();
+    }
+    if (item.burst) {
+      DN.world.scene.remove(item.burst);
+      item.burst.material.dispose();
+    }
+    if (item.ring) {
+      DN.world.scene.remove(item.ring);
+      item.ring.geometry.dispose();
+      item.ring.material.dispose();
+    }
+    if (item.pts) {
+      DN.world.scene.remove(item.pts);
+      item.pts.geometry.dispose();
+      item.pts.material.dispose();
+    }
+  }
+
+  // expanding ground shockwave — same RingGeometry/AdditiveBlending approach
+  // as the founding animation's shockwave ring (see colony.js), just driven
+  // by our own fx ticker instead of the colony's founding state machine.
+  function spawnShockwaveRing(col) {
+    var geo = new THREE.RingGeometry(2, 2.4, 48);
+    geo.rotateX(-Math.PI / 2);
+    var mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0xE8C468, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
+      depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    mesh.position.copy(col.pos);
+    mesh.position.y += 0.5;
+    DN.world.scene.add(mesh);
+    return mesh;
+  }
+
+  // small burst of Points particles with gravity — mirrors the founding dust
+  // burst's pattern (single BufferGeometry, per-particle vx/vy/vz, mutate the
+  // position array in place each tick).
+  function spawnParticles(col, opts) {
+    var n = opts.n;
+    var pos = new Float32Array(n * 3);
+    var vel = [];
+    var i, a, out;
+    for (i = 0; i < n; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * opts.spread;
+      pos[i * 3 + 1] = 0;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * opts.spread;
+      a = Math.random() * Math.PI * 2;
+      out = opts.outMin + Math.random() * (opts.outMax - opts.outMin);
+      vel.push({
+        vx: Math.cos(a) * out,
+        vy: opts.upMin + Math.random() * (opts.upMax - opts.upMin),
+        vz: Math.sin(a) * out
+      });
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    var pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      size: opts.size, map: DN.util.softSprite(), color: opts.color,
+      transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    pts.frustumCulled = false;
+    pts.position.copy(col.pos);
+    pts.position.y += opts.originY;
+    DN.world.scene.add(pts);
+    return { pts: pts, vel: vel, gravity: opts.gravity, dur: opts.dur };
+  }
+
   function spawnFx(col, kind, text) {
     if (!col || !text) return;
+
+    // performance guard: drop+dispose the oldest item before adding a new one
+    if (fxList.length >= MAX_FX) disposeFxItem(fxList.shift());
+
     var color = FX_COLORS[kind] || FX_COLORS.info;
     var sp = makeTextSprite(text, color);
     sp.position.copy(col.pos);
@@ -336,16 +428,46 @@
     DN.world.scene.add(sp);
 
     // glow burst on the mound so the payout reads from far away too
+    // (styling varies per kind — "rally" flares bigger/brighter over the
+    // mound's own glow sprite, "death" is a small quick dark puff)
+    var style = BURST_STYLE[kind] || BURST_STYLE._default;
     var burst = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: DN.util.softSprite(), color: color, transparent: true, opacity: 0.8,
-      depthWrite: false, blending: THREE.AdditiveBlending
+      map: DN.util.softSprite(), color: style.color || color, transparent: true,
+      opacity: style.opacity, depthWrite: false, blending: THREE.AdditiveBlending
     }));
     burst.position.copy(col.pos);
     burst.position.y += (col._mH || 6) - 0.5;
-    burst.scale.set(6, 6, 1);
+    burst.scale.set(style.scaleBase, style.scaleBase, 1);
     DN.world.scene.add(burst);
 
-    fxList.push({ sp: sp, burst: burst, t: 0, last: performance.now() });
+    var item = { sp: sp, burst: burst, burstStyle: style, t: 0, last: performance.now() };
+
+    if (kind === 'rally') {
+      // war-drum moment: gold shockwave ring expanding across the ground
+      item.ring = spawnShockwaveRing(col);
+    } else if (kind === 'death') {
+      // dark quick puff: 8-12 dark particles bursting from the mound top,
+      // falling back with gravity
+      var dp = spawnParticles(col, {
+        n: 8 + Math.floor(Math.random() * 5), color: 0x2a1e12, size: 1.1,
+        originY: (col._mH || 6) + 0.4, spread: 1.5,
+        outMin: 1, outMax: 4, upMin: 3, upMax: 7,
+        gravity: 18, dur: 1.5
+      });
+      item.pts = dp.pts; item.vel = dp.vel; item.gravity = dp.gravity; item.ptsDur = dp.dur;
+    } else if (kind === 'gain') {
+      // food pouring in: 5-8 food-colored particles arc up out of the crater
+      // and fall back into it
+      var gp = spawnParticles(col, {
+        n: 5 + Math.floor(Math.random() * 4), color: 0xE8A23D, size: 1.3,
+        originY: (col._mH || 6) - 0.3, spread: 1.2,
+        outMin: 0.3, outMax: 1.6, upMin: 4, upMax: 8,
+        gravity: 14, dur: 1.3
+      });
+      item.pts = gp.pts; item.vel = gp.vel; item.gravity = gp.gravity; item.ptsDur = gp.dur;
+    }
+
+    fxList.push(item);
     if (!fxTicking) { fxTicking = true; requestAnimationFrame(tickFx); }
   }
 
@@ -354,14 +476,38 @@
       var f = fxList[i];
       var dt = Math.min(0.05, (now - f.last) / 1000);
       f.last = now; f.t += dt;
+
       f.sp.position.y += dt * 4.4;
       f.sp.material.opacity = Math.max(0, 1 - f.t / 2.4);
-      var bs = 6 + f.t * 26;
+
+      var bst = f.burstStyle;
+      var bs = bst.scaleBase + f.t * bst.growth;
       f.burst.scale.set(bs, bs, 1);
-      f.burst.material.opacity = Math.max(0, 0.8 - f.t * 1.4);
+      f.burst.material.opacity = Math.max(0, bst.opacity - f.t * bst.fade);
+
+      if (f.ring) {
+        var rp = Math.min(1, f.t / 1.2);
+        var rs = 1 + rp * 9;
+        f.ring.scale.set(rs, 1, rs);
+        f.ring.material.opacity = Math.max(0, 0.9 * (1 - rp));
+      }
+
+      if (f.pts) {
+        var arr = f.pts.geometry.attributes.position.array;
+        for (var j = 0; j < f.vel.length; j++) {
+          var v = f.vel[j];
+          arr[j * 3] += v.vx * dt;
+          arr[j * 3 + 1] += v.vy * dt;
+          arr[j * 3 + 2] += v.vz * dt;
+          v.vy -= f.gravity * dt;
+          v.vx *= 0.97; v.vz *= 0.97;
+        }
+        f.pts.geometry.attributes.position.needsUpdate = true;
+        f.pts.material.opacity = Math.max(0, 0.95 * (1 - f.t / f.ptsDur));
+      }
+
       if (f.t > 2.4) {
-        DN.world.scene.remove(f.sp); DN.world.scene.remove(f.burst);
-        f.sp.material.map.dispose(); f.sp.material.dispose(); f.burst.material.dispose();
+        disposeFxItem(f);
         fxList.splice(i, 1);
       }
     }

@@ -355,6 +355,33 @@ body {
 /* world is touchable whenever the sheet is down */
 .game-mode:not(.sheet-open) iframe[data-world] { pointer-events: auto !important; }
 
+/* --- dimming backdrop between the world and the sheet; taps close it --- */
+.g-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50; /* above the 3D world, below HUD chips/toasts/hint/sheet/dock */
+  background: rgba(44, 40, 32, 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease;
+}
+.sheet-open .g-backdrop { opacity: 1; pointer-events: auto; }
+
+/* --- HUD entrance: chip/pills/dock ease in on mount, staggered --- */
+@keyframes g-fade-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes g-dock-fade-in {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.g-chip { animation: g-fade-in 0.3s cubic-bezier(0.22, 0.8, 0.32, 1) both; }
+.g-res { animation: g-fade-in 0.3s cubic-bezier(0.22, 0.8, 0.32, 1) 0.05s both; }
+.res-pill:nth-child(1) { animation: g-fade-in 0.28s ease 0.08s both; }
+.res-pill:nth-child(2) { animation: g-fade-in 0.28s ease 0.14s both; }
+.res-pill:nth-child(3) { animation: g-fade-in 0.28s ease 0.2s both; }
+
 /* --- top-left identity / match chip --- */
 .g-chip {
   position: fixed;
@@ -406,7 +433,9 @@ body {
   border: 2px solid var(--color-gold-deep);
   background: linear-gradient(180deg, rgba(58, 48, 30, 0.92), rgba(38, 31, 19, 0.94));
   box-shadow: var(--pixel-shadow);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
+.res-pill:active { transform: translate(1px, 1px); }
 .res-pill .ic {
   display: grid;
   place-items: center;
@@ -426,6 +455,18 @@ body {
   color: #f7ecd2;
   text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.55);
 }
+/* flash a pill when its value changes so food/ant swings are legible */
+.res-pill[data-flash="true"] { animation: res-flash 0.4s ease; }
+.res-pill[data-flash="true"] .v { animation: res-flash-text 0.4s ease; }
+@keyframes res-flash {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+@keyframes res-flash-text {
+  0%, 100% { color: #f7ecd2; text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.55); }
+  30% { color: #ffe9ad; text-shadow: 0 0 8px rgba(255, 214, 120, 0.9); }
+}
 
 /* --- bottom dock: round nav buttons + one big juicy CTA --- */
 .g-dock {
@@ -438,6 +479,7 @@ body {
   align-items: flex-end;
   gap: 10px;
   width: min(calc(100% - 20px), 470px);
+  animation: g-dock-fade-in 0.32s cubic-bezier(0.22, 0.8, 0.32, 1) 0.1s both;
 }
 .g-dock-btn {
   display: flex;
@@ -453,13 +495,14 @@ body {
   background: rgba(243, 235, 211, 0.96);
   box-shadow: var(--pixel-shadow);
   cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
 }
 .g-dock-btn .ic { font-size: 21px; line-height: 1; }
 .g-dock-btn .lb {
   font-family: var(--font-mono);
-  font-size: 7.5px;
+  font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-ink-faint);
 }
@@ -484,9 +527,15 @@ body {
   text-shadow: 2px 2px 0 rgba(90, 60, 10, 0.55);
   box-shadow: 3px 3px 0 rgba(74, 58, 30, 0.35), inset 0 2px 0 rgba(255, 244, 214, 0.35);
   cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+  animation: g-cta-breathe 2.6s ease-in-out infinite;
 }
 .g-cta:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(74, 58, 30, 0.35); }
-.g-cta:disabled { filter: grayscale(0.55) brightness(0.9); pointer-events: none; }
+.g-cta:disabled { filter: grayscale(0.55) brightness(0.9); pointer-events: none; animation: none; }
+@keyframes g-cta-breathe {
+  0%, 100% { box-shadow: 3px 3px 0 rgba(74, 58, 30, 0.35), inset 0 2px 0 rgba(255, 244, 214, 0.35), 0 0 0 rgba(255, 214, 120, 0); }
+  50% { box-shadow: 3px 3px 0 rgba(74, 58, 30, 0.35), inset 0 2px 0 rgba(255, 244, 214, 0.35), 0 0 18px rgba(255, 214, 120, 0.55); }
+}
 .g-cta.rust { background: linear-gradient(180deg, #d9764f, var(--color-rust) 55%, #8f3c22); border-color: #7c341d; }
 
 /* --- slide-up parchment sheet --- */
@@ -516,8 +565,11 @@ body {
   gap: 10px;
   padding: 8px 14px 6px;
   border-bottom: 2px solid var(--brd-soft);
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none; /* the head is drag-tracked in JS; don't let the browser scroll/refresh instead */
+  user-select: none;
 }
+.g-sheet.dragging { transition: none; }
 .g-sheet-head::before {
   content: "";
   position: absolute;
@@ -582,6 +634,16 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .g-toast { animation: none; }
   .g-sheet { transition: none; }
+  .g-backdrop { transition: none; }
+  .g-chip,
+  .g-res,
+  .res-pill,
+  .res-pill[data-flash="true"],
+  .res-pill[data-flash="true"] .v,
+  .g-dock,
+  .g-cta,
+  .g-skel-chip,
+  .g-skel-line { animation: none; }
 }
 
 /* --- the game loop, spelled out (room + cockpit sheets) --- */
@@ -642,12 +704,49 @@ body {
   background: rgba(243, 235, 211, 0.88);
   color: var(--color-ink-soft);
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   pointer-events: none;
   white-space: nowrap;
+}
+
+/* --- loading skeleton: shimmering parchment rows while matches load --- */
+@keyframes g-shimmer {
+  0% { background-position: -180px 0; }
+  100% { background-position: 180px 0; }
+}
+.g-skel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-glass);
+  border: 2px solid var(--brd-soft);
+  background: rgba(249, 243, 226, 0.5);
+}
+.g-skel-chip,
+.g-skel-line {
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--color-slot) 25%, rgba(255, 253, 245, 0.95) 37%, var(--color-slot) 63%);
+  background-size: 360px 100%;
+  animation: g-shimmer 1.3s ease infinite;
+}
+.g-skel-chip { width: 44px; height: 44px; border-radius: 10px; flex: none; }
+.g-skel-lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.g-skel-line { height: 10px; }
+.g-skel-line.short { width: 55%; }
+
+/* --- small-screen tightening (iPhone SE and similar ~375px widths) --- */
+@media (max-width: 380px) {
+  .g-chip { max-width: 54vw; padding: 6px 10px 6px 6px; gap: 7px; }
+  .g-chip .emblem { width: 34px; height: 34px; font-size: 18px; }
+  .res-pill { min-width: 84px; padding: 3px 9px 3px 4px; }
+  .g-dock { gap: 6px; }
+  .g-dock-btn { width: 48px; height: 48px; border-radius: 12px; }
+  .g-dock-btn .ic { font-size: 18px; }
+  .g-cta { font-size: 10px; padding: 9px 12px; }
 }
 
 /* podium plate tints */

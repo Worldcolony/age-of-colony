@@ -145,6 +145,8 @@ export const api = {
     req<GameState>(`/api/games/${id}/colonies`, "POST", body, adminHeaders(adminToken)),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),
+  rally: (id: string, body: { colonyId: string; opportunityId: string; anonymousId: string }) =>
+    req<GameState>(`/api/games/${id}/rally`, "POST", body),
   startGame: (
     id: string,
     mode: "replay" | "live" = "live",

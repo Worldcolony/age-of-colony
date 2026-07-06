@@ -52,6 +52,8 @@ RISK_RULES: dict[str, dict[str, float]] = {
     "chaos": {"multiplier": 10.0},
 }
 RESOURCE_LOSS_MULTIPLIER = {"safe": 1.0, "risky": 2.0, "wild": 3.0, "chaos": 4.0}
+RALLY_COST = 3
+RALLY_ANTS = 5
 
 FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
@@ -327,6 +329,7 @@ class Prediction:
     deadline_event_index: int | None
     info_bought: bool = False
     resolved: bool = False
+    rallied: bool = False
 
 
 @dataclass
@@ -629,6 +632,53 @@ class GameHarness:
             },
         )
         return colony
+
+    def rally(self, colony_id: str, opportunity_id: str) -> int:
+        if self.room.status not in {"running_replay", "running_live"}:
+            raise ValueError("The match is not live.")
+        colony = self.room.colonies.get(colony_id)
+        if not colony:
+            raise ValueError("colony not found")
+
+        prediction = next(
+            (
+                candidate
+                for candidate in self.room.predictions.values()
+                if candidate.colony_id == colony_id
+                and candidate.opportunity_id == opportunity_id
+                and not candidate.resolved
+            ),
+            None,
+        )
+        if not prediction:
+            raise ValueError("Your ants sat this market out — no prediction to rally.")
+        if prediction.rallied:
+            raise ValueError("Your ants already rallied on this market.")
+        if colony.food < RALLY_COST:
+            raise ValueError("Not enough food to rally (needs 3).")
+
+        existing_ant_ids = set(prediction.ant_ids)
+        idle_ants = [ant for ant in colony.alive_ants if ant.ant_id not in existing_ant_ids]
+        if not idle_ants:
+            raise ValueError("No idle ants left to rally.")
+
+        chosen = idle_ants[:RALLY_ANTS]
+        colony.food -= RALLY_COST
+        prediction.ant_ids.extend(ant.ant_id for ant in chosen)
+        prediction.rallied = True
+        added = len(chosen)
+        self.room.add_log(
+            "rally",
+            f"{colony.name} rallies — {added} ants join {prediction.option.label} (-3 food).",
+            {
+                "colonyId": colony.colony_id,
+                "opportunityId": opportunity_id,
+                "predictionId": prediction.prediction_id,
+                "ants": added,
+                "cost": RALLY_COST,
+            },
+        )
+        return added
 
     def process_events(self, events: Iterable[dict[str, Any]]) -> None:
         self.room.status = "running_replay"

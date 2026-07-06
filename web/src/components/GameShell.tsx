@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { worldLink } from "@/three/worldLink";
 
 // Mobile-game shell: the living 3D world is the screen. This floats the HUD
@@ -55,6 +55,57 @@ export function GameShell({
     worldLink.setInteractive(!open);
   }, [open]);
 
+  // --- drag-to-dismiss on the sheet head: pointer down + track vertical
+  // drag with a live transform; release past ~90px closes, else springs
+  // back (the spring is just the sheet's own CSS transition, which is
+  // itself disabled under prefers-reduced-motion). ---
+  const dragRef = useRef<{ startY: number; pointerId: number; dragging: boolean } | null>(null);
+  const draggedRef = useRef(false);
+  const [dragY, setDragY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleHeadPointerDown = useCallback((e: ReactPointerEvent) => {
+    if (!open) return; // only closed by dragging while it's open
+    dragRef.current = { startY: e.clientY, pointerId: e.pointerId, dragging: false };
+  }, [open]);
+
+  const handleHeadPointerMove = useCallback((e: ReactPointerEvent) => {
+    const st = dragRef.current;
+    if (!st || !open) return;
+    const delta = e.clientY - st.startY;
+    if (!st.dragging) {
+      if (Math.abs(delta) < 6) return;
+      st.dragging = true;
+      draggedRef.current = true;
+      setIsDragging(true);
+      try {
+        e.currentTarget.setPointerCapture(st.pointerId);
+      } catch {
+        /* pointer capture is best-effort */
+      }
+    }
+    setDragY(Math.max(0, delta));
+  }, [open]);
+
+  const handleHeadPointerEnd = useCallback(() => {
+    const st = dragRef.current;
+    dragRef.current = null;
+    if (!st?.dragging) return;
+    setIsDragging(false);
+    setDragY((y) => {
+      if (y > 90) onOpenChange(false);
+      return 0;
+    });
+  }, [onOpenChange]);
+
+  const handleHeadClick = useCallback(() => {
+    if (draggedRef.current) {
+      draggedRef.current = false; // this click was the tail end of a drag, not a tap
+      return;
+    }
+    onOpenChange(!open);
+  }, [open, onOpenChange]);
+
   return (
     <>
       {chip && <div className="g-chip">{chip}</div>}
@@ -62,15 +113,16 @@ export function GameShell({
       {resources.length > 0 && (
         <div className="g-res">
           {resources.map((r, i) => (
-            <span key={i} className="res-pill" title={r.title}>
-              <span className="ic">{r.icon}</span>
-              <span className="v">{r.value}</span>
-            </span>
+            <ResPill key={i} pill={r} />
           ))}
         </div>
       )}
 
       {!open && hint && <span className="g-hint">{hint}</span>}
+
+      {/* dims the world while the sheet is open; tapping it closes the sheet.
+          Sits below the dock (z-60) and sheet (z-58) so the CTA never gets buried. */}
+      <div className="g-backdrop" aria-hidden="true" onClick={() => onOpenChange(false)} />
 
       <div className="g-dock">
         {nav.map((b) => (
@@ -90,14 +142,48 @@ export function GameShell({
         {cta}
       </div>
 
-      <div className="g-sheet" role="dialog" aria-label={sheetTitle}>
-        <div className="g-sheet-head relative" onClick={() => onOpenChange(!open)}>
+      <div
+        className={`g-sheet${isDragging ? " dragging" : ""}`}
+        role="dialog"
+        aria-label={sheetTitle}
+        style={isDragging ? { transform: `translate(-50%, ${dragY}px)` } : undefined}
+      >
+        <div
+          className="g-sheet-head relative"
+          onClick={handleHeadClick}
+          onPointerDown={handleHeadPointerDown}
+          onPointerMove={handleHeadPointerMove}
+          onPointerUp={handleHeadPointerEnd}
+          onPointerCancel={handleHeadPointerEnd}
+        >
           <span className="g-sheet-title">{sheetTitle}</span>
           <span className="g-sheet-close">{open ? "▼ close" : "▲ open"}</span>
         </div>
         <div className="g-sheet-body">{children}</div>
       </div>
     </>
+  );
+}
+
+// resource pill: flashes (scale bump + gold text) whenever its value changes,
+// so food/ant swings are legible without staring at the HUD.
+function ResPill({ pill }: { pill: ResourcePill }) {
+  const prev = useRef(pill.value);
+  const [flash, setFlash] = useState(false);
+
+  useEffect(() => {
+    if (prev.current === pill.value) return;
+    prev.current = pill.value;
+    setFlash(true);
+    const t = window.setTimeout(() => setFlash(false), 400);
+    return () => window.clearTimeout(t);
+  }, [pill.value]);
+
+  return (
+    <span className="res-pill" data-flash={flash} title={pill.title}>
+      <span className="ic">{pill.icon}</span>
+      <span className="v">{pill.value}</span>
+    </span>
   );
 }
 
