@@ -2739,6 +2739,31 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertFalse(_live_timeline_active(scheduled_timeline))
         self.assertTrue(_live_timeline_active(active_timeline))
 
+    def test_final_latest_state_finishes_live_timeline_without_full_time_event(self):
+        status_id_timeline = {
+            "latestState": {
+                "fixtureId": 42,
+                "gameState": "finished",
+                "statusId": 13,
+                "action": "score_update",
+            },
+            "events": [],
+        }
+        text_state_timeline = {
+            "latestState": {
+                "fixtureId": 42,
+                "gameState": "Full Time",
+                "statusId": None,
+                "action": "score_update",
+            },
+            "events": [{"fixtureId": 42, "seq": 99, "action": "clock"}],
+        }
+
+        self.assertTrue(_live_timeline_finished(status_id_timeline))
+        self.assertFalse(_live_timeline_active(status_id_timeline))
+        self.assertTrue(_live_timeline_finished(text_state_timeline))
+        self.assertFalse(_live_timeline_active(text_state_timeline))
+
     def test_live_catchup_resets_stale_score_when_no_official_score_exists(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)

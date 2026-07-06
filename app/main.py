@@ -74,6 +74,29 @@ AUTORUN_COLONIES = (
 )
 LIVE_SCORE_POLL_SECONDS = 2.5
 LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
+LIVE_FINAL_GAME_STATES = {
+    "finished",
+    "complete",
+    "completed",
+    "full_time",
+    "fulltime",
+    "final",
+    "final_whistle",
+    "match_finished",
+    "game_finished",
+    "fixture_finished",
+    "match_ended",
+    "game_ended",
+    "ended",
+    "after_penalties",
+    "post_match",
+    "postmatch",
+    "cancelled",
+    "canceled",
+    "abandoned",
+    "coverage_cancelled",
+    "coverage_canceled",
+}
 LIVE_WAITING_GAME_STATES = {"scheduled", "pre_match", "prematch", "not_started", "notstarted", "pre_game", "pregame"}
 LIVE_WAITING_STATUS_IDS = {1}
 REPLAY_MAX_DELAY_SECONDS = 8.0
@@ -1953,6 +1976,8 @@ def _prime_live_catchup(
 
 def _live_timeline_active(timeline: dict[str, Any] | None) -> bool:
     status = _live_timeline_status(timeline)
+    if _live_status_finished(status):
+        return False
     state = _normalize_live_game_state(status.get("gameState"))
     if state in LIVE_WAITING_GAME_STATES:
         return False
@@ -1981,19 +2006,57 @@ def _log_live_waiting_for_kickoff(room: GameRoom, timeline: dict[str, Any] | Non
 
 
 def _live_timeline_status(timeline: dict[str, Any] | None) -> dict[str, Any]:
+    top_level_status = _live_status_from_candidate((timeline or {}).get("latestState"))
+    if _live_status_has_state(top_level_status) or _live_status_finished(top_level_status):
+        return top_level_status
+    top_level_status = _live_status_from_candidate(timeline)
+    if _live_status_has_state(top_level_status) or _live_status_finished(top_level_status):
+        return top_level_status
     for event in reversed((timeline or {}).get("events") or []):
         if not isinstance(event, dict):
             continue
-        game_state = event.get("gameState")
-        status_id = event.get("statusId")
-        raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
-        if game_state is None:
-            game_state = raw.get("GameState") or raw.get("gameState")
-        if status_id is None:
-            status_id = raw.get("StatusId") or raw.get("statusId")
-        if game_state is not None or status_id is not None:
-            return {"gameState": game_state, "statusId": status_id}
+        event_status = _live_status_from_candidate(event)
+        if _live_status_has_state(event_status) or _live_status_finished(event_status):
+            return event_status
     return {}
+
+
+def _live_status_from_candidate(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {}
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    game_state = _first_status_value(candidate.get("gameState"), candidate.get("GameState"), raw.get("GameState"), raw.get("gameState"))
+    status_id = _first_status_value(candidate.get("statusId"), candidate.get("StatusId"), raw.get("StatusId"), raw.get("statusId"))
+    status = _first_status_value(candidate.get("status"), candidate.get("Status"), raw.get("Status"), raw.get("status"))
+    action = _first_status_value(candidate.get("action"), candidate.get("Action"), raw.get("Action"), raw.get("action"))
+    event_type = _first_status_value(candidate.get("type"), candidate.get("Type"), raw.get("Type"), raw.get("type"))
+    description = _first_status_value(
+        candidate.get("description"),
+        candidate.get("Description"),
+        raw.get("Description"),
+        raw.get("description"),
+    )
+    if game_state is None and status_id is None and status is None and action is None and event_type is None and description is None:
+        return {}
+    return {
+        "gameState": game_state,
+        "statusId": status_id,
+        "status": status,
+        "action": action,
+        "type": event_type,
+        "description": description,
+    }
+
+
+def _first_status_value(*values: Any) -> Any:
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _live_status_has_state(status: dict[str, Any] | None) -> bool:
+    return bool(status and (status.get("gameState") is not None or status.get("statusId") is not None or status.get("status") is not None))
 
 
 def _normalize_live_game_state(value: Any) -> str:
@@ -2099,10 +2162,14 @@ def _live_auto_finish_reached(room: GameRoom) -> bool:
 
 
 def _live_timeline_finished(timeline: dict[str, Any]) -> bool:
+    if _live_status_finished(_live_timeline_status(timeline)):
+        return True
     return any(_live_event_finished(event) for event in timeline.get("events") or [])
 
 
 def _live_event_finished(event: dict[str, Any]) -> bool:
+    if _live_status_finished(_live_status_from_candidate(event)):
+        return True
     raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
     status_id = _status_id_value(
         event.get("statusId")
@@ -2148,6 +2215,43 @@ def _live_event_finished(event: dict[str, Any]) -> bool:
             "cancelled",
             "abandoned",
             "coverage cancelled",
+        )
+    )
+
+
+def _live_status_finished(status: dict[str, Any] | None) -> bool:
+    if not status:
+        return False
+    status_id = _status_id_value(status.get("statusId") or status.get("status"))
+    if status_id in LIVE_FINAL_STATUS_IDS:
+        return True
+    values = [
+        status.get("gameState"),
+        status.get("status"),
+        status.get("action"),
+        status.get("type"),
+        status.get("description"),
+    ]
+    normalized = " ".join(str(value or "") for value in values).casefold().replace("_", " ").replace("-", " ")
+    tokens = {_normalize_live_game_state(value) for value in values if value is not None}
+    if tokens.intersection(LIVE_FINAL_GAME_STATES):
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "full time",
+            "fulltime",
+            "final whistle",
+            "match finished",
+            "game finished",
+            "fixture finished",
+            "match ended",
+            "game ended",
+            "after penalties",
+            "post match",
+            "final score",
+            "coverage cancelled",
+            "coverage canceled",
         )
     )
 
