@@ -11,6 +11,7 @@ from app.main import (
     ADMIN_TOKEN_HEADER,
     app,
     _finish_live_game,
+    _live_auto_finish_reached,
     _live_timeline_active,
     _live_timeline_finished,
     _merge_restored_events,
@@ -2919,6 +2920,32 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(finished.status_code, 200)
         self.assertEqual(finished.json()["status"], "finished")
         self.assertTrue(any(event.kind == "game_finished" for event in room.log))
+
+    def test_replay_endpoint_resumes_running_live_room(self):
+        client = TestClient(app)
+        room = game_manager.create_room(fixture_id=939394, participant1="Portugal", participant2="Spain", seed=123)
+        room.mode = "live"
+        room.status = "running_live"
+        room.add_log("game_started", "Live game connected to TXLine updates.", {"mode": "live"})
+
+        with patch("app.main._ensure_live_task") as live_task:
+            response = client.get(f"/api/games/{room.game_id}/replay")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["game"]["status"], "running_live")
+        live_task.assert_called_once_with(room)
+
+    def test_live_auto_finish_falls_back_to_game_started_age(self):
+        manager = GameManager()
+        room = manager.create_room(fixture_id=42, participant1="Portugal", participant2="Spain", seed=123)
+        room.mode = "live"
+        room.status = "running_live"
+        room.start_time = None
+        room.start_time_iso = None
+        room.add_log("game_started", "Live game connected to TXLine updates.", {"mode": "live"})
+        room.log[-1].created_at = (datetime.now(timezone.utc) - timedelta(hours=4)).timestamp()
+
+        self.assertTrue(_live_auto_finish_reached(room))
 
     def test_demo_run_requires_deepseek_agent(self):
         client = TestClient(app)

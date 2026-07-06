@@ -1057,9 +1057,18 @@ async def game_replay(game_id: str) -> dict[str, Any]:
     if not room:
         replay = await _stored_replay_or_none(game_id)
         if replay:
-            return replay
-        raise HTTPException(status_code=404, detail="Game not found.")
+            stored_game = replay["game"]
+            if _stored_game_can_resume_live(stored_game):
+                room = _restore_room_from_stored_row(
+                    {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
+                    events=replay.get("events") or [],
+                )
+            else:
+                return replay
+        else:
+            raise HTTPException(status_code=404, detail="Game not found.")
     await _ensure_room_log_hydrated(room)
+    await _ensure_room_progress(room)
     return {
         "game": room.public_state(),
         "events": [event.public_state() for event in room.log],
@@ -2252,10 +2261,22 @@ def _finish_live_game(harness: Any) -> None:
 def _live_auto_finish_reached(room: GameRoom) -> bool:
     if LIVE_AUTO_FINISH_AFTER_SECONDS <= 0:
         return False
+    now = datetime.now(timezone.utc)
     kickoff_at = _room_kickoff_datetime(room)
-    if not kickoff_at:
-        return False
-    return datetime.now(timezone.utc) >= kickoff_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS)
+    if kickoff_at and now >= kickoff_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS):
+        return True
+    started_at = _room_live_started_datetime(room)
+    return bool(started_at and now >= started_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS))
+
+
+def _room_live_started_datetime(room: GameRoom) -> datetime | None:
+    for event in room.log:
+        if event.kind != "game_started":
+            continue
+        if event.data.get("mode") != "live":
+            continue
+        return datetime.fromtimestamp(float(event.created_at), tz=timezone.utc)
+    return None
 
 
 def _live_timeline_finished(timeline: dict[str, Any]) -> bool:
