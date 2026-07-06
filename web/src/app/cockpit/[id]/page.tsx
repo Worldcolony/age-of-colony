@@ -8,7 +8,7 @@ import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
-import { GameShell, GameChip } from "@/components/GameShell";
+import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
@@ -83,8 +83,42 @@ export default function CockpitPage() {
   const seen = useRef<Set<number>>(new Set());
   const anonId = useMemo(() => getAnonId(), []);
 
+  const { toasts, push } = useGameToasts();
+  const mineIdRef = useRef<string | null>(null);
+  const liveRef = useRef(false); // suppress fx/toasts while loading history
+
   function addEvent(e: GameEvent) {
     addEvents([e]);
+  }
+
+  // The mechanism, made visible: every meaningful engine event lands in the
+  // 3D world (combat text over the mound that earned/lost it) and, when it's
+  // about YOUR colony, as a toast over the HUD.
+  function announceEvent(event: GameEvent) {
+    const colonyId = typeof event.data?.colonyId === "string" ? event.data.colonyId : null;
+    const isMine = Boolean(colonyId && colonyId === mineIdRef.current);
+    if (event.kind === "settlement") {
+      const food = Number(event.data?.food ?? 0);
+      const win = Boolean(event.data?.win);
+      const foodText = food > 0 ? `+${food} food` : food < 0 ? `${food} food` : win ? "safe call" : "missed";
+      worldLink.fx(colonyId, win ? "gain" : "loss", foodText);
+      if (isMine) {
+        const label = (event.data?.option as { label?: string } | undefined)?.label ?? "market";
+        push(`${win ? "🏆" : "💀"} ${foodText} — ${label}`, win ? "gain" : "loss");
+      }
+    } else if (event.kind === "opportunity") {
+      const label = (event.data?.opportunity as Opportunity | undefined)?.label ?? event.message ?? "New market";
+      worldLink.fx(null, "market", "🎯 market open");
+      push(`🎯 ${cleanMarketLabel(String(label))} — ants are voting`, "market");
+    } else if (event.kind === "hatch") {
+      worldLink.fx(colonyId, "gain", "🥚 +larvae");
+      if (isMine) push("🥚 Your colony hatched new ants", "gain");
+    } else if (event.kind === "starvation") {
+      worldLink.fx(colonyId, "loss", "☠️ starving");
+      if (isMine) push("☠️ Your ants are starving — win markets to feed them", "loss");
+    } else if (event.kind === "game_finished") {
+      push("🏁 Full time — final standings are in", "info");
+    }
   }
 
   function addEvents(incoming: GameEvent[]) {
@@ -93,10 +127,13 @@ export default function CockpitPage() {
       if (seen.current.has(event.index)) continue;
       seen.current.add(event.index);
       if (PULSE[event.kind]) worldLink.pulse(PULSE[event.kind]);
+      if (liveRef.current) announceEvent(event);
       fresh.push(event);
     }
     if (!fresh.length) return;
     setEvents((prev) => [...fresh, ...prev].sort((a, b) => b.index - a.index).slice(0, 700));
+    // history is loaded — anything after this batch is live and worth announcing
+    liveRef.current = true;
   }
 
   useEffect(() => {
@@ -181,6 +218,40 @@ export default function CockpitPage() {
     if (game?.colonies?.length) worldLink.syncColonies(game.colonies, mine?.colonyId ?? null);
   }, [game?.colonies, mine?.colonyId]);
 
+  useEffect(() => {
+    mineIdRef.current = mine?.colonyId ?? null;
+  }, [mine?.colonyId]);
+
+  // Arrival shot: fly the camera to your mound once, so you always know
+  // where "you" are on the map before the markets start moving.
+  const introFlown = useRef(false);
+  useEffect(() => {
+    if (introFlown.current || !mine?.colonyId) return;
+    introFlown.current = true;
+    const t = window.setTimeout(() => worldLink.focusColony(mine.colonyId), 900);
+    return () => window.clearTimeout(t);
+  }, [mine?.colonyId]);
+
+  const colonyRail = sorted.length > 0 && (
+    <div className="colony-rail" aria-label="Colonies on the map">
+      {sorted.map((colony, index) => (
+        <button
+          key={colony.colonyId}
+          type="button"
+          data-mine={colony.colonyId === mine?.colonyId}
+          onClick={() => {
+            worldLink.focusColony(colony.colonyId);
+            setSheetOpen(false); // drop the sheet so you see the flight
+          }}
+        >
+          <span className="rk">#{index + 1}</span>
+          <span className="truncate">{colony.name}</span>
+          <span className="text-xs text-ink-faint">🐜{colony.antsAlive}</span>
+        </button>
+      ))}
+    </div>
+  );
+
   const mobileTabs = (
     <>
       <CockpitTabs
@@ -258,9 +329,14 @@ export default function CockpitPage() {
             </button>
           </div>
         ) : (
-          mobileTabs
+          <>
+            <p className="loop-strip">🐜 ants vote → 🎯 markets settle → 🍖 food feeds your mound → 🏆 richest colony wins</p>
+            {colonyRail}
+            {mobileTabs}
+          </>
         )}
       </GameShell>
+      <GameToasts toasts={toasts} />
     </div>
   );
 

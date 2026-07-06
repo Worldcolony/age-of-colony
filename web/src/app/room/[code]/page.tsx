@@ -8,7 +8,7 @@ import { getAnonId } from "@/lib/anon";
 import { flag, fmtKickoffLine, teamName } from "@/lib/format";
 import { Segmented, Chips } from "@/components/Segmented";
 import { worldLink } from "@/three/worldLink";
-import { GameShell, GameChip } from "@/components/GameShell";
+import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 import type { FavoriteContext, GameState, InfoNeed, Player, Style } from "@/lib/types";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
@@ -40,6 +40,7 @@ export default function RoomPage() {
   const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(true);
+  const { toasts, push } = useGameToasts();
   const [style, setStyle] = useState<Style>("balanced");
   const [ground, setGround] = useState<FavoriteContext>("momentum");
   const [info, setInfo] = useState<InfoNeed>("medium");
@@ -137,6 +138,7 @@ export default function RoomPage() {
       syncGame(g);
       setMsg(`${cleanName} is ready.`);
       setSheetOpen(false); // drop the sheet so the founding animation plays center stage
+      push("\ud83c\udfe0 Colony founded \u2014 your mound is rising on the map", "gain");
       if (g.gameId && g.status && RUNNING.has(g.status)) router.replace(`/cockpit/${g.gameId}`);
     } catch (e) {
       const message = (e as Error).message;
@@ -194,6 +196,8 @@ export default function RoomPage() {
   );
 
   return (
+    <>
+    <GameToasts toasts={toasts} />
     <GameShell
       chip={<GameChip emblem={flag(p1)} title={`${p1} vs ${p2}`} sub={game?.status === "created" ? kickoffLine : game?.status?.replace("_", " ") || "match room"} />}
       resources={[
@@ -210,6 +214,8 @@ export default function RoomPage() {
       onOpenChange={setSheetOpen}
       hint={myReady ? "your mound is on the map · drag to explore" : "join to raise your mound on the map"}
     >
+      <p className="loop-strip">1&nbsp;<b>found a colony</b> → 2&nbsp;<b>ants predict the match</b> → 3&nbsp;<b>food = victory</b></p>
+
       {!myReady && (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-ink-soft">One name for you and your colony, with tactics set before launch.</p>
@@ -265,6 +271,7 @@ export default function RoomPage() {
       <p className="text-center text-xs text-ink-faint">{startHelper}</p>
       {msg && <p className="well px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
     </GameShell>
+    </>
   );
 }
 

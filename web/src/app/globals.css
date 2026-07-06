@@ -548,6 +548,87 @@ body {
   gap: 12px;
 }
 
+/* --- event toasts sliding in under the top chips --- */
+.g-toasts {
+  position: fixed;
+  top: calc(66px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 56;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(calc(100% - 24px), 420px);
+  pointer-events: none;
+}
+.g-toast {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 2px solid var(--brd-strong);
+  background: rgba(243, 235, 211, 0.96);
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: var(--pixel-shadow);
+  animation: toast-in 0.25s cubic-bezier(0.3, 1.2, 0.5, 1);
+}
+.g-toast[data-tone="gain"] { border-color: #3a5f1f; background: #e9f2d9; }
+.g-toast[data-tone="loss"] { border-color: #9a3f26; background: #f6e2da; }
+.g-toast[data-tone="market"] { border-color: var(--color-gold-deep); background: #f7ecc9; }
+@keyframes toast-in {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .g-toast { animation: none; }
+  .g-sheet { transition: none; }
+}
+
+/* --- the game loop, spelled out (room + cockpit sheets) --- */
+.loop-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 2px dashed var(--brd-soft);
+  background: rgba(249, 243, 226, 0.6);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+  text-align: center;
+}
+.loop-strip b { color: var(--color-gold-deep); }
+
+/* --- colony rail: tap a colony chip to fly the camera to its mound --- */
+.colony-rail {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px;
+  margin: -2px;
+}
+.colony-rail button {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 999px;
+  border: 2px solid var(--brd-soft);
+  background: rgba(249, 243, 226, 0.85);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-ink-soft);
+  cursor: pointer;
+}
+.colony-rail button[data-mine="true"] { border-color: var(--color-gold-deep); background: #f7ecc9; color: var(--color-ink); box-shadow: var(--pixel-shadow); }
+.colony-rail .rk { font-family: var(--font-mono); font-size: 10px; color: var(--color-gold-deep); }
+
 /* small floating hint over the world */
 .g-hint {
   position: fixed;

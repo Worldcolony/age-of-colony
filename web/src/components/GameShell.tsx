@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { worldLink } from "@/three/worldLink";
 
 // Mobile-game shell: the living 3D world is the screen. This floats the HUD
@@ -110,5 +110,37 @@ export function GameChip({ emblem, title, sub }: { emblem: string; title: string
         {sub && <span className="s block truncate">{sub}</span>}
       </span>
     </>
+  );
+}
+
+// ---- toasts: game events surfacing over the world ("+12 food to Maya") ----
+
+export interface GameToast {
+  id: number;
+  text: string;
+  tone?: "gain" | "loss" | "market" | "info";
+}
+
+export function useGameToasts(max = 3) {
+  const [toasts, setToasts] = useState<GameToast[]>([]);
+  const nextId = useRef(1);
+  const push = useCallback((text: string, tone: GameToast["tone"] = "info") => {
+    const id = nextId.current++;
+    setToasts((prev) => [...prev.slice(-(max - 1)), { id, text, tone }]);
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4600);
+  }, [max]);
+  return { toasts, push };
+}
+
+export function GameToasts({ toasts }: { toasts: GameToast[] }) {
+  if (!toasts.length) return null;
+  return (
+    <div className="g-toasts" aria-live="polite">
+      {toasts.map((t) => (
+        <div key={t.id} className="g-toast" data-tone={t.tone || "info"}>
+          {t.text}
+        </div>
+      ))}
+    </div>
   );
 }

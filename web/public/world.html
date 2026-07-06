@@ -212,6 +212,7 @@
   var placed = 0;          // how many game colonies we've placed (drives the ring)
   var flownToMine = false; // fly the camera to the player's own colony once
   var lastSync = null;     // replay the latest sync once the engine is ready
+  var pendingFocus = null; // focus request that arrived before the mound existed
   var GOLDEN = 2.399963;   // golden angle keeps game mounds evenly spread
 
   function engineReady() {
@@ -259,7 +260,13 @@
         }
       }
     }
-    if (col) map[gc.id] = col;
+    if (col) {
+      map[gc.id] = col;
+      if (pendingFocus === gc.id) {
+        pendingFocus = null;
+        DN.app.selectColony(col);
+      }
+    }
     return col;
   }
 
@@ -295,6 +302,73 @@
     });
   }
 
+  // ---- floating combat text: "+12 food" rises off a mound and fades ----
+  var FX_COLORS = { gain: '#8ee06a', loss: '#ff7a5c', market: '#ffd76a', info: '#f3ebd3' };
+  var fxList = [];
+  var fxTicking = false;
+
+  function makeTextSprite(text, color) {
+    var cv = document.createElement('canvas');
+    cv.width = 512; cv.height = 144;
+    var cx = cv.getContext('2d');
+    cx.font = '700 64px "Silkscreen", monospace';
+    cx.textAlign = 'center';
+    cx.textBaseline = 'middle';
+    cx.lineWidth = 12;
+    cx.strokeStyle = 'rgba(30,20,6,0.9)';
+    cx.strokeText(text, 256, 72);
+    cx.fillStyle = color;
+    cx.fillText(text, 256, 72);
+    var tex = new THREE.CanvasTexture(cv);
+    tex.minFilter = THREE.LinearFilter;
+    var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    sp.scale.set(26, 7.3, 1);
+    return sp;
+  }
+
+  function spawnFx(col, kind, text) {
+    if (!col || !text) return;
+    var color = FX_COLORS[kind] || FX_COLORS.info;
+    var sp = makeTextSprite(text, color);
+    sp.position.copy(col.pos);
+    sp.position.y += (col._mH || 6) + 7 + Math.random() * 2;
+    sp.position.x += (Math.random() - 0.5) * 4;
+    DN.world.scene.add(sp);
+
+    // glow burst on the mound so the payout reads from far away too
+    var burst = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: DN.util.softSprite(), color: color, transparent: true, opacity: 0.8,
+      depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    burst.position.copy(col.pos);
+    burst.position.y += (col._mH || 6) - 0.5;
+    burst.scale.set(6, 6, 1);
+    DN.world.scene.add(burst);
+
+    fxList.push({ sp: sp, burst: burst, t: 0, last: performance.now() });
+    if (!fxTicking) { fxTicking = true; requestAnimationFrame(tickFx); }
+  }
+
+  function tickFx(now) {
+    for (var i = fxList.length - 1; i >= 0; i--) {
+      var f = fxList[i];
+      var dt = Math.min(0.05, (now - f.last) / 1000);
+      f.last = now; f.t += dt;
+      f.sp.position.y += dt * 4.4;
+      f.sp.material.opacity = Math.max(0, 1 - f.t / 2.4);
+      var bs = 6 + f.t * 26;
+      f.burst.scale.set(bs, bs, 1);
+      f.burst.material.opacity = Math.max(0, 0.8 - f.t * 1.4);
+      if (f.t > 2.4) {
+        DN.world.scene.remove(f.sp); DN.world.scene.remove(f.burst);
+        f.sp.material.map.dispose(); f.sp.material.dispose(); f.burst.material.dispose();
+        fxList.splice(i, 1);
+      }
+    }
+    if (fxList.length) requestAnimationFrame(tickFx);
+    else fxTicking = false;
+  }
+
   function onMessage(e) {
     var d = e.data;
     if (!d || typeof d !== 'object' || String(d.type || '').indexOf('aoc:') !== 0) return;
@@ -304,9 +378,14 @@
     }
     if (d.type === 'aoc:sync') { lastSync = null; applySync(d); }
     else if (d.type === 'aoc:pulse') flashColonies(d.n);
+    else if (d.type === 'aoc:fx') {
+      if (d.id && map[d.id]) spawnFx(map[d.id], d.kind, d.text);
+      else if (!d.id) Object.keys(map).forEach(function (id) { spawnFx(map[id], d.kind, d.text); });
+    }
     else if (d.type === 'aoc:focus') {
       var col = map[d.id];
       if (col) DN.app.selectColony(col);
+      else pendingFocus = d.id; // fly there as soon as the mound is founded
     }
     else if (d.type === 'aoc:overview') {
       DN.app.clearSelection();
