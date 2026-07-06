@@ -7,6 +7,8 @@ import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, fmtKickoffLine, teamName } from "@/lib/format";
 import { Segmented, Chips } from "@/components/Segmented";
+import { worldLink } from "@/three/worldLink";
+import { WorldViewButton } from "@/components/WorldView";
 import type { FavoriteContext, GameState, InfoNeed, Player, Style } from "@/lib/types";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
@@ -88,6 +90,12 @@ export default function RoomPage() {
   useEffect(() => {
     if (canEnterCockpit && game?.gameId) router.replace(`/cockpit/${game.gameId}`);
   }, [canEnterCockpit, game?.gameId, router]);
+
+  // Every colony in this match lives in the 3D world behind the HUD — new
+  // ones are founded with the full rising-mound animation as players join.
+  useEffect(() => {
+    if (game?.colonies?.length) worldLink.syncColonies(game.colonies, myColony?.colonyId ?? null);
+  }, [game?.colonies, myColony?.colonyId]);
 
   useGameStream(game?.gameId ?? null, {
     onState: (g) => {
@@ -234,6 +242,8 @@ export default function RoomPage() {
       </section>
 
       {msg && <p className="well px-3 py-2 text-center text-sm text-ink-soft">{msg}</p>}
+
+      <WorldViewButton focusColonyId={myColony?.colonyId ?? null} />
 
       <div className="bottom-action">
         <div className="bottom-action-inner">

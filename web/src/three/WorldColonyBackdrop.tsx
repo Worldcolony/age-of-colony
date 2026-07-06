@@ -6,7 +6,7 @@
 export default function WorldColonyBackdrop() {
   return (
     <iframe
-      aria-hidden
+      data-world
       title="Living colony world"
       src="/world.html"
       loading="eager"

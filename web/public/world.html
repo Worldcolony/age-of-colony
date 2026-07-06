@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Press+Start+2P&family=Pixelify+Sans:wght@400;500;600;700&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="/dinasty/styles.css?v=20260621-results-visible">
-<style id="wc-embed">html,body{background:linear-gradient(180deg,#b9cfe8 0%,#cdd8b6 58%,#b8c69e 100%) !important;overflow:hidden !important} body{pointer-events:none !important} body > *:not(#scene):not(#atmos):not(script):not(style){display:none !important} #scene{position:fixed;inset:0}</style></head>
+<style id="wc-embed">html,body{background:linear-gradient(180deg,#b9cfe8 0%,#cdd8b6 58%,#b8c69e 100%) !important;overflow:hidden !important} body:not(.aoc-live){pointer-events:none !important} body > *:not(#scene):not(#atmos):not(script):not(style){display:none !important} #scene{position:fixed;inset:0}</style></head>
 <body>
 <canvas id="scene"></canvas>
 <div id="atmos"></div>
@@ -199,6 +199,133 @@
     } catch (e) {}
   }
   setTimeout(tune, 2200);
+})();
+</script>
+
+<!-- AOC bridge — the Age of Colony HUD (parent page) drives this world over
+     postMessage: game colonies are FOUNDED as real 3D mounds (with the full
+     founding animation + migrating ants), their live stats feed the sim, and
+     game events flash their rings. -->
+<script id="aoc-bridge">
+(function () {
+  var map = {};            // game colonyId -> world colony
+  var placed = 0;          // how many game colonies we've placed (drives the ring)
+  var flownToMine = false; // fly the camera to the player's own colony once
+  var lastSync = null;     // replay the latest sync once the engine is ready
+  var GOLDEN = 2.399963;   // golden angle keeps game mounds evenly spread
+
+  function engineReady() {
+    return window.DN && DN.colony && DN.colony.list && DN.colony.list.length &&
+      DN.camera && DN.camera.controls && DN.app && window.THREE;
+  }
+
+  function toAccent(hex, i) {
+    if (typeof hex === 'string' && hex) {
+      var n = parseInt(hex.replace('#', ''), 16);
+      if (isFinite(n)) return n;
+    }
+    var warm = [0xE8A23D, 0x4E7E2A, 0xC25A3A, 0x3FA89F, 0x8E79C4, 0xB07E1C];
+    return warm[i % warm.length];
+  }
+
+  // Ring of game mounds OUTSIDE the seven ambient colonies (they sit at
+  // dist 76-130) but well inside the terrain edge fade (~300).
+  function placementFor(i) {
+    return { angle: 0.35 + i * GOLDEN, dist: 168 + (i % 3) * 28 };
+  }
+
+  function ensureColony(gc, i, myId) {
+    var col = map[gc.id];
+    if (!col) {
+      // idempotent across page reloads of the parent (iframe persists per layout,
+      // but re-navigation may resend everything)
+      col = DN.colony.list.find(function (c) { return c.owner === 'aoc:' + gc.id; });
+    }
+    if (!col) {
+      var p = placementFor(placed);
+      col = DN.colony.foundColony({
+        angle: p.angle, dist: p.dist,
+        accent: toAccent(gc.accent, placed),
+        name: gc.name || 'Colony',
+        owner: 'aoc:' + gc.id
+      });
+      if (col) {
+        placed++;
+        if (DN.minimap && DN.minimap.refresh) DN.minimap.refresh();
+        // Cinematic: ride along with the player's own founding (or the first one).
+        if (gc.id === myId || !flownToMine) {
+          DN.camera.flyTo(col.pos, 56, 44, 2.2);
+          if (gc.id === myId) flownToMine = true;
+        }
+      }
+    }
+    if (col) map[gc.id] = col;
+    return col;
+  }
+
+  function syncStats(col, gc) {
+    var s = col.stats;
+    if (gc.name) col.name = gc.name;
+    if (gc.ants != null) {
+      s.population = gc.ants;
+      col._rosterLockedPopulation = true;   // stop the ambient sim drifting it
+      col._rosterPopulation = gc.ants;
+    }
+    if (gc.food != null) s.food = Math.max(4, Math.min(100, gc.food * 2));
+    if (gc.accuracy != null) s.accuracy = Math.max(1, Math.round(gc.accuracy * 100));
+    if (gc.score != null) s.staked = Math.max(0, gc.score);
+    if (gc.ants != null && gc.size) s.health = Math.max(10, Math.min(100, Math.round((gc.ants / gc.size) * 100)));
+  }
+
+  function applySync(data) {
+    (data.colonies || []).forEach(function (gc, i) {
+      var col = ensureColony(gc, i, data.myId);
+      if (col) syncStats(col, gc);
+    });
+  }
+
+  function flashColonies(strength) {
+    Object.keys(map).forEach(function (id) {
+      var col = map[id];
+      if (!col || col.selected) return;
+      col.selected = true; // ring lights up + rotates via colony.update()
+      setTimeout(function () {
+        if (DN.app.selection !== col) col.selected = false;
+      }, 600 + Math.min(2000, (strength || 1) * 400));
+    });
+  }
+
+  function onMessage(e) {
+    var d = e.data;
+    if (!d || typeof d !== 'object' || String(d.type || '').indexOf('aoc:') !== 0) return;
+    if (!engineReady()) {
+      if (d.type === 'aoc:sync') lastSync = d;
+      return;
+    }
+    if (d.type === 'aoc:sync') { lastSync = null; applySync(d); }
+    else if (d.type === 'aoc:pulse') flashColonies(d.n);
+    else if (d.type === 'aoc:focus') {
+      var col = map[d.id];
+      if (col) DN.app.selectColony(col);
+    }
+    else if (d.type === 'aoc:overview') {
+      DN.app.clearSelection();
+      DN.camera.flyTo(new THREE.Vector3(0, 5, 0), 150, 66, 2.0);
+      DN.camera.autoRotate(true);
+    }
+    else if (d.type === 'aoc:interactive') {
+      document.body.classList.toggle('aoc-live', Boolean(d.on));
+      if (d.on) DN.camera.autoRotate(false);
+    }
+  }
+  addEventListener('message', onMessage);
+
+  // Engine boots asynchronously — replay the freshest sync once it's up.
+  var poll = setInterval(function () {
+    if (!engineReady()) return;
+    clearInterval(poll);
+    if (lastSync) { applySync(lastSync); lastSync = null; }
+  }, 400);
 })();
 </script>
 </body>

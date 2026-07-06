@@ -7,7 +7,8 @@ import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
-import { worldBus } from "@/three/worldBus";
+import { worldLink } from "@/three/worldLink";
+import { WorldViewButton } from "@/components/WorldView";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
@@ -90,7 +91,7 @@ export default function CockpitPage() {
     for (const event of incoming) {
       if (seen.current.has(event.index)) continue;
       seen.current.add(event.index);
-      if (PULSE[event.kind]) worldBus.pulse(PULSE[event.kind]);
+      if (PULSE[event.kind]) worldLink.pulse(PULSE[event.kind]);
       fresh.push(event);
     }
     if (!fresh.length) return;
@@ -144,14 +145,6 @@ export default function CockpitPage() {
     },
   });
 
-  const walletAccent = useStore((s) => s.wallet.accent);
-  useEffect(() => {
-    worldBus.setAccent(walletAccent || "#b07e1c");
-  }, [walletAccent]);
-  useEffect(() => {
-    worldBus.setIntensity(RUNNING.has(game?.status ?? "") ? 0.9 : 0.4);
-  }, [game?.status]);
-
   const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => (b.score || 0) - (a.score || 0)), [game?.colonies]);
   const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
   const spectatorFallback = (game?.players?.length ?? 0) === 0 ? sorted[0] : undefined;
@@ -180,6 +173,12 @@ export default function CockpitPage() {
       setMyColonyId(ownColony.colonyId);
     }
   }, [myColonyId, ownColony?.colonyId, setMyColonyId]);
+
+  // Keep the 3D world's mounds in lockstep with the live game — founds any
+  // colony that isn't in the world yet and feeds it live ants/food/score.
+  useEffect(() => {
+    if (game?.colonies?.length) worldLink.syncColonies(game.colonies, mine?.colonyId ?? null);
+  }, [game?.colonies, mine?.colonyId]);
 
   return (
     <div className="flex min-h-[calc(100dvh-36px)] w-full flex-col gap-4 pb-6 xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
@@ -294,6 +293,8 @@ export default function CockpitPage() {
         <span>{streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}</span>
         <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>Ranks</button>
       </footer>
+
+      <WorldViewButton focusColonyId={mine?.colonyId ?? null} />
     </div>
   );
 }

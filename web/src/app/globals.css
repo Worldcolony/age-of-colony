@@ -345,6 +345,55 @@ body {
 @keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0.15; } }
 .blink { animation: blink 1.3s step-end infinite; }
 
+/* fullscreen World view — the HUD steps aside, the living 3D map takes over */
+.world-toggle {
+  position: fixed;
+  right: 14px;
+  bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  visibility: visible;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: var(--radius-glass);
+  border: 2px solid var(--brd-strong);
+  background: rgba(243, 235, 211, 0.96);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: var(--pixel-shadow);
+  cursor: pointer;
+}
+.world-toggle:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(90, 70, 30, 0.4); }
+.world-view .world-toggle { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+.world-hint {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  z-index: 60;
+  visibility: visible;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 2px solid var(--brd-soft);
+  background: rgba(243, 235, 211, 0.9);
+  color: var(--color-ink-soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.world-view .app-shell { visibility: hidden; }
+.world-view .scrim,
+.world-view .tabbar { display: none; }
+.world-view iframe[data-world] { pointer-events: auto !important; }
+
 /* podium plate tints */
 .pod-gold { background: linear-gradient(180deg, #f0d488, #d9b556); border-color: #a8842e !important; }
 .pod-silver { background: linear-gradient(180deg, #e8e4da, #cbc6b8); border-color: #8f8a7c !important; }
