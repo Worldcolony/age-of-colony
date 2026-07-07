@@ -6,7 +6,7 @@ import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
-import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
+import type { GameEvent, Colony, GameState, Opportunity, Style, FavoriteContext, InfoNeed, StrategyPatch } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 
@@ -17,7 +17,7 @@ const KIND_EDGE: Record<string, string> = {
   settlement: "#4e7e2a", hatch: "#4e7e2a", info_result: "#4e7e2a",
   vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
   game_error: "#c25a3a", starvation: "#c25a3a", void: "#c25a3a",
-  rally: "#b07e1c",
+  rally: "#b07e1c", recall: "#3fa89f", switch: "#b07e1c",
 };
 
 interface PublicVote {
@@ -44,6 +44,8 @@ interface MarketModel {
   settlements: GameEvent[];
   voids: GameEvent[];
   rallies: GameEvent[];
+  recalls: GameEvent[];
+  switches: GameEvent[];
   lastIndex: number;
 }
 
@@ -99,13 +101,18 @@ export default function CockpitPage() {
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
   const [ralliedMarkets, setRalliedMarkets] = useState<Set<string>>(new Set());
-  const [rallyBusyId, setRallyBusyId] = useState<string | null>(null);
+  const [switchedMarkets, setSwitchedMarkets] = useState<Set<string>>(new Set());
+  const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const anonId = useMemo(() => getAnonId(), []);
 
   const { toasts, push } = useGameToasts();
   const mineIdRef = useRef<string | null>(null);
   const liveRef = useRef(false); // suppress fx/toasts while loading history
+  // announceEvent runs outside render (called from addEvents) — it needs the
+  // latest ranking to announce a winner on game_finished without becoming a
+  // dependency of the event pipeline, so it's mirrored into a ref.
+  const sortedRef = useRef<Colony[]>([]);
 
   function addEvent(e: GameEvent) {
     addEvents([e]);
@@ -139,8 +146,20 @@ export default function CockpitPage() {
     } else if (event.kind === "rally") {
       worldLink.fx(colonyId, "rally", "📣 rally!");
       if (!isMine) push(`📣 ${event.message}`, "market");
+    } else if (event.kind === "recall") {
+      worldLink.fx(colonyId, "recall", "🛡 recall");
+      if (isMine) push(`🛡 ${event.message}`, "market");
+    } else if (event.kind === "switch") {
+      worldLink.fx(colonyId, "switch", "🔀 pivot!");
+      if (isMine) push(`🔀 ${event.message}`, "market");
     } else if (event.kind === "game_finished") {
-      push("🏁 Full time — final standings are in", "info");
+      push("🏁 Full time! Tap Ranks for the podium", "info");
+      const winner = sortedRef.current[0];
+      if (winner) {
+        worldLink.fx(winner.colonyId, "victory", `🏆 ${winner.name}`);
+        worldLink.focusColony(winner.colonyId);
+        push(`🏆 ${winner.name} takes the match!`, "gain");
+      }
     }
   }
 
@@ -207,6 +226,9 @@ export default function CockpitPage() {
   });
 
   const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => (b.score || 0) - (a.score || 0)), [game?.colonies]);
+  useEffect(() => {
+    sortedRef.current = sorted;
+  }, [sorted]);
   const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
   const spectatorFallback = (game?.players?.length ?? 0) === 0 ? sorted[0] : undefined;
   const mine = ownColony ?? spectatorFallback;
@@ -235,12 +257,13 @@ export default function CockpitPage() {
   const aggregatedFeed = useMemo(() => aggregateFeed(usefulEvents, colonyNames), [usefulEvents, colonyNames]);
   const feedRows = aggregatedFeed.slice(0, activeTab === "feed" ? 18 : 5);
 
-  // The player's first mid-match action: throw 5 more ants at a market you
-  // already believe in. Costs food, raises the stakes, one rally per market.
+  // The market action bar: three mid-match verbs on top of your ants' call.
+  // Only one action is ever in flight per market at a time (actionBusyKey is
+  // `${marketId}:${verb}`), so the three buttons can't race each other.
   async function handleRally(market: MarketModel) {
     if (!mine) return;
-    if (rallyBusyId) return;
-    setRallyBusyId(market.id);
+    if (actionBusyKey) return;
+    setActionBusyKey(`${market.id}:rally`);
     try {
       const g = await api.rally(id, { colonyId: mine.colonyId, opportunityId: market.id, anonymousId: anonId });
       setGame(g);
@@ -251,7 +274,45 @@ export default function CockpitPage() {
       const message = err instanceof ApiError ? err.message : "Rally failed — try again.";
       push(message, "loss");
     } finally {
-      setRallyBusyId(null);
+      setActionBusyKey(null);
+    }
+  }
+
+  // Pull back up to 5 ants from a call you've soured on — free, repeatable,
+  // but you always keep your last ant in the market.
+  async function handleRecall(market: MarketModel) {
+    if (!mine) return;
+    if (actionBusyKey) return;
+    setActionBusyKey(`${market.id}:recall`);
+    try {
+      const g = await api.recall(id, { colonyId: mine.colonyId, opportunityId: market.id, anonymousId: anonId });
+      setGame(g);
+      push("🛡 Recall! Your ants pull back from this market", "market");
+      worldLink.fx(mine.colonyId, "recall", "🛡 recall");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Recall failed — try again.";
+      push(message, "loss");
+    } finally {
+      setActionBusyKey(null);
+    }
+  }
+
+  // Pivot your whole call to a different option — once per market, costs food.
+  async function handleSwitch(market: MarketModel, optionId: string) {
+    if (!mine) return;
+    if (actionBusyKey) return;
+    setActionBusyKey(`${market.id}:switch`);
+    try {
+      const g = await api.switchCall(id, { colonyId: mine.colonyId, opportunityId: market.id, optionId, anonymousId: anonId });
+      setGame(g);
+      setSwitchedMarkets((prev) => new Set(prev).add(market.id));
+      push("🔀 Pivot! Your colony calls a new outcome", "market");
+      worldLink.fx(mine.colonyId, "switch", "🔀 pivot!");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Switch failed — try again.";
+      push(message, "loss");
+    } finally {
+      setActionBusyKey(null);
     }
   }
 
@@ -326,8 +387,11 @@ export default function CockpitPage() {
           waitingForKickoff={txlineWaiting}
           matchStateLabel={txlineStateLabel}
           ralliedMarkets={ralliedMarkets}
-          rallyBusyId={rallyBusyId}
+          switchedMarkets={switchedMarkets}
+          actionBusyKey={actionBusyKey}
           onRally={handleRally}
+          onRecall={handleRecall}
+          onSwitch={handleSwitch}
           onSelectMarket={setSelectedMarketId}
           onSelectSettled={(marketId) => {
             setSelectedSettledId(marketId);
@@ -346,6 +410,7 @@ export default function CockpitPage() {
         />
       )}
       {activeTab === "feed" && <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />}
+      <TacticsPanel gameId={id} colony={mine} anonId={anonId} onGame={setGame} push={push} />
     </>
   );
 
@@ -485,8 +550,11 @@ export default function CockpitPage() {
                   waitingForKickoff={txlineWaiting}
                   matchStateLabel={txlineStateLabel}
                   ralliedMarkets={ralliedMarkets}
-                  rallyBusyId={rallyBusyId}
+                  switchedMarkets={switchedMarkets}
+                  actionBusyKey={actionBusyKey}
                   onRally={handleRally}
+                  onRecall={handleRecall}
+                  onSwitch={handleSwitch}
                   onSelectMarket={setSelectedMarketId}
                   onSelectSettled={(marketId) => {
                     setSelectedSettledId(marketId);
@@ -509,6 +577,8 @@ export default function CockpitPage() {
               {activeTab === "feed" && (
                 <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />
               )}
+
+              <TacticsPanel gameId={id} colony={mine} anonId={anonId} onGame={setGame} push={push} />
             </section>
           )}
         </main>
@@ -652,8 +722,11 @@ function LiveTab({
   waitingForKickoff,
   matchStateLabel,
   ralliedMarkets,
-  rallyBusyId,
+  switchedMarkets,
+  actionBusyKey,
   onRally,
+  onRecall,
+  onSwitch,
   onSelectMarket,
   onSelectSettled,
 }: {
@@ -667,8 +740,11 @@ function LiveTab({
   waitingForKickoff: boolean;
   matchStateLabel: string;
   ralliedMarkets: Set<string>;
-  rallyBusyId: string | null;
+  switchedMarkets: Set<string>;
+  actionBusyKey: string | null;
   onRally: (market: MarketModel) => void;
+  onRecall: (market: MarketModel) => void;
+  onSwitch: (market: MarketModel, optionId: string) => void;
   onSelectMarket: (marketId: string) => void;
   onSelectSettled: (marketId: string) => void;
 }) {
@@ -689,8 +765,11 @@ function LiveTab({
               colony={colony}
               colonyLabel={colonyLabel}
               ralliedMarkets={ralliedMarkets}
-              rallyBusyId={rallyBusyId}
+              switchedMarkets={switchedMarkets}
+              actionBusyKey={actionBusyKey}
               onRally={onRally}
+              onRecall={onRecall}
+              onSwitch={onSwitch}
             />
           )}
         </>
@@ -905,15 +984,21 @@ function FocusedMarketPanel({
   colony,
   colonyLabel,
   ralliedMarkets,
-  rallyBusyId,
+  switchedMarkets,
+  actionBusyKey,
   onRally,
+  onRecall,
+  onSwitch,
 }: {
   market: MarketModel;
   colony?: Colony;
   colonyLabel: string;
   ralliedMarkets: Set<string>;
-  rallyBusyId: string | null;
+  switchedMarkets: Set<string>;
+  actionBusyKey: string | null;
   onRally: (market: MarketModel) => void;
+  onRecall: (market: MarketModel) => void;
+  onSwitch: (market: MarketModel, optionId: string) => void;
 }) {
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
@@ -948,54 +1033,171 @@ function FocusedMarketPanel({
         {pending > 0 && <span className="rounded-full bg-[rgba(74,58,30,0.1)] px-2 py-1">{pending} calls pending</span>}
       </div>
 
-      <RallyControl market={market} colony={colony} ralliedMarkets={ralliedMarkets} rallyBusyId={rallyBusyId} onRally={onRally} />
+      <ActionBar
+        market={market}
+        colony={colony}
+        ralliedMarkets={ralliedMarkets}
+        switchedMarkets={switchedMarkets}
+        actionBusyKey={actionBusyKey}
+        onRally={onRally}
+        onRecall={onRecall}
+        onSwitch={onSwitch}
+      />
     </article>
   );
 }
 
-// Job 1: the player's first mid-match action. One rally per market, per
-// colony — commits 5 more ants for a bigger win/loss on a call you already made.
-function RallyControl({
+// Job 1: the market action bar. Three mid-match verbs on top of an existing
+// call — Rally piles on 5 more ants (one per market), Recall pulls up to 5
+// back at any time (never below 1), Switch pivots the whole stake to a
+// different option once per market. All three need a prediction to act on.
+function ActionBar({
   market,
   colony,
   ralliedMarkets,
-  rallyBusyId,
+  switchedMarkets,
+  actionBusyKey,
   onRally,
+  onRecall,
+  onSwitch,
 }: {
   market: MarketModel;
   colony?: Colony;
   ralliedMarkets: Set<string>;
-  rallyBusyId: string | null;
+  switchedMarkets: Set<string>;
+  actionBusyKey: string | null;
   onRally: (market: MarketModel) => void;
+  onRecall: (market: MarketModel) => void;
+  onSwitch: (market: MarketModel, optionId: string) => void;
 }) {
+  const [switchOpen, setSwitchOpen] = useState(false);
   if (!colony) return null;
+
+  const isOpen = market.status === "open";
+  const stake = colonyStake(market, colony.colonyId);
+  const hasPrediction = Boolean(stake);
+  const busy = (verb: "rally" | "recall" | "switch") => actionBusyKey === `${market.id}:${verb}`;
+  const anyBusy = actionBusyKey !== null;
+
   const alreadyRallied = ralliedMarkets.has(market.id)
     || market.rallies.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
-  const canAfford = (colony.food ?? 0) >= 3;
-  const isOpen = market.status === "open";
-  const busy = rallyBusyId === market.id;
-  // Rally piles onto an existing stake — the colony must have predicted this
-  // market (a colony that joined after the market opened never voted on it).
-  const hasPrediction = market.predictions.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
-  const disabled = !isOpen || !canAfford || alreadyRallied || busy || !hasPrediction;
-  const label = busy ? "Rallying..." : alreadyRallied ? "📣 Rallied" : "📣 Rally · −3 🍖";
+  const canAffordRally = (colony.food ?? 0) >= 3;
+  const rallyDisabled = !isOpen || !canAffordRally || alreadyRallied || anyBusy || !hasPrediction;
+
+  const recallDisabled = !isOpen || !stake || stake.ants <= 1 || anyBusy;
+
+  const alreadySwitched = switchedMarkets.has(market.id)
+    || market.switches.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
+  const canAffordSwitch = (colony.food ?? 0) >= 2;
+  const switchDisabled = !isOpen || !stake || alreadySwitched || !canAffordSwitch || anyBusy;
+
+  const switchOptions = (market.opportunity?.options ?? []).filter(
+    (option) => String(option.optionId ?? option.value ?? option.label ?? "") !== String(stake?.optionId ?? ""),
+  );
+
   return (
-    <div className="mt-3 flex flex-col gap-1 border-t border-[color:var(--brd-soft)] pt-3">
-      <button
-        type="button"
-        className="btn btn-primary w-full px-4 py-2 text-sm sm:w-auto"
-        disabled={disabled}
-        onClick={() => onRally(market)}
-      >
-        {label}
-      </button>
+    <div className="mt-3 flex flex-col gap-2 border-t border-[color:var(--brd-soft)] pt-3">
+      <div className="well px-3 py-2">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-ink-faint">Your stake</p>
+        {stake ? (
+          <p className="mt-1 text-sm font-bold text-ink">
+            🐜 {stake.ants} ants on <span className="text-gold-deep">{cleanOutcomeLabel(stake.optionLabel)}</span>
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-ink-faint">No position on this market yet.</p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <button
+          type="button"
+          className="btn btn-primary px-2 py-2 text-xs sm:text-sm"
+          disabled={rallyDisabled}
+          onClick={() => onRally(market)}
+        >
+          {busy("rally") ? "..." : alreadyRallied ? "📣 Rallied" : "📣 Rally · −3🍖"}
+        </button>
+        <button
+          type="button"
+          className="btn px-2 py-2 text-xs sm:text-sm"
+          disabled={recallDisabled}
+          onClick={() => onRecall(market)}
+        >
+          {busy("recall") ? "..." : "🛡 Recall"}
+        </button>
+        <button
+          type="button"
+          className="btn px-2 py-2 text-xs sm:text-sm"
+          disabled={switchDisabled}
+          onClick={() => setSwitchOpen((open) => !open)}
+        >
+          {busy("switch") ? "..." : alreadySwitched ? "🔀 Pivoted" : "🔀 Switch · −2🍖"}
+        </button>
+      </div>
+
+      {switchOpen && !switchDisabled && (
+        <div className="flex flex-wrap gap-2 pt-1">
+          {switchOptions.length ? (
+            switchOptions.map((option) => (
+              <button
+                key={option.optionId || option.value || option.label}
+                type="button"
+                className="chip"
+                onClick={() => {
+                  onSwitch(market, String(option.optionId ?? option.value ?? ""));
+                  setSwitchOpen(false);
+                }}
+              >
+                {option.label || option.value}
+              </button>
+            ))
+          ) : (
+            <span className="text-[11px] text-ink-faint">No other option to pivot to.</span>
+          )}
+        </div>
+      )}
+
       <p className="text-[11px] text-ink-faint">
-        Commit 5 more ants to your colony&apos;s call — bigger win, bigger loss.
-        {!hasPrediction && isOpen && " Your ants haven't staked this market — rally unlocks on their next call."}
-        {hasPrediction && !canAfford && !alreadyRallied && " Not enough food."}
+        {!hasPrediction && isOpen && "Your ants haven't staked this market yet — actions unlock on their next call."}
+        {hasPrediction && !canAffordRally && !alreadyRallied && " Not enough food to rally."}
       </p>
     </div>
   );
+}
+
+// Derives the colony's live position on a market from its raw event history:
+// the initial prediction's ant count, plus every rally, minus every recall —
+// and the current option, which is whatever the latest switch (if any) moved
+// it to.
+function colonyStake(market: MarketModel, colonyId?: string): { ants: number; optionId?: string; optionLabel: string } | null {
+  if (!colonyId) return null;
+  const predictionEvent = latestColonyEvent(market.predictions, colonyId);
+  if (!predictionEvent) return null;
+  const initialAnts = Number(eventData(predictionEvent)?.ants ?? 0);
+  const rallyAnts = sumColonyAnts(market.rallies, colonyId);
+  const recallAnts = sumColonyAnts(market.recalls, colonyId);
+  const ants = Math.max(0, initialAnts + rallyAnts - recallAnts);
+
+  const switchEvent = latestColonyEvent(market.switches, colonyId);
+  const predictionOption = eventData(predictionEvent)?.option;
+  if (switchEvent) {
+    const optionId = typeof switchEvent.data?.optionId === "string" ? switchEvent.data.optionId : undefined;
+    return { ants, optionId, optionLabel: optionLabelById(market.opportunity, optionId) ?? optionId ?? "unknown" };
+  }
+  const predictionOptionId = (predictionOption?.optionId ?? (predictionOption as { option_id?: string } | undefined)?.option_id) as string | undefined;
+  return { ants, optionId: predictionOptionId, optionLabel: predictionOption?.label || predictionOptionId || "unknown" };
+}
+
+function sumColonyAnts(events: GameEvent[], colonyId: string) {
+  return events
+    .filter((event) => String(event.data?.colonyId ?? "") === String(colonyId))
+    .reduce((sum, event) => sum + Number(event.data?.ants ?? 0), 0);
+}
+
+function optionLabelById(opportunity: Opportunity | undefined, optionId?: string) {
+  if (!opportunity || !optionId) return undefined;
+  const match = opportunity.options?.find((option) => option.optionId === optionId);
+  return match?.label || match?.value;
 }
 
 function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketModel; colony?: Colony; colonyLabel: string }) {
@@ -1149,6 +1351,104 @@ function DecisionCell({
       <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
       <p className={`truncate text-sm font-bold ${color}`}>{value}</p>
       <p className="mt-1 truncate text-[11px] text-ink-faint">{detail}</p>
+    </div>
+  );
+}
+
+// Job 2: mid-match tactics. Steers the colony's *future* ant decisions
+// (style/focus/risk appetite) via the engine's strategy PATCH — separate
+// from a market action, it doesn't touch any single market's stake.
+function TacticsPanel({
+  gameId,
+  colony,
+  anonId,
+  onGame,
+  push,
+}: {
+  gameId: string;
+  colony?: Colony;
+  anonId: string;
+  onGame: (game: GameState) => void;
+  push: (text: string, tone?: "gain" | "loss" | "market" | "info") => void;
+}) {
+  const [busyField, setBusyField] = useState<null | "style" | "favoriteContext" | "infoNeed">(null);
+  if (!colony) return null;
+
+  async function apply(field: "style" | "favoriteContext" | "infoNeed", patch: StrategyPatch) {
+    if (busyField) return;
+    setBusyField(field);
+    try {
+      const g = await api.updateStrategy(gameId, colony!.colonyId, { ...patch, anonymousId: anonId });
+      onGame(g);
+      push("🎛️ Tactics updated — applies to your ants' next calls", "market");
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Tactics update failed — try again.";
+      push(message, "loss");
+    } finally {
+      setBusyField(null);
+    }
+  }
+
+  return (
+    <section className="well mt-1 flex flex-col gap-3 border-2 border-[color:var(--brd-soft)] p-3">
+      <div>
+        <p className="eyebrow">Tactics</p>
+        <h3 className="text-sm font-bold">Tactics — steer your ants</h3>
+      </div>
+      <TacticsRow<Style>
+        label="Strategy"
+        options={["cautious", "balanced", "aggressive"] as const}
+        value={colony.style}
+        busy={busyField === "style"}
+        onPick={(value) => apply("style", { style: value })}
+      />
+      <TacticsRow<FavoriteContext>
+        label="Focus"
+        options={["penalties", "corners", "momentum", "chaos", "balanced"] as const}
+        value={colony.favoriteContext}
+        busy={busyField === "favoriteContext"}
+        onPick={(value) => apply("favoriteContext", { favoriteContext: value })}
+      />
+      <TacticsRow<InfoNeed>
+        label="Risk appetite"
+        options={["low", "medium", "high"] as const}
+        value={colony.infoNeed}
+        busy={busyField === "infoNeed"}
+        onPick={(value) => apply("infoNeed", { infoNeed: value })}
+      />
+    </section>
+  );
+}
+
+function TacticsRow<T extends string>({
+  label,
+  options,
+  value,
+  busy,
+  onPick,
+}: {
+  label: string;
+  options: readonly T[];
+  value: T;
+  busy: boolean;
+  onPick: (value: T) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-[11px] font-bold text-ink-faint">{label}</p>
+      <div className="seg">
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            data-active={value === option}
+            disabled={busy}
+            onClick={() => onPick(option)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1344,6 +1644,8 @@ function buildMarkets(activeOpportunities: Opportunity[], events: GameEvent[]): 
       settlements: [],
       voids: [],
       rallies: [],
+      recalls: [],
+      switches: [],
       lastIndex: -1,
     };
     map.set(id, market);
@@ -1377,6 +1679,8 @@ function buildMarkets(activeOpportunities: Opportunity[], events: GameEvent[]): 
     if (event.kind === "settlement") market.settlements.push(event);
     if (event.kind === "void") market.voids.push(event);
     if (event.kind === "rally") market.rallies.push(event);
+    if (event.kind === "recall") market.recalls.push(event);
+    if (event.kind === "switch") market.switches.push(event);
   }
 
   return [...map.values()]
@@ -1867,7 +2171,7 @@ function formatClock(ms: number) {
 }
 
 function isUsefulLiveEvent(e: GameEvent) {
-  return ["opportunity", "settlement", "void", "hatch", "starvation", "rally", "game_error", "game_started", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
+  return ["opportunity", "settlement", "void", "hatch", "starvation", "rally", "recall", "switch", "game_error", "game_started", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
 }
 
 // Job 2: turn the raw event log into a legible, game-feeling stream.
@@ -1937,6 +2241,14 @@ function parseFeedEvent(
       const ants = Number(data.ants ?? 0);
       const cost = Number(data.cost ?? 0);
       return { colonyId, colonyName, message, detail: cost ? `−${cost} food` : "rally", delta: ants ? { value: ants, unit: "ants" } : null };
+    }
+    case "recall": {
+      const ants = Number(data.ants ?? 0);
+      return { colonyId, colonyName, message, detail: "recalled", delta: ants ? { value: -ants, unit: "ants" } : null };
+    }
+    case "switch": {
+      const pivotMatch = /pivots to (.+?) \(/.exec(message);
+      return { colonyId, colonyName, message, detail: pivotMatch ? `pivoted to ${pivotMatch[1]}` : "pivoted", delta: null };
     }
     default:
       return { colonyId, colonyName: null, message, detail: null, delta: null };

@@ -165,6 +165,19 @@ class RallyRequest(BaseModel):
     anonymousId: str | None = None
 
 
+class RecallRequest(BaseModel):
+    colonyId: str
+    opportunityId: str
+    anonymousId: str | None = None
+
+
+class SwitchCallRequest(BaseModel):
+    colonyId: str
+    opportunityId: str
+    optionId: str
+    anonymousId: str | None = None
+
+
 class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
@@ -531,6 +544,30 @@ async def rally(game_id: str, payload: RallyRequest) -> dict[str, Any]:
     _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="rally this colony")
     try:
         game_manager.harness(game_id).rally(payload.colonyId, payload.opportunityId)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+@app.post("/api/games/{game_id}/recall")
+async def recall(game_id: str, payload: RecallRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="recall this colony's ants")
+    try:
+        game_manager.harness(game_id).recall(payload.colonyId, payload.opportunityId)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+@app.post("/api/games/{game_id}/switch-call")
+async def switch_call(game_id: str, payload: SwitchCallRequest) -> dict[str, Any]:
+    room = _get_game_or_404(game_id)
+    _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="switch this colony's call")
+    try:
+        game_manager.harness(game_id).switch_call(payload.colonyId, payload.opportunityId, payload.optionId)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)

@@ -147,6 +147,10 @@ export const api = {
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),
   rally: (id: string, body: { colonyId: string; opportunityId: string; anonymousId: string }) =>
     req<GameState>(`/api/games/${id}/rally`, "POST", body),
+  recall: (id: string, body: { colonyId: string; opportunityId: string; anonymousId: string }) =>
+    req<GameState>(`/api/games/${id}/recall`, "POST", body),
+  switchCall: (id: string, body: { colonyId: string; opportunityId: string; optionId: string; anonymousId: string }) =>
+    req<GameState>(`/api/games/${id}/switch-call`, "POST", body),
   startGame: (
     id: string,
     mode: "replay" | "live" = "live",

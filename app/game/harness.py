@@ -54,6 +54,8 @@ RISK_RULES: dict[str, dict[str, float]] = {
 RESOURCE_LOSS_MULTIPLIER = {"safe": 1.0, "risky": 2.0, "wild": 3.0, "chaos": 4.0}
 RALLY_COST = 3
 RALLY_ANTS = 5
+RECALL_ANTS = 5
+SWITCH_COST = 2
 
 FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
@@ -330,6 +332,7 @@ class Prediction:
     info_bought: bool = False
     resolved: bool = False
     rallied: bool = False
+    switched: bool = False
 
 
 @dataclass
@@ -599,8 +602,10 @@ class GameHarness:
         favorite_context: str | None = None,
         info_need: str | None = None,
     ) -> ColonyState:
-        if self.room.status != "created":
-            raise ValueError("room is locked; strategies can no longer be changed")
+        # Tactics are a live steering tool: allowed before AND during the
+        # match (they only shape future votes and stakes), locked once it ends.
+        if self.room.status not in {"created", "waiting_kickoff", "running_replay", "running_live"}:
+            raise ValueError("The match is over — tactics no longer apply.")
         colony = self.room.colonies.get(colony_id)
         if not colony:
             raise ValueError("colony not found")
@@ -679,6 +684,92 @@ class GameHarness:
             },
         )
         return added
+
+    def recall(self, colony_id: str, opportunity_id: str) -> int:
+        if self.room.status not in {"running_replay", "running_live"}:
+            raise ValueError("The match is not live.")
+        colony = self.room.colonies.get(colony_id)
+        if not colony:
+            raise ValueError("colony not found")
+
+        prediction = next(
+            (
+                candidate
+                for candidate in self.room.predictions.values()
+                if candidate.colony_id == colony_id
+                and candidate.opportunity_id == opportunity_id
+                and not candidate.resolved
+            ),
+            None,
+        )
+        if not prediction:
+            raise ValueError("Your ants sat this market out — nothing to recall.")
+
+        removable = min(RECALL_ANTS, len(prediction.ant_ids) - 1)
+        if removable <= 0:
+            raise ValueError("Your last ant won't abandon the call.")
+
+        del prediction.ant_ids[-removable:]
+        self.room.add_log(
+            "recall",
+            f"{colony.name} recalls {removable} ants from {prediction.option.label}.",
+            {
+                "colonyId": colony.colony_id,
+                "opportunityId": opportunity_id,
+                "predictionId": prediction.prediction_id,
+                "ants": removable,
+            },
+        )
+        return removable
+
+    def switch_call(self, colony_id: str, opportunity_id: str, option_id: str) -> None:
+        if self.room.status not in {"running_replay", "running_live"}:
+            raise ValueError("The match is not live.")
+        colony = self.room.colonies.get(colony_id)
+        if not colony:
+            raise ValueError("colony not found")
+
+        prediction = next(
+            (
+                candidate
+                for candidate in self.room.predictions.values()
+                if candidate.colony_id == colony_id
+                and candidate.opportunity_id == opportunity_id
+                and not candidate.resolved
+            ),
+            None,
+        )
+        if not prediction:
+            raise ValueError("Your ants sat this market out — nothing to switch.")
+        if prediction.switched:
+            raise ValueError("Your colony already pivoted on this market.")
+
+        opportunity = self.room.opportunities.get(opportunity_id)
+        new_option = next(
+            (option for option in opportunity.options if option.option_id == option_id),
+            None,
+        ) if opportunity else None
+        if not new_option:
+            raise ValueError("That option is not on this market.")
+        if new_option.option_id == prediction.option.option_id:
+            raise ValueError("Your ants are already on that call.")
+        if colony.food < SWITCH_COST:
+            raise ValueError("Not enough food to pivot (needs 2).")
+
+        colony.food -= SWITCH_COST
+        prediction.option = new_option
+        prediction.switched = True
+        self.room.add_log(
+            "switch",
+            f"{colony.name} pivots to {new_option.label} (-2 food).",
+            {
+                "colonyId": colony.colony_id,
+                "opportunityId": opportunity_id,
+                "predictionId": prediction.prediction_id,
+                "optionId": option_id,
+                "cost": SWITCH_COST,
+            },
+        )
 
     def process_events(self, events: Iterable[dict[str, Any]]) -> None:
         self.room.status = "running_replay"

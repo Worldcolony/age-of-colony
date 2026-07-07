@@ -346,7 +346,10 @@
   var FX_COLORS = {
     gain: '#8ee06a', loss: '#ff7a5c', market: '#ffd76a', info: '#f3ebd3',
     rally: '#ffd76a',  // war-drum moment reads as gold, same family as market
-    death: '#ff7a5c'   // dark event, text still reads in the loss color
+    death: '#ff7a5c',  // dark event, text still reads in the loss color
+    recall: '#3fa89f', // defensive/withdraw reads teal
+    'switch': '#ffe9b8', // pivot reads gold/white (quoted: reserved word key)
+    victory: '#ffd76a' // match-winner text, gold
   };
   // per-kind glow-burst styling (scaleBase/growth drive the additive sprite's
   // grow-and-fade so "rally" flares bigger/brighter and "death" reads as a
@@ -354,8 +357,13 @@
   var BURST_STYLE = {
     rally: { scaleBase: 8, growth: 40, opacity: 1.0, fade: 0.85, color: '#ffe08a' },
     death: { scaleBase: 3, growth: 10, opacity: 0.55, fade: 0.9, color: '#2a1e12' },
+    recall: { scaleBase: 5, growth: 14, opacity: 0.55, fade: 0.6, color: '#3fa89f' },
+    'switch': { scaleBase: 6, growth: 20, opacity: 0.5, fade: 0.55, color: '#ffe9b8' },
+    victory: { scaleBase: 10, growth: 55, opacity: 1.0, fade: 0.42, color: '#ffd76a' },
     _default: { scaleBase: 6, growth: 26, opacity: 0.8, fade: 1.4, color: null }
   };
+  // festival mix for the victory confetti burst
+  var VICTORY_CONFETTI = [0xFFD76A, 0x8EE06A, 0xFF7A5C, 0xF3EBD3];
   var fxList = [];
   var fxTicking = false;
   var MAX_FX = 24; // performance guard: cap simultaneous fx items
@@ -408,17 +416,43 @@
   // expanding ground shockwave — same RingGeometry/AdditiveBlending approach
   // as the founding animation's shockwave ring (see colony.js), just driven
   // by our own fx ticker instead of the colony's founding state machine.
-  function spawnShockwaveRing(col) {
+  // color/opacity are optional so other kinds (recall, switch, victory) can
+  // reuse the same ring mesh with their own tint/base without touching the
+  // rally default (0xE8C468 @ 0.9) that every existing caller still relies on.
+  function spawnShockwaveRing(col, color, opacity) {
     var geo = new THREE.RingGeometry(2, 2.4, 48);
     geo.rotateX(-Math.PI / 2);
     var mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
-      color: 0xE8C468, transparent: true, opacity: 0.9, side: THREE.DoubleSide,
+      color: (color != null ? color : 0xE8C468), transparent: true,
+      opacity: (opacity != null ? opacity : 0.9), side: THREE.DoubleSide,
       depthWrite: false, blending: THREE.AdditiveBlending
     }));
     mesh.position.copy(col.pos);
     mesh.position.y += 0.5;
     DN.world.scene.add(mesh);
     return mesh;
+  }
+
+  // standalone ring-only fx item — used for victory's staggered extra rings,
+  // which have no floating text / burst of their own (the main victory item
+  // already carries those). Goes through the same MAX_FX eviction + ticker
+  // kick-start discipline as spawnFx.
+  function pushRingOnlyItem(ring, dur, life) {
+    if (fxList.length >= MAX_FX) disposeFxItem(fxList.shift());
+    fxList.push({ ring: ring, ringDur: dur, life: life, t: 0, last: performance.now() });
+    if (!fxTicking) { fxTicking = true; requestAnimationFrame(tickFx); }
+  }
+
+  // victory's second and third shockwave rings, fired 0.4s/0.8s after the
+  // first (which rides along on the main fx item) so the celebration reads
+  // as staggered fireworks pulses instead of one flat ring.
+  function spawnVictoryRings(col) {
+    setTimeout(function () {
+      pushRingOnlyItem(spawnShockwaveRing(col, 0xFFD76A, 0.9), 1.3, 1.4);
+    }, 400);
+    setTimeout(function () {
+      pushRingOnlyItem(spawnShockwaveRing(col, 0xFFD76A, 0.9), 1.3, 1.4);
+    }, 800);
   }
 
   // small burst of Points particles with gravity — mirrors the founding dust
@@ -452,6 +486,73 @@
     pts.position.y += opts.originY;
     DN.world.scene.add(pts);
     return { pts: pts, vel: vel, gravity: opts.gravity, dur: opts.dur };
+  }
+
+  // victory confetti — same launch-and-fall shape as spawnParticles, but each
+  // particle gets its own color from opts.colors via a per-vertex color
+  // attribute (vertexColors: true) instead of one flat PointsMaterial.color,
+  // so the burst reads as mixed festival colors rather than a single tint.
+  function spawnConfetti(col, opts) {
+    var n = opts.n;
+    var pos = new Float32Array(n * 3);
+    var colArr = new Float32Array(n * 3);
+    var vel = [];
+    var i, a, out, tmp;
+    tmp = new THREE.Color();
+    for (i = 0; i < n; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * opts.spread;
+      pos[i * 3 + 1] = 0;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * opts.spread;
+      a = Math.random() * Math.PI * 2;
+      out = opts.outMin + Math.random() * (opts.outMax - opts.outMin);
+      vel.push({
+        vx: Math.cos(a) * out,
+        vy: opts.upMin + Math.random() * (opts.upMax - opts.upMin),
+        vz: Math.sin(a) * out
+      });
+      tmp.setHex(opts.colors[Math.floor(Math.random() * opts.colors.length)]);
+      colArr[i * 3] = tmp.r; colArr[i * 3 + 1] = tmp.g; colArr[i * 3 + 2] = tmp.b;
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+    var pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      size: opts.size, map: DN.util.softSprite(), vertexColors: true,
+      transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    pts.frustumCulled = false;
+    pts.position.copy(col.pos);
+    pts.position.y += opts.originY;
+    DN.world.scene.add(pts);
+    return { pts: pts, vel: vel, gravity: opts.gravity, dur: opts.dur };
+  }
+
+  // "switch" particles orbit the mound top instead of launching/falling —
+  // positions are recomputed every tick straight from item.t (see tickFx's
+  // f.orbit branch) rather than integrated from velocity, so one clean
+  // revolution completes in exactly opts.dur seconds.
+  function spawnOrbitParticles(col, opts) {
+    var n = opts.n;
+    var pos = new Float32Array(n * 3);
+    var phases = [];
+    var i;
+    for (i = 0; i < n; i++) {
+      phases.push((i / n) * Math.PI * 2);
+      pos[i * 3] = Math.cos(phases[i]) * opts.radius;
+      pos[i * 3 + 1] = 0;
+      pos[i * 3 + 2] = Math.sin(phases[i]) * opts.radius;
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    var pts = new THREE.Points(geo, new THREE.PointsMaterial({
+      size: opts.size, map: DN.util.softSprite(), color: opts.color,
+      transparent: true, opacity: 0.95, depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    pts.frustumCulled = false;
+    pts.position.copy(col.pos);
+    pts.position.y += opts.originY;
+    DN.world.scene.add(pts);
+    return { pts: pts, phases: phases, radius: opts.radius, dur: opts.dur };
   }
 
   function spawnFx(col, kind, text) {
@@ -505,6 +606,39 @@
         gravity: 14, dur: 1.3
       });
       item.pts = gp.pts; item.vel = gp.vel; item.gravity = gp.gravity; item.ptsDur = gp.dur;
+    } else if (kind === 'recall') {
+      // defensive withdraw: a contracting teal ring reads as a shield
+      // pulling inward — same ring mesh as rally, just animated 8 -> 1
+      // instead of expanding, over ~1.0s
+      item.ring = spawnShockwaveRing(col, 0x3fa89f, 0.75);
+      item.ringDur = 1.0; item.ringFrom = 8; item.ringTo = 1; item.ringOpacity = 0.75;
+    } else if (kind === 'switch') {
+      // pivot: a dim half-opacity ring plus 6 gold particles doing one
+      // quick horizontal orbit lap around the mound top (radius ~6, 0.9s)
+      item.ring = spawnShockwaveRing(col, 0xffd76a, 0.45);
+      item.ringDur = 0.9; item.ringOpacity = 0.45;
+      var op = spawnOrbitParticles(col, {
+        n: 6, radius: 6, originY: (col._mH || 6) + 1.5, color: 0xffd76a,
+        size: 1.2, dur: 0.9
+      });
+      item.pts = op.pts; item.ptsDur = op.dur;
+      item.orbit = { radius: op.radius, dur: op.dur, phases: op.phases };
+    } else if (kind === 'victory') {
+      // match-winner fireworks: big confetti burst (mixed festival colors),
+      // a shockwave ring now plus two more staggered in via setTimeout, and
+      // an oversized glow flare (BURST_STYLE.victory). Runs longer than the
+      // default 2.4s item life so the 2.8s confetti fall reads to the end.
+      item.life = 2.9;
+      item.ring = spawnShockwaveRing(col, 0xffd76a, 0.9);
+      item.ringDur = 1.3;
+      var cp = spawnConfetti(col, {
+        n: 25 + Math.floor(Math.random() * 6), colors: VICTORY_CONFETTI,
+        size: 1.4, originY: (col._mH || 6) + 0.5, spread: 2,
+        outMin: 3, outMax: 9, upMin: 9, upMax: 16,
+        gravity: 9, dur: 2.8
+      });
+      item.pts = cp.pts; item.vel = cp.vel; item.gravity = cp.gravity; item.ptsDur = cp.dur;
+      spawnVictoryRings(col);
     }
 
     fxList.push(item);
@@ -517,36 +651,62 @@
       var dt = Math.min(0.05, (now - f.last) / 1000);
       f.last = now; f.t += dt;
 
-      f.sp.position.y += dt * 4.4;
-      f.sp.material.opacity = Math.max(0, 1 - f.t / 2.4);
+      if (f.sp) {
+        f.sp.position.y += dt * 4.4;
+        f.sp.material.opacity = Math.max(0, 1 - f.t / 2.4);
+      }
 
-      var bst = f.burstStyle;
-      var bs = bst.scaleBase + f.t * bst.growth;
-      f.burst.scale.set(bs, bs, 1);
-      f.burst.material.opacity = Math.max(0, bst.opacity - f.t * bst.fade);
+      if (f.burst) {
+        var bst = f.burstStyle;
+        var bs = bst.scaleBase + f.t * bst.growth;
+        f.burst.scale.set(bs, bs, 1);
+        f.burst.material.opacity = Math.max(0, bst.opacity - f.t * bst.fade);
+      }
 
+      // ring: generic expand/contract driven by ringFrom -> ringTo over
+      // ringDur, fading with opacity ringOpacity * (1 - progress). Every
+      // field defaults to rally's original numbers (1 -> 10 over 1.2s @ 0.9
+      // opacity) so rally itself is untouched; recall/switch/victory just
+      // set their own from/to/dur/opacity above in spawnFx.
       if (f.ring) {
-        var rp = Math.min(1, f.t / 1.2);
-        var rs = 1 + rp * 9;
+        var rdur = f.ringDur || 1.2;
+        var rp = Math.min(1, f.t / rdur);
+        var rFrom = (f.ringFrom != null) ? f.ringFrom : 1;
+        var rTo = (f.ringTo != null) ? f.ringTo : 10;
+        var rOp = (f.ringOpacity != null) ? f.ringOpacity : 0.9;
+        var rs = rFrom + (rTo - rFrom) * rp;
         f.ring.scale.set(rs, 1, rs);
-        f.ring.material.opacity = Math.max(0, 0.9 * (1 - rp));
+        f.ring.material.opacity = Math.max(0, rOp * (1 - rp));
       }
 
       if (f.pts) {
         var arr = f.pts.geometry.attributes.position.array;
-        for (var j = 0; j < f.vel.length; j++) {
-          var v = f.vel[j];
-          arr[j * 3] += v.vx * dt;
-          arr[j * 3 + 1] += v.vy * dt;
-          arr[j * 3 + 2] += v.vz * dt;
-          v.vy -= f.gravity * dt;
-          v.vx *= 0.97; v.vz *= 0.97;
+        var j;
+        if (f.orbit) {
+          // "switch": recompute angular position straight from item.t so one
+          // clean revolution finishes in exactly orbit.dur seconds, instead
+          // of integrating from a velocity (see spawnOrbitParticles).
+          var ang0 = (f.t / f.orbit.dur) * Math.PI * 2;
+          for (j = 0; j < f.orbit.phases.length; j++) {
+            var ang = ang0 + f.orbit.phases[j];
+            arr[j * 3] = Math.cos(ang) * f.orbit.radius;
+            arr[j * 3 + 2] = Math.sin(ang) * f.orbit.radius;
+          }
+        } else {
+          for (j = 0; j < f.vel.length; j++) {
+            var v = f.vel[j];
+            arr[j * 3] += v.vx * dt;
+            arr[j * 3 + 1] += v.vy * dt;
+            arr[j * 3 + 2] += v.vz * dt;
+            v.vy -= f.gravity * dt;
+            v.vx *= 0.97; v.vz *= 0.97;
+          }
         }
         f.pts.geometry.attributes.position.needsUpdate = true;
         f.pts.material.opacity = Math.max(0, 0.95 * (1 - f.t / f.ptsDur));
       }
 
-      if (f.t > 2.4) {
+      if (f.t > (f.life != null ? f.life : 2.4)) {
         disposeFxItem(f);
         fxList.splice(i, 1);
       }

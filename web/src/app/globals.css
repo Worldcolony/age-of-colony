@@ -618,7 +618,7 @@ body {
   border: 2px solid var(--brd-strong);
   background: rgba(243, 235, 211, 0.96);
   color: var(--color-ink);
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 700;
   box-shadow: var(--pixel-shadow);
   animation: toast-in 0.25s cubic-bezier(0.3, 1.2, 0.5, 1);

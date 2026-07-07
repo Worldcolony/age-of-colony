@@ -31,6 +31,7 @@ const KIND_ICON: Record<string, string> = {
   ant_agent_start: "🤖", ant_agent_vote: "🐜", agent_decision: "🧠", prediction: "📈",
   settlement: "💰", observe: "👁️", starvation: "☠️", hatch: "🥚", void: "🚫",
   markets_closed: "🔒", game_finished: "🏁", game_error: "⚠️", rally: "📣",
+  recall: "🛡️", switch: "🔀",
 };
 export function kindIcon(kind: string): string {
   return KIND_ICON[kind] || "•";
