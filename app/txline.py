@@ -689,6 +689,7 @@ def build_timeline(
         "playersIndexed": len(player_index.get("byNormativeId", {})),
         "count": len(normalized),
         "score": latest_score,
+        "latestState": _latest_match_state(records_list, fixture=fixture),
         "events": normalized,
     }
 

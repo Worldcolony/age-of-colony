@@ -74,8 +74,61 @@ AUTORUN_COLONIES = (
 )
 LIVE_SCORE_POLL_SECONDS = 2.5
 LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
+LIVE_FINAL_GAME_STATES = {
+    "finished",
+    "complete",
+    "completed",
+    "full_time",
+    "fulltime",
+    "final",
+    "final_whistle",
+    "match_finished",
+    "game_finished",
+    "fixture_finished",
+    "match_ended",
+    "game_ended",
+    "ended",
+    "after_penalties",
+    "post_match",
+    "postmatch",
+    "cancelled",
+    "canceled",
+    "abandoned",
+    "coverage_cancelled",
+    "coverage_canceled",
+}
 LIVE_WAITING_GAME_STATES = {"scheduled", "pre_match", "prematch", "not_started", "notstarted", "pre_game", "pregame"}
 LIVE_WAITING_STATUS_IDS = {1}
+LIVE_PREMATCH_ACTIONS = {
+    "coverage_update",
+    "lineups",
+    "lineup",
+    "weather",
+    "venue",
+    "comment",
+    "connected",
+    "clock",
+}
+LIVE_ACTIVITY_ACTIONS = {
+    "attack_possession",
+    "safe_possession",
+    "possession",
+    "danger_possession",
+    "high_danger_possession",
+    "throw_in",
+    "shot",
+    "free_kick",
+    "corner",
+    "goal_kick",
+    "goal",
+    "penalty",
+    "yellow_card",
+    "red_card",
+    "substitution",
+    "injury",
+    "possible",
+    "var",
+}
 REPLAY_MAX_DELAY_SECONDS = 8.0
 ADMIN_TOKEN_HEADER = "x-aoc-admin-token"
 ADMIN_SESSION_COOKIE = "aoc_admin_session"
@@ -1059,9 +1112,18 @@ async def game_replay(game_id: str) -> dict[str, Any]:
     if not room:
         replay = await _stored_replay_or_none(game_id)
         if replay:
-            return replay
-        raise HTTPException(status_code=404, detail="Game not found.")
+            stored_game = replay["game"]
+            if _stored_game_can_resume_live(stored_game):
+                room = _restore_room_from_stored_row(
+                    {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
+                    events=replay.get("events") or [],
+                )
+            else:
+                return replay
+        else:
+            raise HTTPException(status_code=404, detail="Game not found.")
     await _ensure_room_log_hydrated(room)
+    await _ensure_room_progress(room)
     return {
         "game": room.public_state(),
         "events": [event.public_state() for event in room.log],
@@ -1916,8 +1978,11 @@ async def _run_live_game(game_id: str) -> None:
             ]
             if new_events:
                 await asyncio.to_thread(_process_live_events, harness, new_events, resilient=True)
+                _sync_live_match_state_from_timeline(room, timeline)
                 _sync_room_agent_usage(game_id)
                 await _sync_room_to_supabase_async(room)
+            elif room.match_state:
+                _sync_live_match_state_from_timeline(room, timeline)
             if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
                 await asyncio.to_thread(_finish_live_game, harness)
                 await _sync_room_to_supabase_async(room)
@@ -1992,6 +2057,7 @@ def _prime_live_catchup(
             room.match_state.update(event)
     if catchup_events and room.match_state:
         room.match_state.score = _timeline_score_or_zero(timeline)
+        _sync_live_match_state_from_timeline(room, timeline)
     if catchup_events:
         room.add_log(
             "live_sync",
@@ -2008,15 +2074,20 @@ def _prime_live_catchup(
 
 def _live_timeline_active(timeline: dict[str, Any] | None) -> bool:
     status = _live_timeline_status(timeline)
+    if _live_status_finished(status):
+        return False
+    has_match_activity = _live_timeline_has_match_activity(timeline)
     state = _normalize_live_game_state(status.get("gameState"))
     if state in LIVE_WAITING_GAME_STATES:
-        return False
+        return has_match_activity
     status_id = _safe_int(status.get("statusId"))
     if status_id in LIVE_WAITING_STATUS_IDS:
-        return False
+        return has_match_activity
     if state:
         return True
-    return status_id is not None and status_id not in LIVE_FINAL_STATUS_IDS
+    if status_id is not None and status_id not in LIVE_FINAL_STATUS_IDS:
+        return True
+    return has_match_activity
 
 
 def _log_live_waiting_for_kickoff(room: GameRoom, timeline: dict[str, Any] | None) -> None:
@@ -2036,19 +2107,117 @@ def _log_live_waiting_for_kickoff(room: GameRoom, timeline: dict[str, Any] | Non
 
 
 def _live_timeline_status(timeline: dict[str, Any] | None) -> dict[str, Any]:
+    top_level_status = _live_status_from_candidate((timeline or {}).get("latestState"))
+    if _live_status_has_state(top_level_status) or _live_status_finished(top_level_status):
+        return top_level_status
+    top_level_status = _live_status_from_candidate(timeline)
+    if _live_status_has_state(top_level_status) or _live_status_finished(top_level_status):
+        return top_level_status
     for event in reversed((timeline or {}).get("events") or []):
         if not isinstance(event, dict):
             continue
-        game_state = event.get("gameState")
-        status_id = event.get("statusId")
-        raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
-        if game_state is None:
-            game_state = raw.get("GameState") or raw.get("gameState")
-        if status_id is None:
-            status_id = raw.get("StatusId") or raw.get("statusId")
-        if game_state is not None or status_id is not None:
-            return {"gameState": game_state, "statusId": status_id}
+        event_status = _live_status_from_candidate(event)
+        if _live_status_has_state(event_status) or _live_status_finished(event_status):
+            return event_status
     return {}
+
+
+def _live_status_from_candidate(candidate: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        return {}
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    game_state = _first_status_value(candidate.get("gameState"), candidate.get("GameState"), raw.get("GameState"), raw.get("gameState"))
+    status_id = _first_status_value(candidate.get("statusId"), candidate.get("StatusId"), raw.get("StatusId"), raw.get("statusId"))
+    status = _first_status_value(candidate.get("status"), candidate.get("Status"), raw.get("Status"), raw.get("status"))
+    action = _first_status_value(candidate.get("action"), candidate.get("Action"), raw.get("Action"), raw.get("action"))
+    event_type = _first_status_value(candidate.get("type"), candidate.get("Type"), raw.get("Type"), raw.get("type"))
+    description = _first_status_value(
+        candidate.get("description"),
+        candidate.get("Description"),
+        raw.get("Description"),
+        raw.get("description"),
+    )
+    if game_state is None and status_id is None and status is None and action is None and event_type is None and description is None:
+        return {}
+    return {
+        "gameState": game_state,
+        "statusId": status_id,
+        "status": status,
+        "action": action,
+        "type": event_type,
+        "description": description,
+    }
+
+
+def _first_status_value(*values: Any) -> Any:
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _live_status_has_state(status: dict[str, Any] | None) -> bool:
+    return bool(status and (status.get("gameState") is not None or status.get("statusId") is not None or status.get("status") is not None))
+
+
+def _live_status_waiting(status: dict[str, Any] | None) -> bool:
+    if not status or _live_status_finished(status):
+        return False
+    state = _normalize_live_game_state(status.get("gameState"))
+    if state in LIVE_WAITING_GAME_STATES:
+        return True
+    status_id = _safe_int(status.get("statusId"))
+    return status_id in LIVE_WAITING_STATUS_IDS
+
+
+def _live_timeline_has_match_activity(timeline: dict[str, Any] | None) -> bool:
+    if not isinstance(timeline, dict):
+        return False
+    score = timeline.get("score")
+    if isinstance(score, dict):
+        p1 = _safe_int(score.get("participant1"))
+        p2 = _safe_int(score.get("participant2"))
+        if (p1 is not None and p1 > 0) or (p2 is not None and p2 > 0):
+            return True
+    events = [event for event in timeline.get("events") or [] if isinstance(event, dict)]
+    if any(_live_event_has_match_activity(event) for event in events):
+        return True
+    # A long stream of normalized events is only produced once TXLine has real match data.
+    return len(events) >= 20
+
+
+def _live_event_has_match_activity(event: dict[str, Any]) -> bool:
+    action = _normalize_live_game_state(event.get("action"))
+    if action in LIVE_ACTIVITY_ACTIONS:
+        return True
+    if action in LIVE_PREMATCH_ACTIONS:
+        return False
+    clock_seconds = _safe_int(event.get("clockSeconds"))
+    if clock_seconds is not None and clock_seconds > 0:
+        return True
+    minute = _safe_int(event.get("minute"))
+    if minute is not None and minute > 0:
+        return True
+    highlights = event.get("highlights")
+    return bool(isinstance(highlights, list) and highlights)
+
+
+def _sync_live_match_state_from_timeline(room: GameRoom, timeline: dict[str, Any] | None) -> None:
+    if not room.match_state:
+        return
+    status = _live_timeline_status(timeline)
+    if _live_status_finished(status):
+        room.match_state.game_state = status.get("gameState") or status.get("status") or "finished"
+        if status.get("statusId") is not None:
+            room.match_state.status_id = status.get("statusId")
+        return
+    if _live_timeline_active(timeline):
+        if status.get("gameState") and not _live_status_waiting(status):
+            room.match_state.game_state = status.get("gameState")
+        else:
+            room.match_state.game_state = "inplay"
+        if status.get("statusId") is not None and _safe_int(status.get("statusId")) not in LIVE_WAITING_STATUS_IDS:
+            room.match_state.status_id = status.get("statusId")
 
 
 def _normalize_live_game_state(value: Any) -> str:
@@ -2147,17 +2316,33 @@ def _finish_live_game(harness: Any) -> None:
 def _live_auto_finish_reached(room: GameRoom) -> bool:
     if LIVE_AUTO_FINISH_AFTER_SECONDS <= 0:
         return False
+    now = datetime.now(timezone.utc)
     kickoff_at = _room_kickoff_datetime(room)
-    if not kickoff_at:
-        return False
-    return datetime.now(timezone.utc) >= kickoff_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS)
+    if kickoff_at and now >= kickoff_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS):
+        return True
+    started_at = _room_live_started_datetime(room)
+    return bool(started_at and now >= started_at + timedelta(seconds=LIVE_AUTO_FINISH_AFTER_SECONDS))
+
+
+def _room_live_started_datetime(room: GameRoom) -> datetime | None:
+    for event in room.log:
+        if event.kind != "game_started":
+            continue
+        if event.data.get("mode") != "live":
+            continue
+        return datetime.fromtimestamp(float(event.created_at), tz=timezone.utc)
+    return None
 
 
 def _live_timeline_finished(timeline: dict[str, Any]) -> bool:
+    if _live_status_finished(_live_timeline_status(timeline)):
+        return True
     return any(_live_event_finished(event) for event in timeline.get("events") or [])
 
 
 def _live_event_finished(event: dict[str, Any]) -> bool:
+    if _live_status_finished(_live_status_from_candidate(event)):
+        return True
     raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
     status_id = _status_id_value(
         event.get("statusId")
@@ -2203,6 +2388,43 @@ def _live_event_finished(event: dict[str, Any]) -> bool:
             "cancelled",
             "abandoned",
             "coverage cancelled",
+        )
+    )
+
+
+def _live_status_finished(status: dict[str, Any] | None) -> bool:
+    if not status:
+        return False
+    status_id = _status_id_value(status.get("statusId") or status.get("status"))
+    if status_id in LIVE_FINAL_STATUS_IDS:
+        return True
+    values = [
+        status.get("gameState"),
+        status.get("status"),
+        status.get("action"),
+        status.get("type"),
+        status.get("description"),
+    ]
+    normalized = " ".join(str(value or "") for value in values).casefold().replace("_", " ").replace("-", " ")
+    tokens = {_normalize_live_game_state(value) for value in values if value is not None}
+    if tokens.intersection(LIVE_FINAL_GAME_STATES):
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "full time",
+            "fulltime",
+            "final whistle",
+            "match finished",
+            "game finished",
+            "fixture finished",
+            "match ended",
+            "game ended",
+            "after penalties",
+            "post match",
+            "final score",
+            "coverage cancelled",
+            "coverage canceled",
         )
     )
 
