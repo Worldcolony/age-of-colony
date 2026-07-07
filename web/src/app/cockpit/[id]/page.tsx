@@ -95,7 +95,7 @@ export default function CockpitPage() {
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<CockpitTab>("live");
-  const [sheetOpen, setSheetOpen] = useState(true);
+  const [sheetOpen, setSheetOpen] = useState(false); // map first — this is the game screen
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
   const [ralliedMarkets, setRalliedMarkets] = useState<Set<string>>(new Set());
@@ -271,6 +271,12 @@ export default function CockpitPage() {
     mineIdRef.current = mine?.colonyId ?? null;
   }, [mine?.colonyId]);
 
+  // Pre-match rooms have nothing on the map yet — surface the sheet's
+  // "back to room" guidance instead of an empty world.
+  useEffect(() => {
+    if (status === "created") setSheetOpen(true);
+  }, [status]);
+
   // Arrival shot: fly the camera to your mound once, so you always know
   // where "you" are on the map before the markets start moving.
   const introFlown = useRef(false);
@@ -370,7 +376,7 @@ export default function CockpitPage() {
         sheetTitle="Decision board"
         open={sheetOpen}
         onOpenChange={setSheetOpen}
-        hint={RUNNING.has(status) ? "colony rings flash as your ants vote" : "drag to orbit · tap a mound"}
+        hint={selectedMarket ? undefined : RUNNING.has(status) ? "colony rings flash as your ants vote" : "drag to orbit · tap a mound"}
       >
         {status === "created" ? (
           <div className="flex flex-col gap-3 text-center">
@@ -388,6 +394,13 @@ export default function CockpitPage() {
           </>
         )}
       </GameShell>
+      {!sheetOpen && selectedMarket && (
+        <button type="button" className="market-banner" onClick={() => setSheetOpen(true)}>
+          <span className="live-dot" />
+          <span className="min-w-0 flex-1 truncate text-left">{cleanMarketLabel(selectedMarket.label)}</span>
+          <span className="shrink-0 font-mono text-[10px] uppercase text-gold-deep">vote →</span>
+        </button>
+      )}
       <GameToasts toasts={toasts} />
     </div>
   );

@@ -229,10 +229,47 @@
     return warm[i % warm.length];
   }
 
-  // Ring of game mounds OUTSIDE the seven ambient colonies (they sit at
-  // dist 76-130) but well inside the terrain edge fade (~300).
+  // Find a spot that actually satisfies foundColony's 60-unit spacing rule
+  // (a blind ring can land within 60 of an ambient colony and silently fail).
+  // Golden-angle spiral, nearest-first, so the match cluster stays compact
+  // and camera-frameable.
   function placementFor(i) {
-    return { angle: 0.35 + i * GOLDEN, dist: 168 + (i % 3) * 28 };
+    var base = 0.35 + i * GOLDEN;
+    for (var k = 0; k < 60; k++) {
+      var angle = base + k * 0.61;
+      var dist = 140 + (k % 8) * 16 + Math.floor(k / 8) * 10;
+      var x = Math.cos(angle) * dist, z = Math.sin(angle) * dist;
+      var clear = true;
+      for (var c = 0; c < DN.colony.list.length; c++) {
+        var col = DN.colony.list[c];
+        var dx = col.pos.x - x, dz = col.pos.z - z;
+        if (dx * dx + dz * dz < 62 * 62) { clear = false; break; }
+      }
+      if (clear) return { angle: angle, dist: dist };
+    }
+    return { angle: base, dist: 236 }; // spacious fallback far out
+  }
+
+  // Frame the whole match: centroid of all game mounds, pulled back enough
+  // to see every one of them (falls back to the world overview).
+  function frameMatch(dur) {
+    var ids = Object.keys(map);
+    if (!ids.length) {
+      DN.camera.flyTo(new THREE.Vector3(0, 5, 0), 150, 66, dur || 2.0);
+      return;
+    }
+    var cx = 0, cz = 0;
+    ids.forEach(function (id) { cx += map[id].pos.x; cz += map[id].pos.z; });
+    cx /= ids.length; cz /= ids.length;
+    var spread = 0;
+    ids.forEach(function (id) {
+      var d = Math.hypot(map[id].pos.x - cx, map[id].pos.z - cz);
+      if (d > spread) spread = d;
+    });
+    var dist = Math.max(95, Math.min(320, (spread + 34) * 2.1));
+    var height = Math.max(48, Math.min(150, (spread + 34) * 1.05));
+    DN.camera.flyTo(new THREE.Vector3(cx, 4, cz), dist, height, dur || 2.0);
+    DN.camera.autoRotate(true);
   }
 
   function ensureColony(gc, i, myId) {
@@ -253,10 +290,13 @@
       if (col) {
         placed++;
         if (DN.minimap && DN.minimap.refresh) DN.minimap.refresh();
-        // Cinematic: ride along with the player's own founding (or the first one).
-        if (gc.id === myId || !flownToMine) {
+        // Cinematic: ride along with your OWN founding; other colonies
+        // arriving just re-frame the whole match cluster.
+        if (gc.id === myId) {
           DN.camera.flyTo(col.pos, 56, 44, 2.2);
-          if (gc.id === myId) flownToMine = true;
+          flownToMine = true;
+        } else if (!flownToMine) {
+          frameMatch(2.2);
         }
       }
     }
@@ -535,8 +575,7 @@
     }
     else if (d.type === 'aoc:overview') {
       DN.app.clearSelection();
-      DN.camera.flyTo(new THREE.Vector3(0, 5, 0), 150, 66, 2.0);
-      DN.camera.autoRotate(true);
+      frameMatch(2.0);
     }
     else if (d.type === 'aoc:interactive') {
       document.body.classList.toggle('aoc-live', Boolean(d.on));

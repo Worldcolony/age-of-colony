@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
@@ -116,11 +116,19 @@ export default function RoomPage() {
     setMsg("");
     try {
       let g = game;
-      if (!isJoined || me?.name !== cleanName) {
-        g = roomCode
-          ? await api.joinRoomByCode(roomCode, cleanName, anonId)
-          : await api.joinPlayer(game.gameId, cleanName, anonId);
-        syncGame(g);
+      if (!isJoined) {
+        try {
+          g = roomCode
+            ? await api.joinRoomByCode(roomCode, cleanName, anonId)
+            : await api.joinPlayer(game.gameId, cleanName, anonId);
+          syncGame(g);
+        } catch (joinErr) {
+          // "already in the room" (e.g. from an earlier visit) is not a
+          // failure — refresh the room and continue to colony creation.
+          if ((joinErr as ApiError).status !== 409) throw joinErr;
+          g = await api.getGame(game.gameId);
+          syncGame(g);
+        }
       }
       useStore.getState().setWallet({ name: cleanName });
       setJoined(true);
