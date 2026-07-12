@@ -3,6 +3,7 @@ import type {
   AntDetailResponse,
   AntStrategyPatch,
   AntStrategyResponse,
+  AgentCallMode,
   ColonyAntsResponse,
   CreateColonyBody,
   Fixture,
@@ -104,6 +105,19 @@ export interface ReplayFixtureList {
 
 export type TxLineValidationResult = TxLineValidation;
 
+export interface RunPreviousRequest {
+  days?: number;
+  limit?: number;
+  competitionId?: number;
+  search?: string;
+  seed?: number;
+  stream?: boolean;
+  agentCallMode?: AgentCallMode;
+  replayDelaySeconds?: number;
+  replayTimeScale?: number;
+  colonies?: CreateColonyBody[];
+}
+
 export const api = {
   health: () => req<Record<string, unknown>>("/health"),
 
@@ -171,18 +185,19 @@ export const api = {
   startGame: (
     id: string,
     mode: "replay" | "live" = "live",
-    opts?: { anonymousId?: string; replayDelaySeconds?: number; replayTimeScale?: number },
+    opts?: { anonymousId?: string; agentCallMode?: AgentCallMode; replayDelaySeconds?: number; replayTimeScale?: number },
   ) =>
     req<GameState>(`/api/games/${id}/start`, "POST", {
       mode,
       source: mode === "replay" ? "historical" : "updates",
       anonymousId: opts?.anonymousId,
+      agentCallMode: opts?.agentCallMode,
       replayDelaySeconds: opts?.replayDelaySeconds,
       replayTimeScale: opts?.replayTimeScale,
     }),
   rerun: (
     id: string,
-    opts?: { replayDelaySeconds?: number; replayTimeScale?: number },
+    opts?: { agentCallMode?: AgentCallMode; replayDelaySeconds?: number; replayTimeScale?: number },
   ) =>
     req<GameState>(
       `/api/games/${id}/rerun`,
@@ -190,6 +205,7 @@ export const api = {
       {
         mode: "replay",
         source: "historical",
+        agentCallMode: opts?.agentCallMode,
         replayDelaySeconds: opts?.replayDelaySeconds,
         replayTimeScale: opts?.replayTimeScale,
       },
@@ -197,7 +213,7 @@ export const api = {
 
   demoMatches: () => req<FixtureList>("/api/demo/matches"),
   demoRun: (body?: Record<string, unknown>) => req<GameState>("/api/demo/run", "POST", body ?? {}),
-  runPrevious: (body?: Record<string, unknown>) =>
+  runPrevious: (body?: RunPreviousRequest) =>
     req<GameState>("/api/games/run-previous", "POST", body ?? {}),
   adminCreateRoom: (body: {
     fixtureId: number | string;

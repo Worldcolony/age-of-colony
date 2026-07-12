@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 import os
 
@@ -235,6 +235,7 @@ class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
     anonymousId: str | None = None
+    agentCallMode: Literal["per_ant", "batch"] | None = None
     replayDelaySeconds: float = Field(default=0.0, ge=0.0, le=30.0)
     replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
 
@@ -254,6 +255,7 @@ class RunPreviousTxRequest(BaseModel):
     search: str | None = None
     seed: int | None = None
     stream: bool = False
+    agentCallMode: Literal["per_ant", "batch"] | None = None
     replayDelaySeconds: float = Field(default=0.75, ge=0.0, le=30.0)
     replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
     colonies: list[CreateColonyRequest] | None = None
@@ -417,7 +419,12 @@ async def _get_or_create_public_match_room(payload: CreateGameRequest) -> GameRo
     if not room:
         stored = await _stored_public_room_for_fixture_or_none(payload.fixtureId)
         if stored:
-            room = _restore_room_from_stored_row(stored)
+            stored_state = _admin_game_public_state(stored)
+            if stored_state and _stored_game_has_orphaned_worker(stored_state):
+                await _mark_orphaned_stored_game(stored_state)
+                room = None
+            else:
+                room = _restore_room_from_stored_row(stored)
     if room:
         _merge_public_fixture_metadata(room, payload)
         await _ensure_room_progress(room)
@@ -435,6 +442,7 @@ async def _get_or_create_public_match_room(payload: CreateGameRequest) -> GameRo
         owner_name=payload.creatorName,
     )
     room.mode = "live"
+    room.agent_call_mode = "per_ant"
     return room
 
 
@@ -473,6 +481,8 @@ def _merge_public_fixture_metadata(room: GameRoom, payload: CreateGameRequest) -
         room.start_time_iso = payload.startTimeIso
     if room.mode is None:
         room.mode = "live"
+    if room.mode == "live":
+        room.agent_call_mode = "per_ant"
     if room.match_state:
         if room.participant1 and not room.match_state.participant1:
             room.match_state.participant1 = room.participant1
@@ -717,7 +727,6 @@ async def start_game(game_id: str, payload: StartGameRequest, request: Request) 
         await _ensure_waiting_room_progress(room)
         return room.public_state()
 
-    room.mode = mode
     if mode == "replay":
         return await _start_replay_room(room, payload)
 
@@ -725,6 +734,9 @@ async def start_game(game_id: str, payload: StartGameRequest, request: Request) 
     _ensure_live_room_ready(room)
     kickoff_at = _room_kickoff_datetime(room)
     if kickoff_at and kickoff_at > datetime.now(timezone.utc):
+        _clear_restored_terminal_snapshot(room)
+        room.mode = "live"
+        room.agent_call_mode = "per_ant"
         room.status = "waiting_kickoff"
         room.add_log(
             "game_locked",
@@ -735,6 +747,8 @@ async def start_game(game_id: str, payload: StartGameRequest, request: Request) 
         await _sync_room_to_supabase_async(room)
         return room.public_state()
 
+    room.mode = "live"
+    room.agent_call_mode = "per_ant"
     await _start_live_room_now(room)
     return room.public_state()
 
@@ -848,6 +862,8 @@ async def _ensure_waiting_room_progress(room: GameRoom) -> None:
 async def _ensure_room_progress(room: GameRoom) -> None:
     await _ensure_waiting_room_progress(room)
     if room.status == "error" and room.mode == "live":
+        if getattr(room, "_aoc_restored_terminal", False):
+            return
         room.status = "running_live"
         room.add_log("live_sync", "Live stream recovered and polling resumed.", {"mode": "live", "recovered": True})
         await _sync_room_to_supabase_async(room)
@@ -862,8 +878,17 @@ def _ensure_live_task(room: GameRoom) -> None:
     game_manager.live_tasks[room.game_id] = asyncio.create_task(_run_live_game(room.game_id))
 
 
+def _clear_restored_terminal_snapshot(room: GameRoom) -> None:
+    for attribute in ("_aoc_restored_terminal", "_aoc_restored_public_state"):
+        if hasattr(room, attribute):
+            delattr(room, attribute)
+
+
 async def _start_live_room_now(room: GameRoom) -> None:
+    _clear_restored_terminal_snapshot(room)
+    room.mode = "live"
     room.status = "running_live"
+    room.agent_call_mode = "per_ant"
     room.add_log("game_started", "Live game connected to TXLine updates.", {"mode": "live"})
     _ensure_live_task(room)
     await _sync_room_to_supabase_async(room)
@@ -902,6 +927,7 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
             colony.info_need,
         )
     room.mode = "replay"
+    room.agent_call_mode = payload.agentCallMode
     return await _start_replay_room(room, payload)
 
 
@@ -1170,6 +1196,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) 
         harness = game_manager.harness(room.game_id)
         _add_run_previous_colonies(harness, payload.colonies)
         room.mode = "replay"
+        room.agent_call_mode = payload.agentCallMode
         timeline = build_timeline(
             records,
             fixture={
@@ -1197,13 +1224,13 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) 
         )
         if payload.stream:
             room.status = "running_replay"
+            await _sync_room_to_supabase_async(room)
             _schedule_replay_task(
                 room,
                 timeline["events"],
                 delay_seconds=payload.replayDelaySeconds,
                 time_scale=payload.replayTimeScale,
             )
-            await _sync_room_to_supabase_async(room)
             return room.public_state()
 
         harness.process_events(timeline["events"])
@@ -1240,6 +1267,7 @@ async def demo_run(payload: DemoRunRequest, request: Request) -> dict[str, Any]:
     harness = game_manager.harness(room.game_id)
     _add_autorun_colonies(harness)
     room.mode = "replay"
+    room.agent_call_mode = "batch"
     events = demo_events(room.fixture_id)
     room.add_log(
         "game_started",
@@ -1269,12 +1297,79 @@ async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=
     stored_games = payload.get("games")
     if not isinstance(stored_games, list):
         stored_games = []
-    games = [
-        game
-        for row in stored_games
-        if (game := _admin_game_public_state(row)) is not None
-    ]
-    return {**payload, "count": len(games), "games": games}
+    games: list[dict[str, Any]] = []
+    stored_timestamps: dict[str, float] = {}
+    for index, row in enumerate(stored_games):
+        game = _admin_game_public_state(row)
+        if not game:
+            continue
+        games.append(game)
+        stored_timestamps[game["gameId"]] = _admin_row_timestamp(row, fallback=-float(index))
+    games = await _stop_orphaned_admin_runs(games)
+
+    memory_rooms = dict(game_manager.rooms)
+    merged_entries: list[tuple[float, dict[str, Any]]] = []
+    seen_game_ids: set[str] = set()
+    for stored_game in games:
+        game_id = str(stored_game.get("gameId") or "")
+        if not game_id or game_id in seen_game_ids:
+            continue
+        memory_room = memory_rooms.get(game_id)
+        state = memory_room.public_state() if memory_room else stored_game
+        timestamp = stored_timestamps.get(game_id, 0.0)
+        if memory_room:
+            timestamp = max(timestamp, _admin_room_timestamp(memory_room))
+        merged_entries.append((timestamp, state))
+        seen_game_ids.add(game_id)
+
+    # A failed persistence attempt must not make a room disappear. Merge by
+    # last activity so an old in-memory room cannot hide a newer stored one.
+    for game_id, room in memory_rooms.items():
+        if game_id in seen_game_ids:
+            continue
+        merged_entries.append((_admin_room_timestamp(room), room.public_state()))
+    merged_entries.sort(key=lambda entry: entry[0], reverse=True)
+    merged_games = [state for _, state in merged_entries[:limit]]
+    return {**payload, "count": len(merged_games), "games": merged_games}
+
+
+async def _stop_orphaned_admin_runs(stored_games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stop persisted workers with no task in this single-worker process."""
+    updated_games: list[dict[str, Any]] = []
+    for stored_game in stored_games:
+        status = stored_game.get("status")
+        is_orphan_candidate = status in {"running_replay", "running_live"}
+        game_id = str(stored_game.get("gameId") or "")
+        if not is_orphan_candidate or not game_id or game_manager.get_room(game_id):
+            updated_games.append(stored_game)
+            continue
+        try:
+            stopped = await asyncio.to_thread(supabase_store.mark_game_stopped, stored_game)
+        except (AttributeError, SupabasePersistenceError):
+            stopped = None
+        if not stopped:
+            updated_games.append(stored_game)
+            continue
+        updated_games.append(stopped)
+    return updated_games
+
+
+def _admin_row_timestamp(row: Any, *, fallback: float = 0.0) -> float:
+    if not isinstance(row, dict):
+        return fallback
+    value = row.get("updated_at") or row.get("completed_at") or row.get("created_at")
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.strip().replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def _admin_room_timestamp(room: GameRoom) -> float:
+    return float(room.log[-1].created_at) if room.log else 0.0
 
 
 def _admin_game_public_state(row: Any) -> dict[str, Any] | None:
@@ -1315,10 +1410,21 @@ def _admin_game_public_state(row: Any) -> dict[str, Any] | None:
 
 
 def _stored_game_can_resume_live(stored_game: dict[str, Any]) -> bool:
-    status = stored_game.get("status")
-    if status in {"waiting_kickoff", "running_live"}:
-        return True
-    return status == "error" and stored_game.get("mode") == "live"
+    return stored_game.get("status") == "waiting_kickoff"
+
+
+def _stored_game_has_orphaned_worker(stored_game: dict[str, Any]) -> bool:
+    return stored_game.get("status") in {"running_replay", "running_live"}
+
+
+async def _mark_orphaned_stored_game(stored_game: dict[str, Any]) -> dict[str, Any]:
+    stopped_state = dict(stored_game)
+    stopped_state["status"] = "stopped"
+    try:
+        persisted = await asyncio.to_thread(supabase_store.mark_game_stopped, stored_game)
+    except (AttributeError, SupabasePersistenceError):
+        persisted = None
+    return persisted if isinstance(persisted, dict) else stopped_state
 
 
 @app.get("/api/games/{game_id}")
@@ -1331,9 +1437,9 @@ async def game_state(game_id: str) -> dict[str, Any]:
     if replay:
         stored_game = replay["game"]
         stored_status = stored_game.get("status")
-        can_restore = stored_status not in {"finished", "stopped"} and (
-            stored_status != "error" or _stored_game_can_resume_live(stored_game)
-        )
+        if _stored_game_has_orphaned_worker(stored_game):
+            return await _mark_orphaned_stored_game(stored_game)
+        can_restore = stored_status not in {"finished", "stopped", "error"}
         if can_restore:
             room = _restore_room_from_stored_row(
                 {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
@@ -1352,6 +1458,9 @@ async def game_replay(game_id: str) -> dict[str, Any]:
         replay = await _stored_replay_or_none(game_id)
         if replay:
             stored_game = replay["game"]
+            if _stored_game_has_orphaned_worker(stored_game):
+                replay["game"] = await _mark_orphaned_stored_game(stored_game)
+                return replay
             if _stored_game_can_resume_live(stored_game):
                 room = _restore_room_from_stored_row(
                     {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
@@ -1377,6 +1486,9 @@ async def game_events(game_id: str) -> StreamingResponse:
         if not replay:
             raise HTTPException(status_code=404, detail="Game not found.")
         stored_game = replay["game"]
+        if _stored_game_has_orphaned_worker(stored_game):
+            await _mark_orphaned_stored_game(stored_game)
+            raise HTTPException(status_code=409, detail="Live event stream stopped after server restoration.")
         if not _stored_game_can_resume_live(stored_game):
             raise HTTPException(status_code=404, detail="Live event stream not available for stored replay.")
         room = _restore_room_from_stored_row(
@@ -1828,7 +1940,13 @@ async def _get_room_by_code_or_restore_404(room_code: str):
         return room
     stored = await _stored_room_by_code_or_none(clean_room_code)
     if stored:
-        return _restore_room_from_stored_row(stored)
+        stored_state = _admin_game_public_state(stored)
+        if stored_state and _stored_game_has_orphaned_worker(stored_state):
+            stored_state = await _mark_orphaned_stored_game(stored_state)
+            stored = {**stored, "public_state": stored_state}
+        room = _restore_room_from_stored_row(stored)
+        await _ensure_room_log_hydrated(room)
+        return room
     raise HTTPException(status_code=404, detail="Room code not found.")
 
 
@@ -1839,10 +1957,14 @@ async def _get_game_or_restore_404(game_id: str):
     replay = await _stored_replay_or_none(game_id)
     if replay:
         stored_row = (replay.get("stored") or {}).get("game") or {}
-        return _restore_room_from_stored_row(
-            {**stored_row, "public_state": replay.get("game") or stored_row.get("public_state")},
+        stored_state = replay.get("game") or stored_row.get("public_state") or stored_row
+        if _stored_game_has_orphaned_worker(stored_state):
+            stored_state = await _mark_orphaned_stored_game(stored_state)
+        room = _restore_room_from_stored_row(
+            {**stored_row, "public_state": stored_state},
             events=replay.get("events") or [],
         )
+        return room
     raise HTTPException(status_code=404, detail="Game not found.")
 
 
@@ -1884,7 +2006,20 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
     )
     room.status = public_state.get("status") or row.get("status") or "created"
     room.mode = public_state.get("mode") or row.get("mode")
+    if room.status in {"finished", "stopped", "error"}:
+        setattr(room, "_aoc_restored_terminal", True)
+        setattr(room, "_aoc_restored_public_state", json.loads(json.dumps(public_state)))
+    stored_agent_call_mode = public_state.get("agentCallMode")
+    room.agent_call_mode = stored_agent_call_mode if stored_agent_call_mode in {"per_ant", "batch"} else None
     room.event_index = int(public_state.get("eventIndex") or row.get("event_index") or 0)
+    stored_match = public_state.get("match")
+    if room.match_state and isinstance(stored_match, dict):
+        room.match_state.score = stored_match.get("score")
+        room.match_state.game_state = stored_match.get("gameState")
+        room.match_state.status_id = stored_match.get("statusId")
+        room.match_state.possession_label = stored_match.get("possessionLabel")
+    stored_agent_usage = public_state.get("agentUsage") or row.get("agent_usage")
+    room.agent_usage = dict(stored_agent_usage) if isinstance(stored_agent_usage, dict) else None
     for player in public_state.get("players") or []:
         if not isinstance(player, dict):
             continue
@@ -2048,19 +2183,22 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
         events = demo_events(room.fixture_id)
         if not events:
             raise HTTPException(status_code=422, detail="No demo replay is available for this fixture.")
+        _clear_restored_terminal_snapshot(room)
+        room.mode = "replay"
+        room.agent_call_mode = payload.agentCallMode
         room.add_log(
             "game_started",
             f"Demo replay started with {len(events)} normalized events.",
             {"mode": "replay", "source": "demo", "rawCount": len(events)},
         )
         room.status = "running_replay"
+        await _sync_room_to_supabase_async(room)
         _schedule_replay_task(
             room,
             events,
             delay_seconds=payload.replayDelaySeconds,
             time_scale=payload.replayTimeScale,
         )
-        await _sync_room_to_supabase_async(room)
         return room.public_state()
 
     try:
@@ -2088,6 +2226,9 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
             status_code=422,
             detail="No TXLine replay event for this match. Use a completed match, Run Previous TX, or Live mode when the match starts.",
         )
+    _clear_restored_terminal_snapshot(room)
+    room.mode = "replay"
+    room.agent_call_mode = payload.agentCallMode
     room.add_log(
         "game_started",
         f"Replay started with {len(timeline['events'])} normalized events.",
@@ -2100,13 +2241,13 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
         },
     )
     room.status = "running_replay"
+    await _sync_room_to_supabase_async(room)
     _schedule_replay_task(
         room,
         timeline["events"],
         delay_seconds=payload.replayDelaySeconds,
         time_scale=payload.replayTimeScale,
     )
-    await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 

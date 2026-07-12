@@ -27,8 +27,12 @@ export interface ColonyCommandPanelProps {
   colony: Colony;
   anonymousId: string;
   onGameChange: (game: GameState) => void;
+  initialScope?: CommandScope;
+  expandedByDefault?: boolean;
+  onRequestClose?: () => void;
 }
 
+type CommandScope = "colony" | "ants";
 const EMPTY_ANTS: Ant[] = [];
 
 export function ColonyCommandPanel(props: ColonyCommandPanelProps) {
@@ -42,12 +46,17 @@ function ColonyCommandPanelState({
   colony,
   anonymousId,
   onGameChange,
+  initialScope = "ants",
+  expandedByDefault = false,
+  onRequestClose,
 }: ColonyCommandPanelProps) {
   const disclosureId = useId();
   const requestSequence = useRef(0);
   const detailRequestSequence = useRef(0);
+  const selectedAntIdRef = useRef<string | null>(null);
   const editable = isStrategyEditableStatus(status);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(expandedByDefault);
+  const [scope, setScope] = useState<CommandScope>(initialScope);
   const [roster, setRoster] = useState<ColonyAntsResponse | null>(null);
   const [loadingAnts, setLoadingAnts] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -57,7 +66,7 @@ function ColonyCommandPanelState({
   const [query, setQuery] = useState("");
   const [overridesOnly, setOverridesOnly] = useState(false);
   const [selectedAntId, setSelectedAntId] = useState<string | null>(null);
-  const [selectedAntView, setSelectedAntView] = useState<"history" | "strategy">("history");
+  const [selectedAntView, setSelectedAntView] = useState<"history" | "strategy">("strategy");
   const [antDetail, setAntDetail] = useState<AntDetailResponse | null>(null);
   const [loadingAntDetail, setLoadingAntDetail] = useState(false);
   const [antDetailError, setAntDetailError] = useState("");
@@ -67,6 +76,7 @@ function ColonyCommandPanelState({
   const globalDirty = !sameStrategy(globalDraft, currentGlobal);
   const ants = roster?.ants ?? EMPTY_ANTS;
   const customCount = ants.filter((ant) => !ant.strategy.inheritsGlobal).length;
+  const selectedAnt = ants.find((ant) => ant.antId === selectedAntId) ?? null;
   const visibleAnts = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return ants.filter((ant) => {
@@ -115,32 +125,53 @@ function ColonyCommandPanelState({
   }, [anonymousId, colony.colonyId, gameId]);
 
   useEffect(() => {
-    if (!expanded || !selectedAntId) return;
+    if (!expanded || scope !== "ants" || !selectedAntId) return;
     const interval = window.setInterval(() => {
       void loadAntDetail(selectedAntId, true);
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [expanded, loadAntDetail, selectedAntId]);
+  }, [expanded, loadAntDetail, scope, selectedAntId]);
 
   useEffect(() => {
-    if (!expanded) return;
+    if (!expanded || scope !== "ants") return;
+    if (!roster) {
+      const timer = window.setTimeout(() => void loadAnts(), 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [expanded, loadAnts, roster, scope]);
+
+  useEffect(() => {
+    if (!expanded || scope !== "ants" || !roster) return;
     const interval = window.setInterval(() => {
       void loadAnts(true);
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [expanded, loadAnts]);
+  }, [expanded, loadAnts, roster, scope]);
+
+  function openScope(nextScope: CommandScope) {
+    setScope(nextScope);
+    setExpanded(true);
+    if (nextScope === "ants" && !roster && !loadingAnts) void loadAnts();
+  }
+
+  function selectAnt(antId: string | null) {
+    selectedAntIdRef.current = antId;
+    setSelectedAntId(antId);
+  }
 
   function toggleExpanded() {
     if (expanded) {
+      if (onRequestClose) {
+        onRequestClose();
+        return;
+      }
       setExpanded(false);
-      setSelectedAntId(null);
+      selectAnt(null);
       setAntDetail(null);
       detailRequestSequence.current += 1;
       return;
     }
-    setExpanded(true);
-    setGlobalDraft(strategyFromColony(colony));
-    if (!roster) void loadAnts();
+    openScope(initialScope);
   }
 
   async function saveGlobalStrategy() {
@@ -174,30 +205,50 @@ function ColonyCommandPanelState({
   }
 
   async function saveAntStrategy(ant: Ant, patch: AntStrategyPatch) {
+    // Invalidate any roster/detail reads that started before this mutation so
+    // a slower poll cannot paint the previous strategy over the saved one.
+    requestSequence.current += 1;
+    detailRequestSequence.current += 1;
+    setLoadingAntDetail(false);
     const result = await api.updateAntStrategy(gameId, colony.colonyId, ant.antId, {
       ...patch,
       anonymousId,
     });
+    // A polling request may have started while the PATCH was in flight.
+    requestSequence.current += 1;
+    if (selectedAntIdRef.current === ant.antId) {
+      detailRequestSequence.current += 1;
+      setLoadingAntDetail(false);
+    }
     setRoster((current) => current && ({
       ...current,
       strategyRevision: result.strategyRevision,
       ants: current.ants.map((candidate) => candidate.antId === result.ant.antId ? result.ant : candidate),
     }));
+    setAntDetail((current) => current && current.ant.antId === result.ant.antId ? {
+      ...current,
+      ant: result.ant,
+      strategyRevision: result.strategyRevision,
+    } : current);
     setAnnouncement(`${antLabel(ant)} orders saved. They apply to the next market.`);
-    if (selectedAntId === ant.antId) void loadAntDetail(ant.antId, true);
+    if (selectedAntIdRef.current === ant.antId) void loadAntDetail(ant.antId, true);
     void api.getGame(gameId).then(onGameChange).catch(() => {});
   }
 
   return (
-    <section className="colony-command-panel glass flex min-w-0 flex-col gap-3 p-3" aria-labelledby={`${disclosureId}-title`}>
+    <section className="colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3" aria-labelledby={`${disclosureId}-title`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="eyebrow">Colony command</p>
-          <h2 id={`${disclosureId}-title`} className="truncate text-base font-bold">Orders</h2>
-          <p className="mt-1 truncate text-xs text-ink-faint">{strategySummary(strategyFromColony(colony))}</p>
+          <p className="eyebrow">Your colony</p>
+          <h2 id={`${disclosureId}-title`} className="truncate text-base font-bold">Control {colony.name}</h2>
+          <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+            Change the whole colony or choose one ant. New orders apply to the next market.
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {colony.strategyRevision != null && <span className="status-pill">rev {colony.strategyRevision}</span>}
+          <span className={`status-pill ${editable ? "!border-green/50 !text-green" : ""}`}>
+            {editable ? "Live changes" : "Read-only"}
+          </span>
           <button
             type="button"
             className="quiet-link min-h-11 rounded-md px-2 text-sm"
@@ -205,10 +256,33 @@ function ColonyCommandPanelState({
             aria-controls={disclosureId}
             onClick={toggleExpanded}
           >
-            {expanded ? "Close" : "Edit orders"}
+            {expanded ? "Close" : "Manage"}
           </button>
         </div>
       </div>
+
+      {!expanded && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            className="well group grid min-h-24 gap-1 p-3 text-left transition hover:border-gold/60 focus-visible:border-gold"
+            onClick={() => openScope("colony")}
+          >
+            <span className="text-lg" aria-hidden="true">👑</span>
+            <strong className="text-sm">Colony strategy</strong>
+            <span className="truncate text-xs text-ink-faint">{strategySummary(strategyFromColony(colony))}</span>
+          </button>
+          <button
+            type="button"
+            className="well group grid min-h-24 gap-1 p-3 text-left transition hover:border-gold/60 focus-visible:border-gold"
+            onClick={() => openScope("ants")}
+          >
+            <span className="text-lg" aria-hidden="true">🐜</span>
+            <strong className="text-sm">My ants</strong>
+            <span className="text-xs text-ink-faint">{colony.antsAlive} alive · select one to change its orders</span>
+          </button>
+        </div>
+      )}
 
       {announcement && (
         <div aria-live="polite" aria-atomic="true">
@@ -218,186 +292,230 @@ function ColonyCommandPanelState({
 
       {expanded && (
         <div id={disclosureId} className="colony-command-disclosure grid gap-4 border-t-2 border-[color:var(--brd-soft)] pt-3">
-          <section className="well grid gap-3 p-3" aria-labelledby={`${disclosureId}-global-title`}>
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="eyebrow">Default orders</p>
-                <h3 id={`${disclosureId}-global-title`} className="font-bold">Whole colony</h3>
+          <div className="seg" role="tablist" aria-label="Colony command scope">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === "ants"}
+              data-active={scope === "ants"}
+              onClick={() => openScope("ants")}
+            >
+              🐜 My ants{roster ? ` · ${roster.ants.length}` : ""}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === "colony"}
+              data-active={scope === "colony"}
+              onClick={() => openScope("colony")}
+            >
+              👑 Colony strategy
+            </button>
+          </div>
+
+          {scope === "colony" && (
+            <section className="well grid gap-3 p-3" role="tabpanel" aria-labelledby={`${disclosureId}-global-title`}>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="eyebrow">Default orders</p>
+                  <h3 id={`${disclosureId}-global-title`} className="font-bold">Whole colony</h3>
+                </div>
+                <span className="status-pill !border-green/50 !text-green">Next market</span>
               </div>
-              <span className="status-pill !border-green/50 !text-green">Applies to next market</span>
-            </div>
-            <p className="text-xs leading-relaxed text-ink-faint">
-              Ants set to follow the colony inherit these orders. A market already voting keeps its previous orders.
-            </p>
+              <p className="text-xs leading-relaxed text-ink-faint">
+                Ants set to follow the colony inherit these orders. Ants with a custom strategy keep their own orders.
+              </p>
 
-            <ChoiceButtons
-              legend="Temper"
-              options={STYLE_OPTIONS}
-              value={globalDraft.style}
-              onChange={(style) => setGlobalDraft((current) => ({ ...current, style }))}
-              disabled={!editable || savingGlobal}
-              descriptionId={`${disclosureId}-style-help`}
-            />
+              <ChoiceButtons
+                legend="Temper"
+                options={STYLE_OPTIONS}
+                value={globalDraft.style}
+                onChange={(style) => setGlobalDraft((current) => ({ ...current, style }))}
+                disabled={!editable || savingGlobal}
+                descriptionId={`${disclosureId}-style-help`}
+              />
 
-            <ChoiceChips
-              legend="Focus"
-              options={FOCUS_OPTIONS}
-              value={globalDraft.favoriteContext}
-              onChange={(favoriteContext) => setGlobalDraft((current) => ({ ...current, favoriteContext }))}
-              disabled={!editable || savingGlobal}
-              descriptionId={`${disclosureId}-focus-help`}
-            />
+              <ChoiceChips
+                legend="Focus"
+                options={FOCUS_OPTIONS}
+                value={globalDraft.favoriteContext}
+                onChange={(favoriteContext) => setGlobalDraft((current) => ({ ...current, favoriteContext }))}
+                disabled={!editable || savingGlobal}
+                descriptionId={`${disclosureId}-focus-help`}
+              />
 
-            <ChoiceButtons
-              legend="Info appetite"
-              options={INFO_NEED_OPTIONS}
-              value={globalDraft.infoNeed}
-              onChange={(infoNeed) => setGlobalDraft((current) => ({ ...current, infoNeed }))}
-              disabled={!editable || savingGlobal}
-              descriptionId={`${disclosureId}-info-help`}
-            />
-            <p className="text-[11px] leading-relaxed text-ink-faint">
-              Paid intel is not active yet; this order is retained for future information tools.
-            </p>
+              <ChoiceButtons
+                legend="Info appetite"
+                options={INFO_NEED_OPTIONS}
+                value={globalDraft.infoNeed}
+                onChange={(infoNeed) => setGlobalDraft((current) => ({ ...current, infoNeed }))}
+                disabled={!editable || savingGlobal}
+                descriptionId={`${disclosureId}-info-help`}
+              />
+              <p className="text-[11px] leading-relaxed text-ink-faint">
+                Paid intel is not active yet; this order is retained for future information tools.
+              </p>
 
-            {globalError && <InlineError message={globalError} />}
-            {!editable && <InlineNotice message="This match is finished. Orders are now read-only." />}
+              {globalError && <InlineError message={globalError} />}
+              {!editable && <InlineNotice message="This match is finished. Orders are now read-only." />}
 
-            <div className="grid gap-2 sm:grid-cols-[auto_1fr]">
-              <button
-                type="button"
-                className="btn btn-ghost !min-h-11 px-3 py-2 text-sm"
-                disabled={!globalDirty || savingGlobal}
-                onClick={() => setGlobalDraft(currentGlobal)}
-              >
-                Reset changes
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary !min-h-11 px-3 py-2 text-sm"
-                disabled={!editable || !globalDirty || savingGlobal}
-                aria-busy={savingGlobal}
-                onClick={saveGlobalStrategy}
-              >
-                {savingGlobal ? "Saving orders..." : "Save colony orders"}
-              </button>
-            </div>
-          </section>
-
-          <section className="grid gap-3" aria-labelledby={`${disclosureId}-ants-title`}>
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <p className="eyebrow">Individual orders</p>
-                <h3 id={`${disclosureId}-ants-title`} className="font-bold">Ant roster</h3>
-                {roster && (
-                  <p className="mt-1 text-xs text-ink-faint">
-                    {roster.ants.length - customCount} follow colony · {customCount} custom
-                  </p>
-                )}
-              </div>
-              {roster && <span className="status-pill">rev {roster.strategyRevision}</span>}
-            </div>
-
-            {loadingAnts && !roster ? (
-              <div className="well grid min-h-24 place-items-center p-4 text-sm text-ink-faint" role="status">
-                Gathering the colony...
-              </div>
-            ) : loadError && !roster ? (
-              <div className="well grid gap-3 p-3">
-                <InlineError message={loadError} />
-                <button type="button" className="btn btn-ghost !min-h-11 py-2 text-sm" onClick={() => void loadAnts()}>
-                  Retry roster
+              <div className="grid gap-2 sm:grid-cols-[auto_1fr]">
+                <button
+                  type="button"
+                  className="btn btn-ghost !min-h-11 px-3 py-2 text-sm"
+                  disabled={!globalDirty || savingGlobal}
+                  onClick={() => setGlobalDraft(currentGlobal)}
+                >
+                  Reset changes
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary !min-h-11 px-3 py-2 text-sm"
+                  disabled={!editable || !globalDirty || savingGlobal}
+                  aria-busy={savingGlobal}
+                  onClick={saveGlobalStrategy}
+                >
+                  {savingGlobal ? "Saving orders..." : "Save for next market"}
                 </button>
               </div>
-            ) : roster ? (
-              <>
-                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                  <label>
-                    <span className="sr-only">Search ants</span>
-                    <input
-                      className="input !py-2 text-sm"
-                      type="search"
-                      placeholder="Search ant or archetype"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                    />
-                  </label>
-                  <label className="well flex min-h-11 cursor-pointer items-center gap-2 px-3 text-sm font-bold text-ink-soft">
-                    <input
-                      type="checkbox"
-                      checked={overridesOnly}
-                      onChange={(event) => setOverridesOnly(event.target.checked)}
-                    />
-                    Custom only
-                  </label>
-                </div>
+            </section>
+          )}
 
-                <ul className="grid max-h-[560px] gap-2 overflow-y-auto pr-1" aria-label="Ant strategy roster">
-                  {visibleAnts.map((ant) => {
-                    const selected = selectedAntId === ant.antId;
-                    const detailId = `${disclosureId}-${ant.antId}-detail`;
-                    return (
-                      <li key={ant.antId} className="well overflow-hidden">
+          {scope === "ants" && (
+            <section className="grid min-w-0 gap-3" role="tabpanel" aria-labelledby={`${disclosureId}-ants-title`}>
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="eyebrow">Individual control</p>
+                  <h3 id={`${disclosureId}-ants-title`} className="font-bold">My ants</h3>
+                  {roster && (
+                    <p className="mt-1 text-xs text-ink-faint">
+                      {roster.ants.length - customCount} follow colony · {customCount} custom
+                    </p>
+                  )}
+                </div>
+                {roster && <span className="status-pill">{roster.ants.filter((ant) => ant.alive).length} alive</span>}
+              </div>
+
+              {loadingAnts && !roster ? (
+                <div className="well grid min-h-24 place-items-center p-4 text-sm text-ink-faint" role="status">
+                  Gathering your ants...
+                </div>
+              ) : loadError && !roster ? (
+                <div className="well grid gap-3 p-3">
+                  <InlineError message={loadError} />
+                  <button type="button" className="btn btn-ghost !min-h-11 py-2 text-sm" onClick={() => void loadAnts()}>
+                    Retry roster
+                  </button>
+                </div>
+              ) : roster ? (
+                <div className="command-ant-workspace grid min-w-0 gap-3 xl:grid-cols-[minmax(250px,0.72fr)_minmax(0,1.28fr)]">
+                  <div className={`${selectedAnt ? "hidden xl:grid" : "grid"} min-w-0 content-start gap-3`}>
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto] xl:grid-cols-1">
+                      <label>
+                        <span className="sr-only">Search ants</span>
+                        <input
+                          className="input !py-2 text-sm"
+                          type="search"
+                          placeholder="Search ant or archetype"
+                          value={query}
+                          onChange={(event) => setQuery(event.target.value)}
+                        />
+                      </label>
+                      <label className="well flex min-h-11 cursor-pointer items-center gap-2 px-3 text-sm font-bold text-ink-soft">
+                        <input
+                          type="checkbox"
+                          checked={overridesOnly}
+                          onChange={(event) => setOverridesOnly(event.target.checked)}
+                        />
+                        Custom strategies only
+                      </label>
+                    </div>
+
+                    <ul className="grid gap-2 pr-1 xl:max-h-[600px] xl:overflow-y-auto" aria-label="Ant strategy roster">
+                      {visibleAnts.map((ant) => {
+                        const selected = selectedAntId === ant.antId;
+                        return (
+                          <li key={ant.antId} className={`well overflow-hidden ${selected ? "!border-gold bg-gold/10" : ""}`}>
+                            <button
+                              type="button"
+                              className="grid min-h-14 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-left"
+                              aria-current={selected ? "true" : undefined}
+                              aria-label={`Manage ${antLabel(ant)}`}
+                              onClick={() => {
+                                selectAnt(ant.antId);
+                                setSelectedAntView("strategy");
+                                setAntDetail(null);
+                                void loadAntDetail(ant.antId);
+                              }}
+                            >
+                              <AntStatus status={ant.status} />
+                              <span className="min-w-0">
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <strong className="truncate text-sm">{antLabel(ant)}</strong>
+                                  {!ant.strategy.inheritsGlobal && <span className="status-pill !px-2 !py-0.5">custom</span>}
+                                </span>
+                                <span className="mt-1 block truncate text-xs text-ink-faint">
+                                  {strategySummary(ant.strategy)} · {performanceLabel(ant)}
+                                </span>
+                              </span>
+                              <span className="font-mono text-sm font-bold text-gold-deep" aria-hidden="true">→</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+
+                    {visibleAnts.length === 0 && (
+                      <div className="well p-4 text-center text-sm text-ink-faint">No ants match this filter.</div>
+                    )}
+                    {loadError && <InlineNotice message={`Roster refresh failed: ${loadError}`} />}
+                  </div>
+
+                  <div className={`${selectedAnt ? "grid" : "hidden xl:grid"} min-w-0 content-start gap-3`}>
+                    {selectedAnt ? (
+                      <>
                         <button
                           type="button"
-                          className="grid min-h-14 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-left"
-                          aria-expanded={selected}
-                          aria-controls={detailId}
-                          aria-label={`${selected ? "Close" : "Inspect"} ${antLabel(ant)}`}
+                          className="quiet-link min-h-11 w-fit rounded-md px-2 text-sm xl:hidden"
                           onClick={() => {
-                            if (selected) {
-                              setSelectedAntId(null);
-                              setAntDetail(null);
-                              setAntDetailError("");
-                              detailRequestSequence.current += 1;
-                              return;
-                            }
-                            setSelectedAntId(ant.antId);
-                            setSelectedAntView("history");
+                            selectAnt(null);
                             setAntDetail(null);
-                            void loadAntDetail(ant.antId);
+                            setAntDetailError("");
+                            detailRequestSequence.current += 1;
                           }}
                         >
-                          <AntStatus status={ant.status} />
-                          <span className="min-w-0">
-                            <span className="flex min-w-0 items-center gap-2">
-                              <strong className="truncate text-sm">{antLabel(ant)}</strong>
-                              {!ant.strategy.inheritsGlobal && <span className="status-pill !px-2 !py-0.5">custom</span>}
-                            </span>
-                            <span className="mt-1 block truncate text-xs text-ink-faint">
-                              {strategySummary(ant.strategy)} · {performanceLabel(ant)}
-                            </span>
-                          </span>
-                          <span className="font-mono text-sm font-bold text-gold-deep" aria-hidden="true">{selected ? "−" : "+"}</span>
+                          ← Back to my ants
                         </button>
-
-                        {selected && (
-                          <AntDetailPanel
-                            id={detailId}
-                            ant={ant}
-                            detail={antDetail?.ant.antId === ant.antId ? antDetail : null}
-                            loading={loadingAntDetail}
-                            error={antDetailError}
-                            view={selectedAntView}
-                            globalStrategy={roster.globalStrategy}
-                            disabled={!editable || !ant.alive}
-                            onViewChange={setSelectedAntView}
-                            onRefresh={() => loadAntDetail(ant.antId)}
-                            onSave={(patch) => saveAntStrategy(ant, patch)}
-                          />
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-
-                {visibleAnts.length === 0 && (
-                  <div className="well p-4 text-center text-sm text-ink-faint">No ants match this filter.</div>
-                )}
-                {loadError && <InlineNotice message={`Roster refresh failed: ${loadError}`} />}
-              </>
-            ) : null}
-          </section>
+                        <AntDetailPanel
+                          id={`${disclosureId}-${selectedAnt.antId}-detail`}
+                          ant={selectedAnt}
+                          detail={antDetail?.ant.antId === selectedAnt.antId ? antDetail : null}
+                          loading={loadingAntDetail}
+                          error={antDetailError}
+                          view={selectedAntView}
+                          globalStrategy={roster.globalStrategy}
+                          disabled={!editable || !selectedAnt.alive}
+                          onViewChange={setSelectedAntView}
+                          onRefresh={() => loadAntDetail(selectedAnt.antId)}
+                          onSave={(patch) => saveAntStrategy(selectedAnt, patch)}
+                        />
+                      </>
+                    ) : (
+                      <div className="well grid min-h-64 place-items-center p-6 text-center">
+                        <div>
+                          <span className="text-3xl" aria-hidden="true">🐜</span>
+                          <p className="mt-3 font-bold text-ink">Choose an ant</p>
+                          <p className="mt-1 text-sm leading-relaxed text-ink-faint">
+                            Select one ant to see its bets and change its strategy for the next market.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          )}
         </div>
       )}
     </section>
@@ -432,7 +550,7 @@ function AntDetailPanel({
   const currentAnt = detail?.ant ?? ant;
   const summary = detail?.summary;
   return (
-    <section id={id} className="ant-detail-panel grid gap-3 border-t-2 border-[color:var(--brd-soft)] p-3">
+    <section id={id} className="ant-detail-panel grid min-w-0 gap-3">
       <div className="rounded-md border-2 border-gold/35 bg-[rgba(255,250,236,0.72)] p-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
@@ -459,20 +577,20 @@ function AntDetailPanel({
         <button
           type="button"
           role="tab"
-          aria-selected={view === "history"}
-          data-active={view === "history"}
-          onClick={() => onViewChange("history")}
-        >
-          Bet history{summary ? ` · ${summary.total}` : ""}
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-selected={view === "strategy"}
           data-active={view === "strategy"}
           onClick={() => onViewChange("strategy")}
         >
           Strategy
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "history"}
+          data-active={view === "history"}
+          onClick={() => onViewChange("history")}
+        >
+          Bet history{summary ? ` · ${summary.total}` : ""}
         </button>
       </div>
 
@@ -537,7 +655,7 @@ function AntBetLedger({ bets }: { bets: AntBet[] }) {
     );
   }
   return (
-    <ol className="grid max-h-[420px] gap-2 overflow-y-auto pr-1" aria-label="Ant bet history">
+    <ol className="grid gap-2 pr-1 xl:max-h-[520px] xl:overflow-y-auto" aria-label="Ant bet history">
       {bets.map((bet) => (
         <li key={bet.predictionId} className={`rounded-md border-2 bg-[rgba(249,243,226,0.72)] p-3 ${betBorderTone(bet.status)}`}>
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -734,7 +852,6 @@ function AntOrderEditor({
     setError("");
     try {
       await onSave(custom ? draft : { inheritGlobal: true });
-      onClose();
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -743,7 +860,7 @@ function AntOrderEditor({
   }
 
   return (
-    <form id={id} className="ant-order-editor grid gap-3 border-t-2 border-[color:var(--brd-soft)] p-3" onSubmit={submit}>
+    <form id={id} className="ant-order-editor well grid gap-3 p-3" onSubmit={submit}>
       <fieldset className="grid gap-2">
         <legend className="text-sm font-bold text-ink-soft">Order source</legend>
         <div className="seg">
@@ -789,12 +906,12 @@ function AntOrderEditor({
       {!ant.alive && <InlineNotice message="This ant is dead and cannot receive new orders." />}
       {error && <InlineError message={error} />}
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="sticky bottom-0 grid grid-cols-2 gap-2 border-t-2 border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.96)] pt-3">
         <button type="button" className="btn btn-ghost !min-h-11 px-3 py-2 text-sm" disabled={saving} onClick={onClose}>
           Cancel
         </button>
         <button type="submit" className="btn btn-primary !min-h-11 px-3 py-2 text-sm" disabled={disabled || !dirty || saving} aria-busy={saving}>
-          {saving ? "Saving..." : "Save ant order"}
+          {saving ? "Saving..." : "Save for next market"}
         </button>
       </div>
       <p className="text-center text-[11px] font-bold text-ink-faint">Applies to next market</p>

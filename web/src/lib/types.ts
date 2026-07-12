@@ -4,6 +4,7 @@ export type Style = "cautious" | "balanced" | "aggressive";
 export type FavoriteContext = "penalties" | "corners" | "momentum" | "chaos" | "balanced";
 export type InfoNeed = "low" | "medium" | "high";
 export type GameStatus = "created" | "waiting_kickoff" | "running_replay" | "running_live" | "finished" | string;
+export type AgentCallMode = "per_ant" | "batch";
 
 export interface ColonyStrategy {
   style: Style;
@@ -231,6 +232,7 @@ export interface GameState {
   owner?: { anonymousId?: string | null; name?: string | null } | null;
   status: GameStatus;
   mode?: string | null;
+  agentCallMode?: AgentCallMode | null;
   eventIndex?: number;
   players: Player[];
   match?: { score?: MatchScore | null; gameState?: string | number | null; statusId?: string | number | null; possessionLabel?: string | null };

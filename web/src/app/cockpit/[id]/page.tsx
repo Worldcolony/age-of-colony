@@ -6,7 +6,8 @@ import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { getAnonId } from "@/lib/anon";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
-import type { GameEvent, Colony, GameState, Opportunity, Style, FavoriteContext, InfoNeed, StrategyPatch } from "@/lib/types";
+import { isStrategyEditableStatus, strategySummary } from "@/lib/strategy";
+import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
@@ -87,9 +88,14 @@ interface MarketOutcome {
 }
 
 export default function CockpitPage() {
-  const router = useRouter();
   const { id } = useParams<{ id: string }>();
-  const game = useStore((s) => s.game);
+  return <CockpitRun key={id} id={id} />;
+}
+
+function CockpitRun({ id }: { id: string }) {
+  const router = useRouter();
+  const storedGame = useStore((s) => s.game);
+  const game = storedGame?.gameId === id ? storedGame : null;
   const setGame = useStore((s) => s.setGame);
   const myColonyId = useStore((s) => s.myColonyId);
   const setMyColonyId = useStore((s) => s.setMyColonyId);
@@ -100,6 +106,10 @@ export default function CockpitPage() {
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<CockpitTab>("live");
   const [sheetOpen, setSheetOpen] = useState(false); // map first — this is the game screen
+  const [mobileSheetView, setMobileSheetView] = useState<"board" | "ants">("board");
+  const [desktopCommandOpen, setDesktopCommandOpen] = useState(false);
+  const [cockpitLoading, setCockpitLoading] = useState(true);
+  const [cockpitError, setCockpitError] = useState("");
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
   const [ralliedMarkets, setRalliedMarkets] = useState<Set<string>>(new Set());
@@ -107,6 +117,9 @@ export default function CockpitPage() {
   const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
   const [watchedColonyId, setWatchedColonyId] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
+  const snapshotReadyRef = useRef(false);
+  const pendingStreamEventsRef = useRef<GameEvent[]>([]);
+  const desktopDialogRef = useRef<HTMLElement | null>(null);
   const anonId = useMemo(() => getAnonId(), []);
 
   const { toasts, push } = useGameToasts();
@@ -166,16 +179,19 @@ export default function CockpitPage() {
     }
   }
 
-  function addEvents(incoming: GameEvent[]) {
+  function addEvents(incoming: GameEvent[], { historical = false }: { historical?: boolean } = {}) {
     const fresh: GameEvent[] = [];
     for (const event of incoming) {
       if (seen.current.has(event.index)) continue;
       seen.current.add(event.index);
       if (PULSE[event.kind]) worldLink.pulse(PULSE[event.kind]);
-      if (liveRef.current) announceEvent(event);
+      if (!historical && liveRef.current) announceEvent(event);
       fresh.push(event);
     }
-    if (!fresh.length) return;
+    if (!fresh.length) {
+      if (historical) liveRef.current = true;
+      return;
+    }
     setEvents((prev) => [...fresh, ...prev].sort((a, b) => b.index - a.index).slice(0, 700));
     // history is loaded — anything after this batch is live and worth announcing
     liveRef.current = true;
@@ -183,6 +199,11 @@ export default function CockpitPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const resetTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      setCockpitLoading(true);
+      setCockpitError("");
+    }, 0);
 
     async function loadSnapshot() {
       try {
@@ -192,8 +213,13 @@ export default function CockpitPage() {
         if (replay.game.status === "created") setSheetOpen(true);
         const ownColony = findOwnColony(replay.game, anonId);
         if (ownColony) setMyColonyId(ownColony.colonyId);
-        addEvents(replay.events ?? []);
+        addEvents(replay.events ?? [], { historical: true });
+        snapshotReadyRef.current = true;
+        const pendingStreamEvents = pendingStreamEventsRef.current.splice(0);
+        addEvents(pendingStreamEvents);
         setLastSyncAt(Date.now());
+        setCockpitLoading(false);
+        setCockpitError("");
       } catch {
         try {
           const g = await api.getGame(id);
@@ -202,8 +228,18 @@ export default function CockpitPage() {
           if (g.status === "created") setSheetOpen(true);
           const ownColony = findOwnColony(g, anonId);
           if (ownColony) setMyColonyId(ownColony.colonyId);
+          snapshotReadyRef.current = true;
+          const pendingStreamEvents = pendingStreamEventsRef.current.splice(0);
+          addEvents(pendingStreamEvents, { historical: true });
+          liveRef.current = true;
           setLastSyncAt(Date.now());
-        } catch { /* keep current screen */ }
+          setCockpitLoading(false);
+          setCockpitError("");
+        } catch (error) {
+          if (cancelled) return;
+          setCockpitLoading(false);
+          setCockpitError(error instanceof Error ? error.message : "This simulation could not be loaded.");
+        }
       }
     }
 
@@ -211,6 +247,7 @@ export default function CockpitPage() {
     const interval = window.setInterval(loadSnapshot, 5000);
     return () => {
       cancelled = true;
+      window.clearTimeout(resetTimer);
       window.clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -221,11 +258,22 @@ export default function CockpitPage() {
     onError: () => setStreamState("reconnecting"),
     onEvent: (e) => {
       setStreamState("live");
+      if (!snapshotReadyRef.current) {
+        pendingStreamEventsRef.current.push(e);
+        return;
+      }
       addEvent(e);
     },
     onState: (g) => {
       setStreamState("live");
       setGame(g);
+      if (!snapshotReadyRef.current) {
+        snapshotReadyRef.current = true;
+        const pendingStreamEvents = pendingStreamEventsRef.current.splice(0);
+        addEvents(pendingStreamEvents, { historical: true });
+      }
+      setCockpitLoading(false);
+      setCockpitError("");
       if (g.status === "created") setSheetOpen(true);
       setLastSyncAt(Date.now());
     },
@@ -237,6 +285,9 @@ export default function CockpitPage() {
   }, [sorted]);
   const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
   const adminRoom = (game?.players?.length ?? 0) === 0;
+  const hasPinnedAdminColony = Boolean(
+    watchedColonyId && sorted.some((colony) => colony.colonyId === watchedColonyId),
+  );
   const spectatorFallback = adminRoom
     ? sorted.find((colony) => colony.colonyId === watchedColonyId) ?? sorted[0]
     : undefined;
@@ -352,6 +403,71 @@ export default function CockpitPage() {
     return () => window.clearTimeout(t);
   }, [mine?.colonyId]);
 
+  useEffect(() => {
+    const desktopViewport = window.matchMedia("(min-width: 1280px)");
+    const closeHiddenDialog = (event: MediaQueryListEvent) => {
+      if (!event.matches) setDesktopCommandOpen(false);
+    };
+    desktopViewport.addEventListener("change", closeHiddenDialog);
+    return () => desktopViewport.removeEventListener("change", closeHiddenDialog);
+  }, []);
+
+  useEffect(() => {
+    if (!desktopCommandOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "a[href]",
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(",");
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDesktopCommandOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = desktopDialogRef.current;
+      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector)) : [];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const focusFrame = window.requestAnimationFrame(() => {
+      desktopDialogRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+    });
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+      previousFocus?.focus();
+    };
+  }, [desktopCommandOpen]);
+
+  if (!game || lastSyncAt === null) {
+    return (
+      <CockpitLoadState
+        loading={cockpitLoading || !cockpitError}
+        error={cockpitError}
+        onBack={() => router.push("/lobby")}
+        onRetry={() => window.location.reload()}
+      />
+    );
+  }
+
   const colonyRail = sorted.length > 0 && (
     <div className="colony-rail" aria-label="Colonies on the map">
       {sorted.map((colony, index) => (
@@ -415,16 +531,6 @@ export default function CockpitPage() {
         />
       )}
       {activeTab === "feed" && <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />}
-      <TacticsPanel gameId={id} colony={mine} anonId={anonId} onGame={setGame} push={push} />
-      {mine && (ownColony || adminRoom) && (
-        <ColonyCommandPanel
-          gameId={id}
-          status={status}
-          colony={mine}
-          anonymousId={anonId}
-          onGameChange={setGame}
-        />
-      )}
     </>
   );
 
@@ -446,18 +552,59 @@ export default function CockpitPage() {
         nav={[
           { icon: "🏟️", label: "Room", onClick: () => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby") },
           { icon: "🏆", label: "Ranks", onClick: () => router.push(`/results/${id}`) },
+          {
+            icon: "🐜",
+            label: "Ants",
+            active: sheetOpen && mobileSheetView === "ants",
+            disabled: !mine || (!ownColony && !adminRoom),
+            onClick: () => {
+              if (adminRoom && mine && !hasPinnedAdminColony) setWatchedColonyId(mine.colonyId);
+              setMobileSheetView("ants");
+              setSheetOpen(true);
+            },
+          },
         ]}
         cta={
-          <button type="button" className={`g-cta ${openMarkets.length ? "rust" : ""}`} onClick={() => setSheetOpen((v) => !v)}>
-            {sheetOpen ? "⛰️ View the map" : openMarkets.length ? `🎯 Markets · ${openMarkets.length} live` : "📊 Decision board"}
+          <button
+            type="button"
+            className={`g-cta ${openMarkets.length ? "rust" : ""}`}
+            onClick={() => {
+              if (mobileSheetView === "ants") {
+                setMobileSheetView("board");
+                setSheetOpen(true);
+                return;
+              }
+              setSheetOpen((value) => !value);
+            }}
+          >
+            {mobileSheetView === "ants"
+              ? openMarkets.length ? `🎯 Markets · ${openMarkets.length}` : "📊 Decision board"
+              : sheetOpen ? "⛰️ View the map" : openMarkets.length ? `🎯 Markets · ${openMarkets.length} live` : "📊 Decision board"}
           </button>
         }
-        sheetTitle="Decision board"
+        sheetTitle={mobileSheetView === "ants" ? "My ants & colony" : "Decision board"}
         open={sheetOpen}
-        onOpenChange={setSheetOpen}
+        onOpenChange={(open) => {
+          setSheetOpen(open);
+          if (!open) setMobileSheetView("board");
+        }}
         hint={selectedMarket ? undefined : RUNNING.has(status) ? "colony rings flash as your ants vote" : "drag to orbit · tap a mound"}
       >
-        {status === "created" ? (
+        {mobileSheetView === "ants" && mine && (ownColony || adminRoom) ? (
+          <ColonyCommandPanel
+            gameId={id}
+            status={status}
+            colony={mine}
+            anonymousId={anonId}
+            onGameChange={setGame}
+            initialScope="ants"
+            expandedByDefault
+            onRequestClose={() => {
+              setMobileSheetView("board");
+              setSheetOpen(false);
+            }}
+          />
+        ) : status === "created" ? (
           <div className="flex flex-col gap-3 text-center">
             <p className="text-lg font-bold">Room is not live yet</p>
             <p className="text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
@@ -474,7 +621,10 @@ export default function CockpitPage() {
         )}
       </GameShell>
       {!sheetOpen && selectedMarket && (
-        <button type="button" className="market-banner" onClick={() => setSheetOpen(true)}>
+        <button type="button" className="market-banner" onClick={() => {
+          setMobileSheetView("board");
+          setSheetOpen(true);
+        }}>
           <span className="live-dot" />
           <span className="min-w-0 flex-1 truncate text-left">{cleanMarketLabel(selectedMarket.label)}</span>
           <span className="shrink-0 font-mono text-[10px] uppercase text-gold-deep">vote →</span>
@@ -532,12 +682,13 @@ export default function CockpitPage() {
 
           <ColonyResourceCard colony={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
           {mine && (ownColony || adminRoom) && (
-            <ColonyCommandPanel
-              gameId={id}
-              status={status}
+            <ColonyControlLauncher
               colony={mine}
-              anonymousId={anonId}
-              onGameChange={setGame}
+              status={status}
+              onOpen={() => {
+                if (adminRoom && !hasPinnedAdminColony) setWatchedColonyId(mine.colonyId);
+                setDesktopCommandOpen(true);
+              }}
             />
           )}
           <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
@@ -612,7 +763,6 @@ export default function CockpitPage() {
                 <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />
               )}
 
-              <TacticsPanel gameId={id} colony={mine} anonId={anonId} onGame={setGame} push={push} />
             </section>
           )}
         </main>
@@ -629,10 +779,49 @@ export default function CockpitPage() {
       </div>
 
       <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
-        <span>{streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}</span>
-        <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>Ranks</button>
+        <span>
+          {status === "finished"
+            ? "Match finished"
+            : status === "stopped" || status === "error"
+              ? "Match interrupted"
+              : streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}
+        </span>
+        <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>
+          {status === "finished" ? "View final results" : "Ranks"}
+        </button>
       </footer>
     </div>
+
+    {desktopCommandOpen && mine && (ownColony || adminRoom) && (
+      <div className="fixed inset-0 z-[90] hidden place-items-center p-6 xl:grid" role="presentation">
+        <button
+          type="button"
+          className="absolute inset-0 bg-[rgba(35,31,23,0.62)] backdrop-blur-[2px]"
+          aria-label="Close colony command"
+          onClick={() => setDesktopCommandOpen(false)}
+        />
+        <section
+          ref={desktopDialogRef}
+          className="relative z-10 grid max-h-[calc(100dvh-48px)] w-[min(1040px,calc(100vw-64px))] overflow-hidden rounded-lg border-2 border-[color:var(--brd-strong)] bg-[rgba(238,229,204,0.98)] p-4 shadow-[8px_8px_0_rgba(35,31,23,0.38)]"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Manage ${mine.name}`}
+        >
+          <div className="overflow-y-auto pr-1">
+            <ColonyCommandPanel
+              gameId={id}
+              status={status}
+              colony={mine}
+              anonymousId={anonId}
+              onGameChange={setGame}
+              initialScope="ants"
+              expandedByDefault
+              onRequestClose={() => setDesktopCommandOpen(false)}
+            />
+          </div>
+        </section>
+      </div>
+    )}
     </>
   );
 }
@@ -1407,101 +1596,67 @@ function DecisionCell({
   );
 }
 
-// Job 2: mid-match tactics. Steers the colony's *future* ant decisions
-// (style/focus/risk appetite) via the engine's strategy PATCH — separate
-// from a market action, it doesn't touch any single market's stake.
-function TacticsPanel({
-  gameId,
-  colony,
-  anonId,
-  onGame,
-  push,
-}: {
-  gameId: string;
-  colony?: Colony;
-  anonId: string;
-  onGame: (game: GameState) => void;
-  push: (text: string, tone?: "gain" | "loss" | "market" | "info") => void;
-}) {
-  const [busyField, setBusyField] = useState<null | "style" | "favoriteContext" | "infoNeed">(null);
-  if (!colony) return null;
-
-  async function apply(field: "style" | "favoriteContext" | "infoNeed", patch: StrategyPatch) {
-    if (busyField) return;
-    setBusyField(field);
-    try {
-      const g = await api.updateStrategy(gameId, colony!.colonyId, { ...patch, anonymousId: anonId });
-      onGame(g);
-      push("🎛️ Tactics updated — applies to your ants' next calls", "market");
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Tactics update failed — try again.";
-      push(message, "loss");
-    } finally {
-      setBusyField(null);
-    }
-  }
-
+function ColonyControlLauncher({ colony, status, onOpen }: { colony: Colony; status: string; onOpen: () => void }) {
+  const customCount = Object.keys(colony.antStrategies ?? {}).length;
+  const editable = isStrategyEditableStatus(status);
   return (
-    <section className="well mt-1 flex flex-col gap-3 border-2 border-[color:var(--brd-soft)] p-3">
-      <div>
-        <p className="eyebrow">Tactics</p>
-        <h3 className="text-sm font-bold">Tactics — steer your ants</h3>
+    <section className="colony-command-panel glass relative grid gap-3 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="eyebrow">Your colony</p>
+          <h2 className="truncate text-base font-bold">Manage ants & strategy</h2>
+          <p className="mt-1 truncate text-xs text-ink-faint">{strategySummary(colony)}</p>
+        </div>
+        <span className={`status-pill ${editable ? "!border-green/50 !text-green" : ""}`}>
+          {editable ? "Live" : "Read-only"}
+        </span>
       </div>
-      <TacticsRow<Style>
-        label="Strategy"
-        options={["cautious", "balanced", "aggressive"] as const}
-        value={colony.style}
-        busy={busyField === "style"}
-        onPick={(value) => apply("style", { style: value })}
-      />
-      <TacticsRow<FavoriteContext>
-        label="Focus"
-        options={["penalties", "corners", "momentum", "chaos", "balanced"] as const}
-        value={colony.favoriteContext}
-        busy={busyField === "favoriteContext"}
-        onPick={(value) => apply("favoriteContext", { favoriteContext: value })}
-      />
-      <TacticsRow<InfoNeed>
-        label="Risk appetite"
-        options={["low", "medium", "high"] as const}
-        value={colony.infoNeed}
-        busy={busyField === "infoNeed"}
-        onPick={(value) => apply("infoNeed", { infoNeed: value })}
-      />
+      <div className="grid grid-cols-2 gap-2">
+        <div className="well px-3 py-2">
+          <p className="font-mono text-[9px] uppercase text-ink-faint">My ants</p>
+          <p className="mt-1 font-mono text-lg font-bold text-ink">{colony.antsAlive}</p>
+        </div>
+        <div className="well px-3 py-2">
+          <p className="font-mono text-[9px] uppercase text-ink-faint">Custom</p>
+          <p className="mt-1 font-mono text-lg font-bold text-gold-deep">{customCount}</p>
+        </div>
+      </div>
+      <button type="button" className="btn btn-primary !min-h-11 py-2 text-sm" onClick={onOpen}>
+        🐜 Choose an ant or change colony
+      </button>
+      <p className="text-center text-[11px] text-ink-faint">Changes apply to the next market</p>
     </section>
   );
 }
 
-function TacticsRow<T extends string>({
-  label,
-  options,
-  value,
-  busy,
-  onPick,
+function CockpitLoadState({
+  loading,
+  error,
+  onBack,
+  onRetry,
 }: {
-  label: string;
-  options: readonly T[];
-  value: T;
-  busy: boolean;
-  onPick: (value: T) => void;
+  loading: boolean;
+  error: string;
+  onBack: () => void;
+  onRetry: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-1">
-      <p className="text-[11px] font-bold text-ink-faint">{label}</p>
-      <div className="seg">
-        {options.map((option) => (
-          <button
-            key={option}
-            type="button"
-            data-active={value === option}
-            disabled={busy}
-            onClick={() => onPick(option)}
-          >
-            {option}
-          </button>
-        ))}
-      </div>
-    </div>
+    <main className="grid min-h-[70dvh] place-items-center p-4">
+      <section className="glass grid w-full max-w-xl gap-4 p-6 text-center" role={error ? "alert" : "status"}>
+        <span className="text-4xl" aria-hidden="true">{error ? "⚠️" : "🐜"}</span>
+        <div>
+          <p className="eyebrow">Live cockpit</p>
+          <h1 className="mt-2 text-xl font-bold">{loading ? "Loading this simulation..." : "This simulation could not load"}</h1>
+          <p className="mt-2 text-sm leading-relaxed text-ink-faint">
+            {loading ? "Fetching the matching room and colony state." : error || "The room is unavailable."}
+          </p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <button type="button" className="btn btn-ghost" onClick={onBack}>Back to lobby</button>
+          <button type="button" className="btn btn-primary" disabled={loading} onClick={onRetry}>Retry</button>
+        </div>
+      </section>
+    </main>
   );
 }
 

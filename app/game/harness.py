@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import random
@@ -455,6 +456,7 @@ class GameRoom:
     seed: int = 7
     status: str = "created"
     mode: str | None = None
+    agent_call_mode: str | None = None
     event_index: int = 0
     players: list[PlayerState] = field(default_factory=list)
     colonies: dict[str, ColonyState] = field(default_factory=dict)
@@ -477,7 +479,7 @@ class GameRoom:
         colonies = [colony.public_state(self.event_index) for colony in self.colonies.values()]
         colonies.sort(key=lambda item: item["score"], reverse=True)
         player_colonies = self._player_colonies()
-        return {
+        state = {
             "gameId": self.game_id,
             "roomCode": self.room_code,
             "fixtureId": self.fixture_id,
@@ -495,6 +497,7 @@ class GameRoom:
             else None,
             "status": self.status,
             "mode": self.mode,
+            "agentCallMode": self.agent_call_mode,
             "eventIndex": self.event_index,
             "players": [self._public_player_state(player, player_colonies) for player in self.players],
             "match": {
@@ -508,6 +511,18 @@ class GameRoom:
             "agentUsage": self.agent_usage,
             "logCount": len(self.log),
         }
+        restored_snapshot = getattr(self, "_aoc_restored_public_state", None)
+        if self.status in {"finished", "stopped", "error"} and isinstance(restored_snapshot, dict):
+            snapshot = copy.deepcopy(restored_snapshot)
+            snapshot["status"] = self.status
+            snapshot["mode"] = self.mode
+            snapshot["agentCallMode"] = self.agent_call_mode
+            try:
+                snapshot["logCount"] = max(int(snapshot.get("logCount") or 0), len(self.log))
+            except (TypeError, ValueError):
+                snapshot["logCount"] = len(self.log)
+            return snapshot
+        return state
 
     def _player_colonies(self) -> dict[str, ColonyState]:
         linked: dict[str, ColonyState] = {}
@@ -1242,6 +1257,7 @@ class GameHarness:
             },
             "rules": {
                 "stage": stage,
+                "agentCallMode": self.room.agent_call_mode,
                 "decisionFormat": "Each ant must answer with one vote from market.availableVotes.",
                 "confidenceDisabled": True,
                 "infoFeatureEnabled": False,

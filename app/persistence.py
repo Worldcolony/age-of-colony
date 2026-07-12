@@ -125,6 +125,33 @@ class SupabaseGameStore:
             )
         return len(rows)
 
+    def mark_game_stopped(self, game_state: dict[str, Any]) -> dict[str, Any] | None:
+        """Mark an orphaned worker stopped without loading or rewriting its replay."""
+        state = _json_safe(game_state)
+        game_id = str(state.get("gameId") or "").strip()
+        if not game_id:
+            raise SupabasePersistenceError("gameId is required to stop a stored game.")
+
+        state["status"] = "stopped"
+        if not self.configured:
+            return state
+
+        cleaned = urllib.parse.quote(game_id, safe="")
+        rows = self._request_json(
+            f"aoc_games?game_id=eq.{cleaned}&status=in.(running_replay,running_live)",
+            method="PATCH",
+            body={
+                "status": "stopped",
+                "completed_at": _utc_now(),
+                "public_state": state,
+            },
+            prefer="return=representation",
+        )
+        if not isinstance(rows, list) or not rows:
+            return None
+        stored_state = rows[0].get("public_state") if isinstance(rows[0], dict) else None
+        return stored_state if isinstance(stored_state, dict) else state
+
     def list_games(self, *, limit: int = 50) -> dict[str, Any]:
         if not self.configured:
             return {"source": "supabase", "configured": False, "count": 0, "games": []}

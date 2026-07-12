@@ -6,7 +6,7 @@ import { useStore } from "@/store/game";
 import { fixtureId, flag, fmtKickoffLine, fmtScore, teamName } from "@/lib/format";
 import type { CreateColonyBody, FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
 
-const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120 };
+const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "batch" as const };
 const ADMIN_LAUNCH_REQUEST_STORAGE_KEY = "age-of-colony:admin-launch-request";
 let volatileLaunchRequest: { setupKey: string; requestKey: string } | null = null;
 const STYLES: { value: Style; label: string }[] = [
@@ -306,6 +306,17 @@ export default function AdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!runningGames.length) return;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void api.adminGames(50)
+        .then((data) => setGames(normalizeAdminGames(data.games)))
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [runningGames.length]);
+
   function updateColony(index: number, patch: Partial<AdminColonyDraft>) {
     setColonies((current) => current.map((colony, i) => (i === index ? { ...colony, ...patch } : colony)));
   }
@@ -522,6 +533,10 @@ export default function AdminPage() {
     } finally {
       setWorking("");
     }
+  }
+
+  function openRun(game: GameState) {
+    router.push(`/cockpit/${game.gameId}`);
   }
 
   async function runDemo() {
@@ -880,7 +895,9 @@ export default function AdminPage() {
                 <MiniRunStat label="Events" value={game.eventIndex ?? 0} />
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <button className="btn btn-ghost !min-h-11 px-3 py-2 text-sm" onClick={() => router.push(`/cockpit/${game.gameId}`)}>Open</button>
+                <button className="btn btn-ghost !min-h-11 px-3 py-2 text-sm" onClick={() => openRun(game)}>
+                  {game.status === "finished" && game.players.length === 0 ? "Inspect ants" : "Open cockpit"}
+                </button>
                 <button className="btn btn-primary !min-h-11 px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
                   {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
                 </button>
@@ -914,7 +931,9 @@ export default function AdminPage() {
                   <td className="px-3 py-3 text-sm">{game.eventIndex ?? 0}</td>
                   <td className="rounded-r-md px-3 py-3">
                     <div className="flex justify-end gap-2">
-                      <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => router.push(`/cockpit/${game.gameId}`)}>Open</button>
+                      <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => openRun(game)}>
+                        {game.status === "finished" && game.players.length === 0 ? "Inspect ants" : "Open cockpit"}
+                      </button>
                       <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
                         {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
                       </button>

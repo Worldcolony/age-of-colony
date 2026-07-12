@@ -430,7 +430,14 @@ class OpenRouterColonyAgent:
         if not ants:
             return []
 
-        if self.settings.call_mode == "batch":
+        rules = context.get("rules")
+        call_mode_override = rules.get("agentCallMode") if isinstance(rules, dict) else None
+        call_mode = (
+            _normalize_call_mode(call_mode_override)
+            if isinstance(call_mode_override, str) and call_mode_override in {"per_ant", "batch"}
+            else _normalize_call_mode(self.settings.call_mode)
+        )
+        if call_mode == "batch":
             return self._decide_ants_batch(game_id=game_id, stage=stage, context=context, ants=ants)
         return self._decide_ants_per_ant(game_id=game_id, stage=stage, context=context, ants=ants)
 

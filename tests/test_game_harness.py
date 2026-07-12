@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
 from app.main import (
+    StartGameRequest,
     _admin_room_request_cache,
     app,
     _finish_live_game,
@@ -23,6 +24,7 @@ from app.main import (
     _process_live_events,
     _replay_delay_after_event,
     _restore_room_from_stored_row,
+    _start_replay_room,
     _stored_game_can_resume_live,
     _sync_live_match_state_from_timeline,
     game_manager,
@@ -43,6 +45,7 @@ from app.game.harness import (
     run_vote,
     should_buy_info,
 )
+from app.persistence import SupabaseGameStore, SupabasePersistenceSettings
 
 
 def penalty_event(**overrides):
@@ -578,6 +581,7 @@ class GameHarnessTest(unittest.TestCase):
         agent = FakeDeepSeekAntAgent("yes")
         manager = GameManager(decision_agent=agent)
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        room.agent_call_mode = "batch"
         harness = manager.harness(room.game_id)
         colony = harness.add_colony("Directed Ants", 20, "balanced", "momentum", "medium")
         room.status = "running_live"
@@ -608,6 +612,8 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(inherited_ant["strategy"]["style"], "balanced")
         self.assertTrue(inherited_ant["strategy"]["inheritsGlobal"])
         self.assertEqual(first_call["context"]["colony"]["strategyRevision"], 1)
+        self.assertEqual(first_call["context"]["rules"]["agentCallMode"], "batch")
+        self.assertEqual(room.public_state()["agentCallMode"], "batch")
 
         harness.update_ant_strategy(colony.colony_id, ant.ant_id, inherit_global=True)
         harness.process_event(
@@ -1122,6 +1128,7 @@ class GameHarnessTest(unittest.TestCase):
             "participant2": "Belgium",
             "status": "running_live",
             "mode": "live",
+            "agentCallMode": "per_ant",
             "eventIndex": 48,
             "players": [],
             "colonies": [
@@ -1159,6 +1166,8 @@ class GameHarnessTest(unittest.TestCase):
         colony = room.colonies["col_restore"]
 
         self.assertEqual(room.event_index, 48)
+        self.assertEqual(room.agent_call_mode, "per_ant")
+        self.assertEqual(room.public_state()["agentCallMode"], "per_ant")
         self.assertEqual(colony.food, 18)
         self.assertEqual(colony.seed, 98765)
         self.assertEqual(colony.memory.food_net, -2)
@@ -1185,6 +1194,144 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertEqual(colony.food, 18)
         self.assertEqual(colony.last_food_event_index, 48)
+
+    def test_terminal_restored_room_keeps_original_public_snapshot(self):
+        game_id = "game_restore_terminal_snapshot"
+        room_code = "991235"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": 43,
+            "participant1": "France",
+            "participant2": "Japan",
+            "status": "stopped",
+            "mode": "live",
+            "eventIndex": 72,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": "col_terminal",
+                    "name": "Snapshot Nest",
+                    "size": 20,
+                    "antsAlive": 22,
+                    "antsBorn": 4,
+                    "antsWounded": 3,
+                    "food": 15,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                }
+            ],
+            "activeOpportunities": [{"opportunityId": "opp_terminal", "label": "Stored market"}],
+            "match": {"score": {"participant1": 2, "participant2": 1}, "gameState": "second_half"},
+            "agentUsage": {"apiCalls": 42},
+            "logCount": 18,
+        }
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+
+        room = _restore_room_from_stored_row({"game_id": game_id, "public_state": public_state}, events=[])
+        restored = room.public_state()
+
+        self.assertEqual(restored["match"], public_state["match"])
+        self.assertEqual(restored["colonies"], public_state["colonies"])
+        self.assertEqual(restored["activeOpportunities"], public_state["activeOpportunities"])
+        self.assertEqual(restored["agentUsage"], public_state["agentUsage"])
+        self.assertEqual(restored["eventIndex"], 72)
+        self.assertEqual(restored["logCount"], 18)
+
+    def test_explicit_start_clears_restored_terminal_snapshot(self):
+        game_id = "game_restart_terminal_snapshot"
+        room_code = "991236"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": "demo-sandbox-previous",
+            "participant1": "Old Home",
+            "participant2": "Old Away",
+            "status": "stopped",
+            "mode": "live",
+            "eventIndex": 10,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": "col_restart",
+                    "name": "Restart Nest",
+                    "size": 20,
+                    "antsAlive": 20,
+                    "food": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                }
+            ],
+            "activeOpportunities": [],
+            "match": {"score": {"participant1": 1, "participant2": 0}},
+            "logCount": 3,
+        }
+        room = _restore_room_from_stored_row({"game_id": game_id, "public_state": public_state}, events=[])
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+        self.addCleanup(game_manager.replay_tasks.pop, game_id, None)
+        room.match_state.score = {"participant1": 3, "participant2": 2}
+
+        async def fake_sync(target_room):
+            return {"stored": True, "gameId": target_room.game_id, "eventCount": len(target_room.log)}
+
+        with (
+            patch("app.main._ensure_deepseek_agent"),
+            patch("app.main._sync_room_to_supabase_async", fake_sync),
+            patch("app.main._schedule_replay_task") as schedule,
+        ):
+            response = TestClient(app).post(f"/api/games/{game_id}/start", json={"mode": "replay", "source": "demo"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "running_replay")
+        self.assertEqual(response.json()["match"]["score"], {"participant1": 3, "participant2": 2})
+        schedule.assert_called_once()
+        self.assertFalse(hasattr(room, "_aoc_restored_terminal"))
+        self.assertFalse(hasattr(room, "_aoc_restored_public_state"))
+
+    def test_failed_start_keeps_restored_terminal_snapshot(self):
+        game_id = "game_failed_restart_snapshot"
+        room_code = "991237"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": "no-demo-for-this-fixture",
+            "participant1": "Home",
+            "participant2": "Away",
+            "status": "stopped",
+            "mode": "live",
+            "eventIndex": 8,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": "col_failed_restart",
+                    "name": "Preserved Nest",
+                    "size": 20,
+                    "antsAlive": 20,
+                    "food": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                }
+            ],
+            "activeOpportunities": [],
+            "match": {"score": {"participant1": 2, "participant2": 0}},
+            "logCount": 2,
+        }
+        room = _restore_room_from_stored_row({"game_id": game_id, "public_state": public_state}, events=[])
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+
+        with patch("app.main._ensure_deepseek_agent"):
+            response = TestClient(app).post(f"/api/games/{game_id}/start", json={"mode": "replay", "source": "demo"})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertTrue(hasattr(room, "_aoc_restored_terminal"))
+        self.assertTrue(hasattr(room, "_aoc_restored_public_state"))
+        self.assertEqual(room.public_state()["match"], public_state["match"])
 
     def test_late_pressure_event_can_create_goal_next_ten_market_for_stoppage_time(self):
         room, _ = self.make_room()
@@ -2305,6 +2452,40 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(len(decisions), 3)
         self.assertTrue(all(decision.raw.get("_callMode") == "per_ant" for decision in decisions))
 
+    def test_openrouter_room_call_mode_overrides_global_setting_and_otherwise_falls_back(self):
+        cases = [
+            ("per_ant", "batch", "batch"),
+            ("batch", "per_ant", "per_ant"),
+            ("batch", None, "batch"),
+        ]
+        for global_mode, room_mode, expected_mode in cases:
+            with self.subTest(global_mode=global_mode, room_mode=room_mode):
+                agent = OpenRouterColonyAgent(
+                    OpenRouterSettings(
+                        api_key="test-key",
+                        model="deepseek/deepseek-v4-flash",
+                        call_mode=global_mode,
+                    )
+                )
+                context = {"rules": {"agentCallMode": room_mode}} if room_mode else {}
+                with (
+                    patch.object(agent, "_decide_ants_batch", return_value=[]) as batch,
+                    patch.object(agent, "_decide_ants_per_ant", return_value=[]) as per_ant,
+                ):
+                    agent.decide_ants(
+                        game_id="game-room-mode",
+                        stage="pre_info",
+                        context=context,
+                        ants=[{"antId": "ant_1"}],
+                    )
+
+                if expected_mode == "batch":
+                    batch.assert_called_once()
+                    per_ant.assert_not_called()
+                else:
+                    per_ant.assert_called_once()
+                    batch.assert_not_called()
+
     def test_openrouter_per_ant_missing_single_decision_becomes_abstain(self):
         agent = OpenRouterColonyAgent(
             OpenRouterSettings(
@@ -3275,10 +3456,10 @@ class DemoRunApiTest(unittest.TestCase):
         live_task.assert_called_once()
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("recovered") for event in room.log))
 
-    def test_stored_error_live_game_can_resume(self):
+    def test_only_waiting_stored_live_game_can_resume(self):
         self.assertTrue(_stored_game_can_resume_live({"status": "waiting_kickoff"}))
-        self.assertTrue(_stored_game_can_resume_live({"status": "running_live"}))
-        self.assertTrue(_stored_game_can_resume_live({"status": "error", "mode": "live"}))
+        self.assertFalse(_stored_game_can_resume_live({"status": "running_live"}))
+        self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "live"}))
         self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "replay"}))
         self.assertFalse(_stored_game_can_resume_live({"status": "finished", "mode": "live"}))
 
@@ -3618,6 +3799,7 @@ class DemoRunApiTest(unittest.TestCase):
         game = response.json()
         self.assertEqual(game["fixtureId"], "demo-sandbox-previous")
         self.assertEqual(game["status"], "finished")
+        self.assertEqual(game["agentCallMode"], "batch")
         self.assertEqual(len(game["colonies"]), 3)
         self.assertGreater(game["eventIndex"], 10)
 
@@ -3750,6 +3932,37 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(conflicting.status_code, 409)
         self.assertEqual(len(game_manager.rooms), room_count_before + 1)
 
+    def test_mark_game_stopped_preserves_stored_snapshot(self):
+        store = SupabaseGameStore(
+            SupabasePersistenceSettings(url="https://example.supabase.co", key="test-key")
+        )
+        calls = []
+        public_state = {
+            "gameId": "game_snapshot_preserved",
+            "status": "running_live",
+            "mode": "live",
+            "eventIndex": 44,
+            "logCount": 12,
+            "match": {"score": "2 - 1", "gameState": "second_half"},
+            "colonies": [{"colonyId": "col_1", "antsAlive": 17}],
+            "activeOpportunities": [{"opportunityId": "opp_1", "status": "open"}],
+        }
+
+        def fake_request(path, *, method="GET", body=None, prefer=""):
+            calls.append({"path": path, "method": method, "body": body, "prefer": prefer})
+            return [{"public_state": body["public_state"]}]
+
+        store._request_json = fake_request
+        stopped = store.mark_game_stopped(public_state)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["method"], "PATCH")
+        self.assertIn("status=in.(running_replay,running_live)", calls[0]["path"])
+        self.assertEqual(calls[0]["prefer"], "return=representation")
+        self.assertEqual(stopped["status"], "stopped")
+        for key in ("eventIndex", "logCount", "match", "colonies", "activeOpportunities"):
+            self.assertEqual(stopped[key], public_state[key])
+
     def test_admin_games_flattens_supabase_rows_for_the_dashboard(self):
         class StoredAdminGames:
             configured = True
@@ -3775,7 +3988,11 @@ class DemoRunApiTest(unittest.TestCase):
                     ],
                 }
 
-        with patch("app.main.supabase_store", StoredAdminGames()):
+        with (
+            patch("app.main.supabase_store", StoredAdminGames()),
+            patch.dict(game_manager.rooms, {}, clear=True),
+            patch.dict(game_manager.room_codes, {}, clear=True),
+        ):
             response = TestClient(app).get("/api/admin/games")
 
         self.assertEqual(response.status_code, 200)
@@ -3791,6 +4008,379 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["players"], [])
         self.assertEqual(game["activeOpportunities"], [])
         self.assertEqual(game["match"], {"score": None})
+
+    def test_admin_games_prefers_newer_in_memory_state_over_stored_row(self):
+        room = game_manager.create_room(
+            fixture_id=919191,
+            participant1="France",
+            participant2="Japan",
+            seed=91,
+        )
+        room.mode = "replay"
+        room.status = "finished"
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+
+        stale_state = room.public_state()
+        stale_state["status"] = "running_replay"
+
+        class StaleStoredAdminGames:
+            configured = True
+
+            def list_games(self, *, limit):
+                return {
+                    "source": "supabase",
+                    "configured": True,
+                    "count": 1,
+                    "games": [
+                        {
+                            "game_id": room.game_id,
+                            "fixture_id": str(room.fixture_id),
+                            "status": "running_replay",
+                            "mode": "replay",
+                            "event_index": 0,
+                            "public_state": stale_state,
+                        }
+                    ],
+                }
+
+        with (
+            patch("app.main.supabase_store", StaleStoredAdminGames()),
+            patch.dict(game_manager.rooms, {room.game_id: room}, clear=True),
+            patch.dict(game_manager.room_codes, {room.room_code: room.game_id}, clear=True),
+        ):
+            response = TestClient(app).get("/api/admin/games")
+
+        self.assertEqual(response.status_code, 200)
+        games = response.json()["games"]
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]["gameId"], room.game_id)
+        self.assertEqual(games[0]["status"], "finished")
+
+    def test_admin_games_keeps_memory_only_room_visible_when_storage_missed_it(self):
+        room = game_manager.create_room(
+            fixture_id=919190,
+            participant1="France",
+            participant2="Belgium",
+            seed=90,
+        )
+        room.mode = "replay"
+        room.status = "running_replay"
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+
+        class EmptyStoredAdminGames:
+            configured = True
+
+            def list_games(self, *, limit):
+                return {
+                    "source": "supabase",
+                    "configured": True,
+                    "count": 0,
+                    "games": [],
+                }
+
+        with patch("app.main.supabase_store", EmptyStoredAdminGames()):
+            response = TestClient(app).get("/api/admin/games?limit=1")
+
+        self.assertEqual(response.status_code, 200)
+        games = response.json()["games"]
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]["gameId"], room.game_id)
+        self.assertEqual(games[0]["status"], "running_replay")
+
+    def test_admin_games_limit_prefers_newer_stored_room_over_old_memory_room(self):
+        room = game_manager.create_room(
+            fixture_id=919196,
+            participant1="Old",
+            participant2="Memory",
+            seed=96,
+        )
+        room.mode = "replay"
+        room.status = "finished"
+        room.log[-1].created_at = 1.0
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+
+        stored_state = {
+            "gameId": "game_newer_stored_admin",
+            "fixtureId": 919197,
+            "participant1": "Newer",
+            "participant2": "Stored",
+            "status": "finished",
+            "mode": "replay",
+            "eventIndex": 20,
+            "players": [],
+            "colonies": [],
+            "activeOpportunities": [],
+            "match": {"score": "1 - 0"},
+        }
+
+        class NewerStoredAdminGame:
+            configured = True
+
+            def list_games(self, *, limit):
+                return {
+                    "source": "supabase",
+                    "configured": True,
+                    "count": 1,
+                    "games": [{"updated_at": "2030-01-01T00:00:00+00:00", "public_state": stored_state}],
+                }
+
+        with (
+            patch("app.main.supabase_store", NewerStoredAdminGame()),
+            patch.dict(game_manager.rooms, {room.game_id: room}, clear=True),
+            patch.dict(game_manager.room_codes, {room.room_code: room.game_id}, clear=True),
+        ):
+            response = TestClient(app).get("/api/admin/games?limit=1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["games"][0]["gameId"], stored_state["gameId"])
+
+    def test_admin_games_stops_orphaned_replay_and_live_without_loading_events(self):
+        game_id = "game_orphaned_admin_replay"
+        room_code = "919192"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": 919192,
+            "participant1": "Brazil",
+            "participant2": "Norway",
+            "status": "running_replay",
+            "mode": "replay",
+            "eventIndex": 0,
+            "players": [],
+            "colonies": [],
+            "activeOpportunities": [],
+            "match": {"score": None},
+            "logCount": 1,
+        }
+        stored_row = {
+            "game_id": game_id,
+            "fixture_id": "919192",
+            "status": "running_replay",
+            "mode": "replay",
+            "seed": 92,
+            "event_index": 0,
+            "public_state": public_state,
+        }
+        live_state = {
+            **public_state,
+            "gameId": "game_orphaned_admin_live_list",
+            "roomCode": "919194",
+            "fixtureId": 919194,
+            "status": "running_live",
+            "mode": "live",
+            "match": {"score": "1 - 0"},
+        }
+        live_row = {
+            **stored_row,
+            "game_id": live_state["gameId"],
+            "fixture_id": str(live_state["fixtureId"]),
+            "status": "running_live",
+            "mode": "live",
+            "public_state": live_state,
+        }
+
+        class OrphanedReplayStore:
+            configured = True
+
+            def __init__(self):
+                self.marked_states = []
+
+            def list_games(self, *, limit):
+                return {
+                    "source": "supabase",
+                    "configured": True,
+                    "count": 2,
+                    "games": [stored_row, live_row],
+                }
+
+            def game_replay(self, requested_game_id):
+                raise AssertionError(f"Admin list must not hydrate replay events for {requested_game_id}")
+
+            def mark_game_stopped(self, state):
+                self.marked_states.append(dict(state))
+                return {**state, "status": "stopped"}
+
+        store = OrphanedReplayStore()
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+        self.addCleanup(game_manager.replay_tasks.pop, game_id, None)
+        self.addCleanup(game_manager.rooms.pop, live_state["gameId"], None)
+        self.addCleanup(game_manager.room_codes.pop, live_state["roomCode"], None)
+        self.addCleanup(game_manager.live_tasks.pop, live_state["gameId"], None)
+
+        with (
+            patch("app.main.supabase_store", store),
+            patch.dict(game_manager.rooms, {}, clear=True),
+            patch.dict(game_manager.room_codes, {}, clear=True),
+        ):
+            response = TestClient(app).get("/api/admin/games")
+
+        self.assertEqual(response.status_code, 200)
+        games = response.json()["games"]
+        self.assertEqual({game["gameId"] for game in games}, {game_id, live_state["gameId"]})
+        self.assertTrue(all(game["status"] == "stopped" for game in games))
+        self.assertEqual({state["gameId"] for state in store.marked_states}, {game_id, live_state["gameId"]})
+        self.assertIsNone(game_manager.get_room(game_id))
+        self.assertIsNone(game_manager.get_room(live_state["gameId"]))
+
+    def test_admin_games_keeps_stored_live_error_for_diagnosis(self):
+        public_state = {
+            "gameId": "game_admin_live_error",
+            "fixtureId": 919198,
+            "status": "error",
+            "mode": "live",
+            "eventIndex": 9,
+            "players": [],
+            "colonies": [],
+            "activeOpportunities": [],
+            "match": {"score": "0 - 0"},
+        }
+
+        class StoredLiveErrorAdmin:
+            configured = True
+
+            def list_games(self, *, limit):
+                return {"source": "supabase", "configured": True, "count": 1, "games": [{"public_state": public_state}]}
+
+            def mark_game_stopped(self, state):
+                raise AssertionError("Stored errors must remain errors for diagnosis.")
+
+        with (
+            patch("app.main.supabase_store", StoredLiveErrorAdmin()),
+            patch.dict(game_manager.rooms, {}, clear=True),
+            patch.dict(game_manager.room_codes, {}, clear=True),
+        ):
+            response = TestClient(app).get("/api/admin/games")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["games"][0]["status"], "error")
+
+    def test_game_state_stops_restored_live_room_without_full_checkpoint(self):
+        game_id = "game_orphaned_admin_live"
+        room_code = "919193"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": 919193,
+            "participant1": "France",
+            "participant2": "Belgium",
+            "status": "running_live",
+            "mode": "live",
+            "eventIndex": 24,
+            "players": [],
+            "colonies": [],
+            "activeOpportunities": [],
+            "match": {"score": "1 - 0"},
+            "logCount": 1,
+        }
+        stored_row = {
+            "game_id": game_id,
+            "fixture_id": "919193",
+            "status": "running_live",
+            "mode": "live",
+            "seed": 93,
+            "event_index": 24,
+            "public_state": public_state,
+        }
+
+        class OrphanedLiveStore:
+            configured = True
+
+            def __init__(self):
+                self.marked_states = []
+
+            def game_replay(self, requested_game_id):
+                if requested_game_id != game_id:
+                    return None
+                return {
+                    "game": public_state,
+                    "events": [],
+                    "stored": {"source": "supabase", "game": stored_row, "eventCount": 0},
+                }
+
+            def mark_game_stopped(self, state):
+                self.marked_states.append(dict(state))
+                return {**state, "status": "stopped"}
+
+        store = OrphanedLiveStore()
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+        self.addCleanup(game_manager.live_tasks.pop, game_id, None)
+
+        with patch("app.main.supabase_store", store), patch("app.main._ensure_live_task") as live_task:
+            response = TestClient(app).get(f"/api/games/{game_id}")
+
+        self.assertEqual(response.status_code, 200)
+        game = response.json()
+        self.assertEqual(game["gameId"], game_id)
+        self.assertEqual(game["status"], "stopped")
+        self.assertEqual(game["match"], public_state["match"])
+        self.assertEqual(game["eventIndex"], public_state["eventIndex"])
+        self.assertEqual(game["logCount"], public_state["logCount"])
+        live_task.assert_not_called()
+        self.assertIsNone(game_manager.get_room(game_id))
+        self.assertEqual(store.marked_states, [public_state])
+
+    def test_game_state_does_not_resume_stored_live_error(self):
+        game_id = "game_stored_live_error"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": "919195",
+            "fixtureId": 919195,
+            "participant1": "Japan",
+            "participant2": "Ghana",
+            "status": "error",
+            "mode": "live",
+            "eventIndex": 18,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": "col_stored_error",
+                    "name": "Error Nest",
+                    "size": 20,
+                    "antsAlive": 20,
+                    "food": 20,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                }
+            ],
+            "activeOpportunities": [],
+            "match": {"score": "0 - 0"},
+            "logCount": 4,
+        }
+
+        class StoredLiveError:
+            configured = True
+
+            def game_replay(self, requested_game_id):
+                return {
+                    "game": public_state,
+                    "events": [],
+                    "stored": {"source": "supabase", "game": {"game_id": requested_game_id}, "eventCount": 0},
+                }
+
+            def mark_game_stopped(self, state):
+                raise AssertionError("A stored error is returned as-is, not resumed or rewritten.")
+
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, public_state["roomCode"], None)
+        client = TestClient(app)
+        with patch("app.main.supabase_store", StoredLiveError()), patch("app.main._ensure_live_task") as live_task:
+            response = client.get(f"/api/games/{game_id}")
+            ants = client.get(f"/api/games/{game_id}/colonies/col_stored_error/ants")
+            response_after_restore = client.get(f"/api/games/{game_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "error")
+        self.assertEqual(ants.status_code, 200)
+        self.assertEqual(response_after_restore.status_code, 200)
+        self.assertEqual(response_after_restore.json()["status"], "error")
+        live_task.assert_not_called()
+        self.assertIsNotNone(game_manager.get_room(game_id))
 
     def test_admin_replay_fixtures_only_returns_matches_with_score_data(self):
         class FakeTxLineClient:
@@ -3946,8 +4536,14 @@ class DemoRunApiTest(unittest.TestCase):
                 return []
 
         scheduled = []
+        call_order = []
+
+        async def fake_sync(room):
+            call_order.append("sync")
+            return {"stored": True, "gameId": room.game_id, "eventCount": len(room.log)}
 
         def fake_schedule(room, events, *, delay_seconds=0.0, time_scale=None):
+            call_order.append("schedule")
             scheduled.append(
                 {
                     "gameId": room.game_id,
@@ -3962,6 +4558,7 @@ class DemoRunApiTest(unittest.TestCase):
         with (
             patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")),
             patch("app.main.TxLineClient", FakeTxLineClient),
+            patch("app.main._sync_room_to_supabase_async", fake_sync),
             patch("app.main._schedule_replay_task", fake_schedule),
         ):
             response = client.post(
@@ -3972,6 +4569,7 @@ class DemoRunApiTest(unittest.TestCase):
                     "competitionId": 42,
                     "seed": 11,
                     "stream": True,
+                    "agentCallMode": "batch",
                     "replayDelaySeconds": 0.8,
                     "replayTimeScale": 120,
                     "colonies": [
@@ -3990,6 +4588,7 @@ class DemoRunApiTest(unittest.TestCase):
         game = response.json()
         self.assertEqual(game["fixtureId"], 778)
         self.assertEqual(game["status"], "running_replay")
+        self.assertEqual(game["agentCallMode"], "batch")
         self.assertEqual(game["eventIndex"], 0)
         self.assertEqual(len(game["colonies"]), 1)
         self.assertEqual(game["colonies"][0]["name"], "Admin Scout")
@@ -3998,6 +4597,143 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(scheduled[0]["delaySeconds"], 0.8)
         self.assertEqual(scheduled[0]["timeScale"], 120)
         self.assertEqual(scheduled[0]["colonyNames"], ["Admin Scout"])
+        self.assertEqual(call_order, ["sync", "schedule"])
+
+    def test_replay_start_persists_running_state_before_scheduling_worker(self):
+        room = game_manager.create_room(
+            fixture_id="demo-sandbox-previous",
+            participant1="North Colony FC",
+            participant2="South Colony FC",
+            seed=93,
+        )
+        game_manager.harness(room.game_id).add_colony(
+            "Order Nest",
+            20,
+            "balanced",
+            "momentum",
+            "medium",
+        )
+        room.mode = "replay"
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+        self.addCleanup(game_manager.replay_tasks.pop, room.game_id, None)
+
+        calls = []
+
+        async def fake_sync(target_room):
+            calls.append(("sync", target_room.status))
+            return {"stored": True, "gameId": target_room.game_id, "eventCount": len(target_room.log)}
+
+        def fake_schedule(target_room, events, *, delay_seconds=0.0, time_scale=None):
+            calls.append(("schedule", target_room.status))
+
+        with (
+            patch("app.main._sync_room_to_supabase_async", fake_sync),
+            patch("app.main._schedule_replay_task", fake_schedule),
+        ):
+            state = asyncio.run(
+                _start_replay_room(
+                    room,
+                    StartGameRequest(mode="replay", source="demo", agentCallMode="batch"),
+                )
+            )
+
+        self.assertEqual(state["status"], "running_replay")
+        self.assertEqual(state["agentCallMode"], "batch")
+        self.assertEqual(calls, [("sync", "running_replay"), ("schedule", "running_replay")])
+
+    def test_start_game_keeps_agent_call_mode_on_room_state(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={
+                "fixtureId": "demo-sandbox-previous",
+                "participant1": "North Colony FC",
+                "participant2": "South Colony FC",
+                "seed": 94,
+            },
+        ).json()
+        game_id = created["gameId"]
+        room_code = created["roomCode"]
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+        self.addCleanup(game_manager.replay_tasks.pop, game_id, None)
+        client.post(
+            f"/api/games/{game_id}/colonies",
+            json={
+                "name": "Batch Nest",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+            },
+        )
+
+        with (
+            patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")),
+            patch("app.main._sync_room_to_supabase_async"),
+            patch("app.main._schedule_replay_task"),
+        ):
+            response = client.post(
+                f"/api/games/{game_id}/start",
+                json={"mode": "replay", "source": "demo", "agentCallMode": "batch"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["agentCallMode"], "batch")
+        self.assertEqual(game_manager.get_room(game_id).agent_call_mode, "batch")
+
+    def test_live_start_ignores_replay_agent_call_mode_override(self):
+        client = TestClient(app)
+        room = game_manager.create_room(
+            fixture_id=949494,
+            participant1="France",
+            participant2="Belgium",
+            seed=95,
+        )
+        game_manager.harness(room.game_id).add_colony(
+            "Live Nest",
+            20,
+            "balanced",
+            "momentum",
+            "medium",
+        )
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+
+        async def fake_start_live(target_room):
+            target_room.status = "running_live"
+
+        with (
+            patch("app.main._ensure_deepseek_agent"),
+            patch("app.main._ensure_live_host"),
+            patch("app.main._ensure_live_room_ready"),
+            patch("app.main._start_live_room_now", fake_start_live),
+        ):
+            response = client.post(
+                f"/api/games/{room.game_id}/start",
+                json={"mode": "live", "agentCallMode": "batch"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "running_live")
+        self.assertEqual(response.json()["agentCallMode"], "per_ant")
+        self.assertEqual(room.agent_call_mode, "per_ant")
+
+    def test_agent_call_mode_request_rejects_unknown_value(self):
+        client = TestClient(app)
+
+        start_response = client.post(
+            "/api/games/missing/start",
+            json={"agentCallMode": "one_call_per_hour"},
+        )
+        previous_response = client.post(
+            "/api/games/run-previous",
+            json={"agentCallMode": "one_call_per_hour"},
+        )
+
+        self.assertEqual(start_response.status_code, 422)
+        self.assertEqual(previous_response.status_code, 422)
 
     def test_replay_delay_uses_scaled_match_clock_with_fixed_fallback(self):
         self.assertAlmostEqual(
@@ -4067,13 +4803,17 @@ class DemoRunApiTest(unittest.TestCase):
                 f"/api/games/{created['gameId']}/colonies",
                 json={"name": "A", "size": 50, "style": "cautious", "favoriteContext": "penalties", "infoNeed": "medium"},
             )
-            response = client.post(f"/api/games/{created['gameId']}/rerun", json={"mode": "replay", "source": "historical"})
+            response = client.post(
+                f"/api/games/{created['gameId']}/rerun",
+                json={"mode": "replay", "source": "historical", "agentCallMode": "batch"},
+            )
 
         self.assertEqual(response.status_code, 200)
         game = response.json()
         self.assertNotEqual(game["gameId"], created["gameId"])
         self.assertEqual(game["fixtureId"], 777)
         self.assertEqual(len(game["colonies"]), 1)
+        self.assertEqual(game["agentCallMode"], "batch")
         self.assertIn(game["status"], {"running_replay", "finished"})
 
 
