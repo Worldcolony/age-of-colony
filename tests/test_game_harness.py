@@ -1006,6 +1006,81 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(recalled_history[0]["decisionReason"], "Joined through a live rally.")
         self.assertIsNotNone(recalled_history[0]["strategy"])
 
+    def test_rally_only_adds_active_ants(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Active Rally Nest", 20, "balanced", "penalties", "medium")
+        room.status = "running_live"
+        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
+        safe_option = opportunity.options[0]
+        lead_ant = colony.ants[0]
+        vote = {
+            "activeCount": 1,
+            "predictions": {
+                safe_option.option_id: [{"antId": lead_ant.ant_id, "weight": 1.0}],
+                opportunity.options[1].option_id: [],
+            },
+            "infoRequests": [],
+        }
+        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+        self.assertIsNotNone(prediction)
+        room.predictions[prediction.prediction_id] = prediction
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        for ant in colony.ants[2:]:
+            ant.wounded_until_event = room.event_index + 10
+
+        added = harness.rally(colony.colony_id, opportunity.opportunity_id)
+
+        self.assertEqual(added, 1)
+        self.assertEqual(room.log[-1].data["antIdsAdded"], [colony.ants[1].ant_id])
+
+    def test_rally_after_recall_restores_the_ant_to_open_history(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Return Nest", 20, "balanced", "penalties", "medium")
+        room.status = "running_live"
+        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
+        safe_option, switched_option = opportunity.options
+        initial_ants = colony.ants[:6]
+        vote = {
+            "activeCount": len(initial_ants),
+            "predictions": {
+                safe_option.option_id: [{"antId": ant.ant_id, "weight": 1.0} for ant in initial_ants],
+                opportunity.options[1].option_id: [],
+            },
+            "infoRequests": [],
+        }
+        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+        self.assertIsNotNone(prediction)
+        room.predictions[prediction.prediction_id] = prediction
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        room.add_log(
+            "prediction",
+            "Return Nest opens a position.",
+            {
+                "colonyId": colony.colony_id,
+                "predictionId": prediction.prediction_id,
+                "opportunityId": opportunity.opportunity_id,
+                "antIds": list(prediction.ant_ids),
+                "ants": len(prediction.ant_ids),
+                "option": prediction.option.__dict__,
+                "market": opportunity.public_state(),
+                "foodReserved": prediction.reserved_food,
+            },
+        )
+
+        harness.recall(colony.colony_id, opportunity.opportunity_id)
+        recalled_ant_id = room.log[-1].data["antIdsRemoved"][0]
+        self.assertEqual(ant_bet_history(room, colony.colony_id, recalled_ant_id)[0]["status"], "recalled")
+
+        harness.switch_call(colony.colony_id, opportunity.opportunity_id, switched_option.option_id)
+        harness.rally(colony.colony_id, opportunity.opportunity_id)
+        self.assertIn(recalled_ant_id, room.log[-1].data["antIdsAdded"])
+        returned_history = ant_bet_history(room, colony.colony_id, recalled_ant_id)
+        self.assertEqual(returned_history[0]["status"], "open")
+        self.assertIsNone(returned_history[0]["resolutionReason"])
+        self.assertEqual(returned_history[0]["optionId"], switched_option.option_id)
+        self.assertEqual(returned_history[0]["risk"], switched_option.risk)
+        self.assertEqual(returned_history[0]["foodAtRisk"], 3.0)
+
     def test_switch_reprices_collateral_and_settles_the_new_option(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Pivot Nest", 20, "balanced", "penalties", "medium")
@@ -3027,6 +3102,108 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(allowed.status_code, 200)
         self.assertEqual(allowed.json()["colonies"][0]["style"], "aggressive")
 
+    def test_market_action_endpoints_return_exact_event_and_enforce_owner(self):
+        room = game_manager.create_room(fixture_id=4244, participant1="Portugal", participant2="Brazil", seed=19)
+        harness = game_manager.harness(room.game_id)
+        harness.join_player("Alice", anonymous_id="anon_market_owner")
+        colony = harness.add_colony(
+            "Owner Nest",
+            20,
+            "balanced",
+            "penalties",
+            "medium",
+            anonymous_id="anon_market_owner",
+        )
+        room.status = "running_live"
+        opportunity = build_opportunity(penalty_event(fixtureId=4244), 1, room.match_state)
+        safe_option, risky_option = opportunity.options
+        vote = {
+            "activeCount": 1,
+            "predictions": {
+                safe_option.option_id: [{"antId": colony.ants[0].ant_id, "weight": 1.0}],
+                risky_option.option_id: [],
+            },
+            "infoRequests": [],
+        }
+        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+        self.assertIsNotNone(prediction)
+        room.predictions[prediction.prediction_id] = prediction
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+
+        async def fake_sync(target_room):
+            return {"stored": True, "gameId": target_room.game_id, "eventCount": len(target_room.log)}
+
+        client = TestClient(app)
+        with patch("app.main._sync_room_to_supabase_async", fake_sync):
+            blocked_rally = client.post(
+                f"/api/games/{room.game_id}/rally",
+                json={
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "anonymousId": "anon_intruder",
+                },
+            )
+            rally_response = client.post(
+                f"/api/games/{room.game_id}/rally",
+                json={
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "anonymousId": "anon_market_owner",
+                },
+            )
+            blocked_recall = client.post(
+                f"/api/games/{room.game_id}/recall",
+                json={
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "anonymousId": "anon_intruder",
+                },
+            )
+            recall_response = client.post(
+                f"/api/games/{room.game_id}/recall",
+                json={
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "anonymousId": "anon_market_owner",
+                },
+            )
+            blocked_switch = client.post(
+                f"/api/games/{room.game_id}/switch-call",
+                json={
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "optionId": risky_option.option_id,
+                    "anonymousId": "anon_intruder",
+                },
+            )
+            switch_response = client.post(
+                f"/api/games/{room.game_id}/switch-call",
+                json={
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "optionId": risky_option.option_id,
+                    "anonymousId": "anon_market_owner",
+                },
+            )
+
+        self.assertEqual(blocked_rally.status_code, 403)
+        self.assertEqual(rally_response.status_code, 200)
+        self.assertEqual(rally_response.json()["event"]["kind"], "rally")
+        self.assertGreaterEqual(rally_response.json()["event"]["data"]["ants"], 1)
+        self.assertEqual(rally_response.json()["gameId"], room.game_id)
+        self.assertEqual(rally_response.json()["logCount"], rally_response.json()["event"]["index"] + 1)
+        self.assertEqual(blocked_recall.status_code, 403)
+        self.assertEqual(recall_response.status_code, 200)
+        self.assertEqual(recall_response.json()["event"]["kind"], "recall")
+        self.assertEqual(recall_response.json()["logCount"], recall_response.json()["event"]["index"] + 1)
+        self.assertEqual(blocked_switch.status_code, 403)
+        self.assertEqual(switch_response.status_code, 200)
+        self.assertEqual(switch_response.json()["event"]["kind"], "switch")
+        self.assertEqual(switch_response.json()["event"]["data"]["optionId"], risky_option.option_id)
+        self.assertEqual(switch_response.json()["logCount"], switch_response.json()["event"]["index"] + 1)
+
     def test_live_ant_strategy_api_lists_updates_and_resets_owned_ant(self):
         client = TestClient(app)
         created = client.post(
@@ -4384,6 +4561,8 @@ class DemoRunApiTest(unittest.TestCase):
 
     def test_admin_replay_fixtures_only_returns_matches_with_score_data(self):
         class FakeTxLineClient:
+            calls: list[tuple[str, int]] = []
+
             async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
                 start = int((datetime.now(timezone.utc) - timedelta(hours=3)).timestamp())
                 return [
@@ -4403,17 +4582,32 @@ class DemoRunApiTest(unittest.TestCase):
                         "Participant1": "Japan",
                         "Participant2": "Ghana",
                     },
+                    {
+                        "FixtureId": 703,
+                        "StartTime": start - 120,
+                        "Competition": "World Cup Demo",
+                        "CompetitionId": competition_id or 1,
+                        "Participant1": "Morocco",
+                        "Participant2": "Canada",
+                    },
                 ]
 
             async def score_historical(self, fixture_id):
+                self.calls.append(("historical", fixture_id))
                 if fixture_id == 702:
                     return [{"FixtureId": fixture_id, "Seq": 1, "Action": "goal"}]
+                if fixture_id == 703:
+                    raise TimeoutError("historical source stalled")
                 return []
 
             async def score_updates(self, fixture_id):
+                self.calls.append(("updates", fixture_id))
+                if fixture_id == 703:
+                    return [{"FixtureId": fixture_id, "Seq": 2, "Action": "goal"}]
                 return []
 
             async def score_snapshot(self, fixture_id):
+                self.calls.append(("snapshot", fixture_id))
                 return []
 
         client = TestClient(app)
@@ -4422,10 +4616,58 @@ class DemoRunApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["count"], 2)
         self.assertEqual(data["fixtures"][0]["fixtureId"], 702)
         self.assertEqual(data["fixtures"][0]["eventCount"], 1)
         self.assertEqual(data["fixtures"][0]["source"], "historical")
+        self.assertEqual(data["fixtures"][1]["fixtureId"], 703)
+        self.assertEqual(data["fixtures"][1]["source"], "updates")
+        self.assertNotIn(("updates", 702), FakeTxLineClient.calls)
+        self.assertNotIn(("snapshot", 702), FakeTxLineClient.calls)
+
+    def test_admin_replay_fixtures_falls_back_to_snapshot_and_skips_source_timeouts(self):
+        class FallbackTxLineClient:
+            async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
+                start = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp())
+                return [
+                    {
+                        "FixtureId": 704,
+                        "StartTime": start,
+                        "Participant1": "Spain",
+                        "Participant2": "Belgium",
+                    },
+                    {
+                        "FixtureId": 705,
+                        "StartTime": start - 60,
+                        "Participant1": "Norway",
+                        "Participant2": "England",
+                    },
+                ]
+
+            async def score_historical(self, fixture_id):
+                if fixture_id == 705:
+                    raise TimeoutError("historical timeout")
+                return []
+
+            async def score_updates(self, fixture_id):
+                if fixture_id == 705:
+                    raise TimeoutError("updates timeout")
+                return []
+
+            async def score_snapshot(self, fixture_id):
+                if fixture_id == 705:
+                    raise TimeoutError("snapshot timeout")
+                return [{"FixtureId": fixture_id, "Seq": 3, "Action": "game_finalised"}]
+
+        with patch("app.main.TxLineClient", FallbackTxLineClient):
+            response = TestClient(app).get("/api/admin/replay-fixtures?days=1&limit=5&scan_limit=5")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["fixtures"][0]["fixtureId"], 704)
+        self.assertEqual(data["fixtures"][0]["source"], "snapshot")
+        self.assertEqual(data["inspected"], 2)
 
     def test_txline_timeout_returns_a_clear_gateway_error(self):
         class TimeoutTxLineClient:

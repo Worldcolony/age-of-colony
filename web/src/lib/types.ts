@@ -250,6 +250,10 @@ export interface GameEvent {
   createdAt?: number;
 }
 
+export interface MarketActionResponse extends GameState {
+  event: GameEvent;
+}
+
 export interface CreateColonyBody {
   name: string;
   size: number;

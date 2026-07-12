@@ -596,8 +596,9 @@ async def rally(game_id: str, payload: RallyRequest) -> dict[str, Any]:
         game_manager.harness(game_id).rally(payload.colonyId, payload.opportunityId)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    event = room.log[-1].public_state()
     await _sync_room_to_supabase_async(room)
-    return room.public_state()
+    return {**room.public_state(), "event": event}
 
 
 @app.post("/api/games/{game_id}/recall")
@@ -608,8 +609,9 @@ async def recall(game_id: str, payload: RecallRequest) -> dict[str, Any]:
         game_manager.harness(game_id).recall(payload.colonyId, payload.opportunityId)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    event = room.log[-1].public_state()
     await _sync_room_to_supabase_async(room)
-    return room.public_state()
+    return {**room.public_state(), "event": event}
 
 
 @app.post("/api/games/{game_id}/switch-call")
@@ -620,8 +622,9 @@ async def switch_call(game_id: str, payload: SwitchCallRequest) -> dict[str, Any
         game_manager.harness(game_id).switch_call(payload.colonyId, payload.opportunityId, payload.optionId)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    event = room.log[-1].public_state()
     await _sync_room_to_supabase_async(room)
-    return room.public_state()
+    return {**room.public_state(), "event": event}
 
 
 @app.get("/api/games/{game_id}/colonies/{colony_id}/ants")
@@ -1036,8 +1039,25 @@ async def admin_replay_fixtures(
         if fixture_id is None:
             return False, None
         try:
-            source_records = await _fetch_score_sources(client, int(fixture_id))
-        except (TypeError, ValueError, httpx.HTTPError):
+            source_records: dict[str, list[dict[str, Any]]] = {
+                "historical": [],
+                "updates": [],
+                "snapshot": [],
+            }
+            for source_name, fetcher in (
+                ("historical", client.score_historical),
+                ("updates", client.score_updates),
+                ("snapshot", client.score_snapshot),
+            ):
+                try:
+                    async with asyncio.timeout(3):
+                        records = await fetcher(int(fixture_id))
+                except (httpx.HTTPError, TimeoutError):
+                    continue
+                source_records[source_name] = records if isinstance(records, list) else []
+                if source_records[source_name]:
+                    break
+        except (TypeError, ValueError):
             return True, None
         chosen_source, records = _choose_best_source(source_records)
         if not records:
@@ -1053,12 +1073,15 @@ async def admin_replay_fixtures(
         )
         return True, enriched
 
-    batch_size = 8
+    # A completed fixture normally has historical data, so inspect one source at
+    # a time and fan out across fixtures. This keeps the admin's first load well
+    # below the frontend proxy timeout without changing the final proof check.
+    batch_size = 24
     for start in range(0, len(fixtures), batch_size):
         batch = fixtures[start : start + batch_size]
         results = await asyncio.gather(*(inspect_fixture(fixture) for fixture in batch))
-        for was_inspected, enriched in results:
-            inspected += int(was_inspected)
+        inspected += sum(int(was_inspected) for was_inspected, _ in results)
+        for _was_inspected, enriched in results:
             if enriched is not None:
                 playable.append(enriched)
             if len(playable) >= limit:

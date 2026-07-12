@@ -745,7 +745,11 @@ class GameHarness:
             raise ValueError("Your ants already rallied on this market.")
 
         existing_ant_ids = set(prediction.ant_ids)
-        idle_ants = [ant for ant in colony.alive_ants if ant.ant_id not in existing_ant_ids]
+        idle_ants = [
+            ant
+            for ant in colony.alive_ants
+            if ant.is_active(self.room.event_index) and ant.ant_id not in existing_ant_ids
+        ]
         if not idle_ants:
             raise ValueError("No idle ants left to rally.")
 
@@ -1807,19 +1811,23 @@ def ant_bet_history(room: GameRoom, colony_id: str, ant_id: str) -> list[dict[st
                         else []
                     )
                 current_ant_ids.extend(value for value in added_ant_ids if value not in current_ant_ids)
-                if ant_id in added_ant_ids and joined_event is None:
-                    joined_event = tactic
+                if ant_id in added_ant_ids:
+                    recalled_event = None
+                    recalled_vote_count = None
+                    rallied_option = tactic_data.get("option")
+                    if isinstance(rallied_option, dict):
+                        option = rallied_option
                     added_strategies = (
                         tactic_data.get("antStrategiesAdded")
                         if isinstance(tactic_data.get("antStrategiesAdded"), dict)
                         else {}
                     )
-                    strategy = (
-                        added_strategies.get(ant_id)
-                        if isinstance(added_strategies.get(ant_id), dict)
-                        else None
-                    )
+                    added_strategy = added_strategies.get(ant_id)
+                    if isinstance(added_strategy, dict):
+                        strategy = added_strategy
                     decision = {"reason": "Joined through a live rally."}
+                    if joined_event is None:
+                        joined_event = tactic
             elif tactic.kind == "switch" and ant_id in current_ant_ids:
                 switched_option = tactic_data.get("option")
                 if isinstance(switched_option, dict):
