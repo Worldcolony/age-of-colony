@@ -87,18 +87,35 @@ export default function SetupPage() {
   async function deploy() {
     setBusy(true);
     setMsg("");
+    const anonymousId = getAnonId();
     const payload = {
       name: name.trim() || `Colony ${Date.now().toString().slice(-4)}`,
       size: 20,
       style,
       favoriteContext: ground,
       infoNeed: info,
-      anonymousId: getAnonId(),
+      anonymousId,
     };
     try {
+      const current = game!.colonies.find((colony) => colony.playerAnonymousId === anonymousId);
+      if (current) {
+        setMyColonyId(current.colonyId);
+        router.push(`/room/${game!.roomCode || game!.gameId}`);
+        return;
+      }
+
+      const joined = await api.joinPlayer(game!.gameId, payload.name, anonymousId);
+      const existing = joined.colonies.find((colony) => colony.playerAnonymousId === anonymousId);
+      if (existing) {
+        setGame(joined);
+        setMyColonyId(existing.colonyId);
+        router.push(`/room/${joined.roomCode || joined.gameId}`);
+        return;
+      }
+
       const g = await api.addColony(game!.gameId, payload);
       setGame(g);
-      const mine = g.colonies.find((c) => c.name === payload.name || c.playerAnonymousId === payload.anonymousId);
+      const mine = g.colonies.find((c) => c.playerAnonymousId === anonymousId);
       if (mine) setMyColonyId(mine.colonyId);
       router.push(`/room/${g.roomCode || game!.roomCode || game!.gameId}`);
     } catch (e) {
@@ -134,8 +151,11 @@ export default function SetupPage() {
           <Chips options={GROUNDS} value={ground} onChange={setGround} />
         </Field>
 
-        <Field label="Risk level">
-          <Segmented options={INFO} value={info} onChange={setInfo} />
+        <Field label="Info appetite">
+          <div className="grid gap-2">
+            <Segmented options={INFO} value={info} onChange={setInfo} />
+            <p className="text-xs text-ink-faint">Sets how much evidence ants prefer. Paid intel is not active yet.</p>
+          </div>
         </Field>
       </section>
 

@@ -75,7 +75,7 @@
       fetch('/data/worldcup-games.json').then(function (r) { return r.json(); })
     ]).then(function (res) {
       S.predictions = res[0]; S.simulated = res[1]; S.games = res[2];
-      S.loaded = true; S.loading = false;
+      S.loaded = true; S.loading = false; S.error = null;
     }).catch(function (e) { S.error = String(e); S.loading = false; });
   }
 

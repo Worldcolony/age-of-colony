@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -8,9 +9,9 @@ from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
 from app.main import (
-    ADMIN_TOKEN_HEADER,
     app,
     _finish_live_game,
+    _fetch_score_sources,
     _live_auto_finish_reached,
     _live_timeline_active,
     _live_timeline_finished,
@@ -20,6 +21,7 @@ from app.main import (
     _prime_live_catchup,
     _process_live_events,
     _replay_delay_after_event,
+    _restore_room_from_stored_row,
     _stored_game_can_resume_live,
     _sync_live_match_state_from_timeline,
     game_manager,
@@ -30,6 +32,7 @@ from app.game.harness import (
     GameManager,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
+    ant_bet_history,
     build_info_packet,
     build_opportunity,
     build_opportunities,
@@ -100,6 +103,25 @@ class FakeDeepSeekAntAgent:
 
 
 class GameHarnessTest(unittest.TestCase):
+    def test_score_source_fetch_uses_successful_sources_when_one_fails(self):
+        class PartialClient:
+            async def score_historical(self, fixture_id):
+                request = httpx.Request("GET", f"https://txline.test/historical/{fixture_id}")
+                response = httpx.Response(404, request=request)
+                raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+            async def score_updates(self, fixture_id):
+                return [{"FixtureId": fixture_id, "Seq": 1, "Action": "corner"}]
+
+            async def score_snapshot(self, fixture_id):
+                return []
+
+        sources = asyncio.run(_fetch_score_sources(PartialClient(), 42))
+
+        self.assertEqual(sources["historical"], [])
+        self.assertEqual(sources["updates"][0]["Action"], "corner")
+        self.assertEqual(sources["snapshot"], [])
+
     def make_room(self):
         manager = GameManager()
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
@@ -112,7 +134,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(opportunity.context, "penalties")
         self.assertIsNone(opportunity.deadline_clock)
         self.assertIsNone(opportunity.deadline_event_index)
-        self.assertEqual(opportunity.info_cost, 8)
+        self.assertEqual(opportunity.info_cost, 3)
         labels = {option.label: option.multiplier for option in opportunity.options}
         self.assertEqual(labels["yes, penalty scored"], 1.35)
         self.assertEqual(labels["no, missed or saved"], 5.5)
@@ -526,6 +548,101 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(any(event.kind == "player_joined" for event in room.log))
         self.assertTrue(any(event.kind == "strategy_updated" for event in room.log))
 
+    def test_colony_strategy_can_change_live_but_not_after_finish(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Live Orders", 20, "balanced", "momentum", "medium")
+        room.status = "running_live"
+
+        harness.update_colony_strategy(
+            colony.colony_id,
+            style="aggressive",
+            favorite_context="chaos",
+            info_need="low",
+        )
+
+        self.assertEqual(colony.style, "aggressive")
+        self.assertEqual(colony.favorite_context, "chaos")
+        self.assertEqual(colony.info_need, "low")
+        self.assertEqual(colony.strategy_revision, 1)
+        self.assertEqual(room.log[-1].data["strategyRevision"], 1)
+
+        room.status = "finished"
+        with self.assertRaisesRegex(ValueError, "before or during a match"):
+            harness.update_colony_strategy(colony.colony_id, style="cautious")
+
+        self.assertEqual(colony.style, "aggressive")
+        self.assertEqual(colony.strategy_revision, 1)
+
+    def test_ant_strategy_override_and_inherit_reach_agent_payload(self):
+        agent = FakeDeepSeekAntAgent("yes")
+        manager = GameManager(decision_agent=agent)
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Directed Ants", 20, "balanced", "momentum", "medium")
+        room.status = "running_live"
+        ant = colony.ants[0]
+
+        harness.update_ant_strategy(
+            colony.colony_id,
+            ant.ant_id,
+            style="aggressive",
+            favorite_context="chaos",
+            info_need="low",
+        )
+        harness.process_event(penalty_event())
+
+        first_call = agent.calls[0]
+        first_ant = next(item for item in first_call["ants"] if item["antId"] == ant.ant_id)
+        inherited_ant = next(item for item in first_call["ants"] if item["antId"] == colony.ants[1].ant_id)
+        self.assertEqual(
+            first_ant["strategy"],
+            {
+                "style": "aggressive",
+                "favoriteContext": "chaos",
+                "infoNeed": "low",
+                "inheritsGlobal": False,
+                "source": "custom",
+            },
+        )
+        self.assertEqual(inherited_ant["strategy"]["style"], "balanced")
+        self.assertTrue(inherited_ant["strategy"]["inheritsGlobal"])
+        self.assertEqual(first_call["context"]["colony"]["strategyRevision"], 1)
+
+        harness.update_ant_strategy(colony.colony_id, ant.ant_id, inherit_global=True)
+        harness.process_event(
+            penalty_event(
+                id=2,
+                seq=2,
+                minute=64,
+                participant=2,
+                participantLabel="Belgium",
+                possession=2,
+                possessionLabel="Belgium",
+                description="Penalty - 64' - Belgium - confirmed",
+            )
+        )
+
+        second_call = agent.calls[-1]
+        second_ant = next(item for item in second_call["ants"] if item["antId"] == ant.ant_id)
+        self.assertEqual(second_ant["strategy"]["style"], "balanced")
+        self.assertEqual(second_ant["strategy"]["favoriteContext"], "momentum")
+        self.assertEqual(second_ant["strategy"]["infoNeed"], "medium")
+        self.assertTrue(second_ant["strategy"]["inheritsGlobal"])
+        self.assertEqual(second_call["context"]["colony"]["strategyRevision"], 2)
+        self.assertNotIn(ant.ant_id, colony.public_state(room.event_index)["antStrategies"])
+
+    def test_dead_ant_cannot_receive_new_strategy_orders(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Silent Nest", 20, "balanced", "momentum", "medium")
+        room.status = "running_live"
+        ant = colony.ants[0]
+        ant.alive = False
+
+        with self.assertRaisesRegex(ValueError, "dead ants"):
+            harness.update_ant_strategy(colony.colony_id, ant.ant_id, style="aggressive")
+
+        self.assertEqual(colony.strategy_revision, 0)
+
     def test_restored_event_log_merges_supabase_events_once(self):
         room, _ = self.make_room()
         room.log.clear()
@@ -543,6 +660,64 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual([event.index for event in room.log], [0, 1, 2])
         self.assertEqual(room.log[1].message, "Started")
         self.assertEqual(room.log[2].kind, "live_sync")
+
+    def test_ant_bet_history_survives_restored_event_log(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Archive Nest", 20, "balanced", "momentum", "medium")
+        ant_id = colony.ants[0].ant_id
+        room.log.clear()
+        _merge_restored_events(
+            room,
+            [
+                {
+                    "index": 0,
+                    "kind": "prediction",
+                    "message": "Archive Nest backs France.",
+                    "createdAt": 100,
+                    "data": {
+                        "colonyId": colony.colony_id,
+                        "predictionId": "pred_archive",
+                        "opportunityId": "opp_archive",
+                        "antIds": [ant_id],
+                        "ants": 1,
+                        "foodReserved": 2,
+                        "option": {"option_id": "yes", "label": "France scores", "risk": "risky", "multiplier": 4},
+                        "market": {"opportunityId": "opp_archive", "label": "Next goal", "context": "next_goal_team", "minute": 70},
+                        "strategyRevision": 3,
+                        "antStrategies": {
+                            ant_id: {
+                                "style": "aggressive",
+                                "favoriteContext": "momentum",
+                                "infoNeed": "low",
+                                "inheritsGlobal": False,
+                                "source": "custom",
+                            }
+                        },
+                    },
+                },
+                {
+                    "index": 1,
+                    "kind": "void",
+                    "message": "Prediction voided.",
+                    "createdAt": 110,
+                    "data": {
+                        "colonyId": colony.colony_id,
+                        "predictionId": "pred_archive",
+                        "opportunityId": "opp_archive",
+                        "antIds": [ant_id],
+                        "reason": "full_time",
+                    },
+                },
+            ],
+        )
+
+        history = ant_bet_history(room, colony.colony_id, ant_id)
+
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["status"], "void")
+        self.assertEqual(history[0]["marketLabel"], "Next goal")
+        self.assertEqual(history[0]["strategy"]["style"], "aggressive")
+        self.assertEqual(history[0]["resolvedAt"], 110)
 
     def test_anonymous_owner_and_player_identity_are_public(self):
         manager = GameManager()
@@ -672,6 +847,343 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertEqual(len(colony.alive_ants), 10)
         self.assertEqual(food_drain_for_colony(colony), 1)
+
+    def test_late_join_does_not_pay_retroactive_upkeep(self):
+        manager = GameManager()
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        room.status = "running_live"
+        room.event_index = 600
+        harness = manager.harness(room.game_id)
+
+        colony = harness.add_colony("Late Nest", 20, "balanced", "momentum", "medium")
+
+        self.assertEqual(colony.last_food_event_index, 600)
+        self.assertEqual(colony.food, STARTING_COLONY_FOOD)
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 601,
+                "action": "clock_tick",
+                "minute": 80,
+                "clockSeconds": 4800,
+                "description": "Clock tick",
+            }
+        )
+
+        self.assertEqual(colony.food, STARTING_COLONY_FOOD)
+        self.assertEqual(len(colony.alive_ants), STARTING_COLONY_ANTS)
+        self.assertEqual(colony.last_food_event_index, 600)
+
+    def test_zero_food_colony_cannot_create_prediction(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Empty Nest", 20, "aggressive", "momentum", "low")
+        colony.food = 0
+        opportunity = build_opportunity(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            1,
+            room.match_state,
+        )
+        votes = [{"antId": ant.ant_id, "vote": "yes", "weight": 1.0} for ant in colony.active_ants(1)]
+        vote = {
+            "activeCount": len(votes),
+            "predictions": {
+                opportunity.options[0].option_id: votes,
+                opportunity.options[1].option_id: [],
+            },
+            "infoRequests": [],
+        }
+
+        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+
+        self.assertIsNone(prediction)
+        self.assertEqual(colony.food, 0)
+
+    def test_open_prediction_reserves_food_and_blocks_duplicate_exposure(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Collateral Nest", 20, "aggressive", "chaos", "low")
+        colony.food = 6
+        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
+        risky_option = opportunity.options[1]
+        risky_votes = [{"antId": ant.ant_id, "weight": 1.0} for ant in colony.active_ants(1)]
+        vote = {
+            "activeCount": len(risky_votes),
+            "predictions": {
+                opportunity.options[0].option_id: [],
+                risky_option.option_id: risky_votes,
+            },
+            "infoRequests": [],
+        }
+
+        first = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+        second = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+
+        self.assertIsNotNone(first)
+        self.assertEqual(first.reserved_food, 6)
+        self.assertEqual(colony.food_reserved, 6)
+        self.assertIsNone(second)
+        self.assertEqual(colony.public_state(1)["economy"]["available"], 0)
+
+        room.predictions[first.prediction_id] = first
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        harness._void_prediction(first, opportunity, reason="test")
+        self.assertEqual(colony.food_reserved, 0)
+        self.assertEqual(colony.public_state(1)["economy"]["available"], 6)
+
+    def test_rally_and_recall_reconcile_collateral_and_ant_history(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Tactics Nest", 20, "balanced", "penalties", "medium")
+        room.status = "running_live"
+        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
+        safe_option = opportunity.options[0]
+        lead_ant = colony.ants[0]
+        vote = {
+            "activeCount": 1,
+            "predictions": {
+                safe_option.option_id: [{"antId": lead_ant.ant_id, "weight": 1.0}],
+                opportunity.options[1].option_id: [],
+            },
+            "infoRequests": [],
+        }
+        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+        self.assertIsNotNone(prediction)
+        room.predictions[prediction.prediction_id] = prediction
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        room.add_log(
+            "prediction",
+            "Tactics Nest opens a position.",
+            {
+                "colonyId": colony.colony_id,
+                "predictionId": prediction.prediction_id,
+                "opportunityId": opportunity.opportunity_id,
+                "antIds": list(prediction.ant_ids),
+                "ants": len(prediction.ant_ids),
+                "option": prediction.option.__dict__,
+                "market": opportunity.public_state(),
+                "foodReserved": prediction.reserved_food,
+            },
+        )
+
+        added = harness.rally(colony.colony_id, opportunity.opportunity_id)
+        rally_event = room.log[-1]
+        rallied_ant_id = rally_event.data["antIdsAdded"][0]
+
+        self.assertEqual(added, 5)
+        self.assertEqual(prediction.reserved_food, 6)
+        self.assertEqual(colony.food_reserved, 6)
+        self.assertEqual(colony.food, 17)
+        self.assertEqual(colony.memory.food_net, -3)
+        self.assertLessEqual(colony.food_reserved, colony.food)
+
+        removed = harness.recall(colony.colony_id, opportunity.opportunity_id)
+
+        self.assertEqual(removed, 5)
+        self.assertEqual(room.log[-1].data["antIdsRemoved"], rally_event.data["antIdsAdded"])
+        self.assertEqual(prediction.reserved_food, 1)
+        self.assertEqual(colony.food_reserved, 1)
+        self.assertEqual(colony.public_state(1)["economy"]["available"], 16)
+        recalled_history = ant_bet_history(room, colony.colony_id, rallied_ant_id)
+        self.assertEqual(len(recalled_history), 1)
+        self.assertEqual(recalled_history[0]["status"], "recalled")
+        self.assertEqual(recalled_history[0]["resolutionReason"], "recalled")
+        self.assertEqual(recalled_history[0]["decisionReason"], "Joined through a live rally.")
+        self.assertIsNotNone(recalled_history[0]["strategy"])
+
+    def test_switch_reprices_collateral_and_settles_the_new_option(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Pivot Nest", 20, "balanced", "penalties", "medium")
+        colony.food = 4
+        room.status = "running_live"
+        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
+        safe_option, wild_option = opportunity.options
+        ant = colony.ants[0]
+        vote = {
+            "activeCount": 1,
+            "predictions": {
+                safe_option.option_id: [{"antId": ant.ant_id, "weight": 1.0}],
+                wild_option.option_id: [],
+            },
+            "infoRequests": [],
+        }
+        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
+        self.assertIsNotNone(prediction)
+        room.predictions[prediction.prediction_id] = prediction
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        room.add_log(
+            "prediction",
+            "Pivot Nest opens a position.",
+            {
+                "colonyId": colony.colony_id,
+                "predictionId": prediction.prediction_id,
+                "opportunityId": opportunity.opportunity_id,
+                "antIds": list(prediction.ant_ids),
+                "ants": len(prediction.ant_ids),
+                "option": prediction.option.__dict__,
+                "market": opportunity.public_state(),
+                "foodReserved": prediction.reserved_food,
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "cover the new risk"):
+            harness.switch_call(colony.colony_id, opportunity.opportunity_id, wild_option.option_id)
+        self.assertEqual(colony.food, 4)
+        self.assertEqual(colony.food_reserved, 1)
+
+        colony.food = 5
+        harness.switch_call(colony.colony_id, opportunity.opportunity_id, wild_option.option_id)
+
+        self.assertEqual(prediction.option.option_id, wild_option.option_id)
+        self.assertEqual(prediction.reserved_food, 3)
+        self.assertEqual(colony.food_reserved, 3)
+        self.assertEqual(colony.food, 3)
+        self.assertEqual(colony.memory.food_net, -2)
+        self.assertEqual(room.log[-1].data["foodReservedDelta"], 2)
+        self.assertLessEqual(colony.food_reserved, colony.food)
+
+        harness._apply_settlement(prediction, opportunity, win=False, reason="test")
+        history = ant_bet_history(room, colony.colony_id, ant.ant_id)
+
+        self.assertEqual(colony.food, 0)
+        self.assertEqual(colony.food_reserved, 0)
+        self.assertEqual(colony.memory.food_net, -5)
+        self.assertEqual(history[0]["status"], "lost")
+        self.assertEqual(history[0]["optionId"], wild_option.option_id)
+        self.assertEqual(history[0]["foodAtRisk"], 3.0)
+        self.assertEqual(history[0]["colonyFoodDelta"], -3.0)
+
+    def test_public_economy_matches_upkeep_state(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Economy Nest", 20, "balanced", "momentum", "medium")
+        initial = colony.public_state(room.event_index)["economy"]
+
+        self.assertEqual(
+            initial,
+            {
+                "currency": "food",
+                "balance": STARTING_COLONY_FOOD,
+                "reserved": 0,
+                "available": STARTING_COLONY_FOOD,
+                "net": 0,
+                "upkeepCost": 1,
+                "upkeepEveryEvents": 24,
+                "nextUpkeepInEvents": 24,
+                "lastUpkeepEventIndex": 0,
+                "runwayUpkeeps": STARTING_COLONY_FOOD,
+                "status": "stable",
+            },
+        )
+
+        room.event_index = 23
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 24,
+                "action": "clock_tick",
+                "minute": 12,
+                "clockSeconds": 720,
+                "description": "Clock tick",
+            }
+        )
+        public = colony.public_state(room.event_index)
+
+        self.assertEqual(colony.food, STARTING_COLONY_FOOD - 1)
+        self.assertEqual(colony.memory.food_net, -1)
+        self.assertEqual(public["food"], colony.food)
+        self.assertEqual(public["foodNet"], colony.memory.food_net)
+        self.assertEqual(public["economy"]["balance"], colony.food)
+        self.assertEqual(public["economy"]["net"], colony.memory.food_net)
+        self.assertEqual(public["economy"]["lastUpkeepEventIndex"], 24)
+        self.assertEqual(public["economy"]["nextUpkeepInEvents"], 24)
+        self.assertEqual(public["economy"]["runwayUpkeeps"], colony.food)
+
+    def test_restored_room_keeps_economy_population_and_ant_strategy(self):
+        game_id = "game_restore_economy_test"
+        room_code = "991234"
+        game_manager.rooms.pop(game_id, None)
+        game_manager.room_codes.pop(room_code, None)
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": 42,
+            "participant1": "France",
+            "participant2": "Belgium",
+            "status": "running_live",
+            "mode": "live",
+            "eventIndex": 48,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": "col_restore",
+                    "name": "Restored Nest",
+                    "simulationSeed": 98765,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                    "strategyRevision": 2,
+                    "food": 18,
+                    "foodNet": -2,
+                    "larvae": 3,
+                    "antsAlive": 12,
+                    "wins": 2,
+                    "losses": 1,
+                    "infoPurchases": 1,
+                    "economy": {"net": -2, "lastUpkeepEventIndex": 48},
+                    "antStrategies": {
+                        "ant_0000": {
+                            "style": "aggressive",
+                            "favoriteContext": "chaos",
+                            "infoNeed": "low",
+                        }
+                    },
+                }
+            ],
+        }
+
+        room = _restore_room_from_stored_row(
+            {"game_id": game_id, "seed": 123, "public_state": public_state},
+            events=[],
+        )
+        colony = room.colonies["col_restore"]
+
+        self.assertEqual(room.event_index, 48)
+        self.assertEqual(colony.food, 18)
+        self.assertEqual(colony.seed, 98765)
+        self.assertEqual(colony.memory.food_net, -2)
+        self.assertEqual(colony.last_food_event_index, 48)
+        self.assertEqual(len(colony.alive_ants), 12)
+        self.assertEqual(colony.public_state(room.event_index)["larvae"], 3)
+        self.assertEqual(colony.memory.accuracy, 2 / 3)
+        self.assertEqual(colony.memory.info_purchases, 1)
+        self.assertEqual(colony.strategy_revision, 2)
+        self.assertEqual(colony.ants[0].style_override, "aggressive")
+        self.assertEqual(colony.ants[0].favorite_context_override, "chaos")
+        self.assertEqual(colony.ants[0].info_need_override, "low")
+
+        game_manager.harness(game_id).process_event(
+            {
+                "fixtureId": 42,
+                "seq": 49,
+                "action": "clock_tick",
+                "minute": 25,
+                "clockSeconds": 1500,
+                "description": "Clock tick",
+            }
+        )
+
+        self.assertEqual(colony.food, 18)
+        self.assertEqual(colony.last_food_event_index, 48)
 
     def test_late_pressure_event_can_create_goal_next_ten_market_for_stoppage_time(self):
         room, _ = self.make_room()
@@ -2333,6 +2845,145 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(allowed.status_code, 200)
         self.assertEqual(allowed.json()["colonies"][0]["style"], "aggressive")
 
+    def test_live_ant_strategy_api_lists_updates_and_resets_owned_ant(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={"fixtureId": 4244, "participant1": "Japan", "participant2": "Brazil", "seed": 19},
+        ).json()
+        anonymous_id = "anon_ant_orders_owner"
+        client.post(
+            f"/api/games/{created['gameId']}/players",
+            json={"name": "Ant Coach", "anonymousId": anonymous_id},
+        )
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Ant Coach",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": anonymous_id,
+            },
+        )
+        colony_id = colony_response.json()["colonies"][0]["colonyId"]
+        room = game_manager.get_room(created["gameId"])
+        self.assertIsNotNone(room)
+        room.status = "running_live"
+
+        blocked = client.get(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants",
+            params={"anonymousId": "anon_intruder"},
+        )
+        self.assertEqual(blocked.status_code, 403)
+
+        roster = client.get(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants",
+            params={"anonymousId": anonymous_id},
+        )
+        self.assertEqual(roster.status_code, 200)
+        self.assertEqual(len(roster.json()["ants"]), STARTING_COLONY_ANTS)
+        ant_id = roster.json()["ants"][0]["antId"]
+
+        updated = client.patch(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants/{ant_id}/strategy",
+            json={
+                "style": "aggressive",
+                "favoriteContext": "chaos",
+                "infoNeed": "low",
+                "anonymousId": anonymous_id,
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["ant"]["strategy"]["style"], "aggressive")
+        self.assertFalse(updated.json()["ant"]["strategy"]["inheritsGlobal"])
+
+        reset = client.patch(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants/{ant_id}/strategy",
+            json={"inheritGlobal": True, "anonymousId": anonymous_id},
+        )
+        self.assertEqual(reset.status_code, 200)
+        self.assertEqual(reset.json()["ant"]["strategy"]["style"], "balanced")
+        self.assertTrue(reset.json()["ant"]["strategy"]["inheritsGlobal"])
+
+        detail = client.get(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants/{ant_id}",
+            params={"anonymousId": anonymous_id},
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["summary"]["total"], 0)
+        self.assertEqual(len(detail.json()["strategyHistory"]), 2)
+        self.assertTrue(detail.json()["strategyHistory"][0]["strategy"]["inheritsGlobal"])
+
+    def test_ant_detail_api_returns_durable_bet_ledger_with_strategy_and_reason(self):
+        client = TestClient(app)
+        created = client.post(
+            "/api/games",
+            json={"fixtureId": 4245, "participant1": "France", "participant2": "Belgium", "seed": 20},
+        ).json()
+        anonymous_id = "anon_ant_history_owner"
+        client.post(
+            f"/api/games/{created['gameId']}/players",
+            json={"name": "Ledger Queen", "anonymousId": anonymous_id},
+        )
+        colony_response = client.post(
+            f"/api/games/{created['gameId']}/colonies",
+            json={
+                "name": "Ledger Queen",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "penalties",
+                "infoNeed": "low",
+                "anonymousId": anonymous_id,
+            },
+        )
+        colony_id = colony_response.json()["colonies"][0]["colonyId"]
+        room = game_manager.get_room(created["gameId"])
+        self.assertIsNotNone(room)
+        room.status = "running_live"
+        harness = GameHarness(room, FakeDeepSeekAntAgent(vote="yes"))
+
+        harness.process_event(penalty_event(id=10, seq=10))
+        prediction = next(iter(room.predictions.values()))
+        ant_id = prediction.ant_ids[0]
+        harness.process_event(
+            penalty_event(
+                id=11,
+                seq=11,
+                action="goal",
+                highlights=["goal"],
+                minute=64,
+                clockSeconds=3840,
+                score={"participant1": 1, "participant2": 0},
+            )
+        )
+
+        blocked = client.get(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants/{ant_id}",
+            params={"anonymousId": "anon_intruder"},
+        )
+        self.assertEqual(blocked.status_code, 403)
+
+        detail = client.get(
+            f"/api/games/{created['gameId']}/colonies/{colony_id}/ants/{ant_id}",
+            params={"anonymousId": anonymous_id},
+        )
+        self.assertEqual(detail.status_code, 200)
+        payload = detail.json()
+        self.assertEqual(
+            payload["summary"],
+            {"total": 1, "open": 0, "won": 1, "lost": 0, "void": 0, "recalled": 0},
+        )
+        bet = payload["bets"][0]
+        self.assertEqual(bet["predictionId"], prediction.prediction_id)
+        self.assertEqual(bet["status"], "won")
+        self.assertEqual(bet["context"], "penalties")
+        self.assertEqual(bet["strategy"]["style"], "balanced")
+        self.assertIn("test vote", bet["decisionReason"])
+        self.assertGreater(bet["foodAtRisk"], 0)
+        self.assertGreater(bet["colonyFoodDelta"], 0)
+
     def test_private_room_code_endpoint_supports_join(self):
         client = TestClient(app)
         created = client.post(
@@ -2975,13 +3626,10 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertIn("prediction", kinds)
         self.assertIn("settlement", kinds)
 
-    def test_admin_debug_tools_require_token_when_configured(self):
+    def test_admin_debug_tools_remain_open_when_legacy_token_is_configured(self):
         client = TestClient(app)
 
         with patch.dict("os.environ", {"AOC_ADMIN_TOKEN": "secret"}):
-            blocked_demo = client.post("/api/demo/run", json={"seed": 99})
-            self.assertEqual(blocked_demo.status_code, 403)
-
             created = client.post(
                 "/api/games",
                 json={
@@ -3005,7 +3653,7 @@ class DemoRunApiTest(unittest.TestCase):
             )
             self.assertEqual(public_colony.status_code, 200)
 
-            blocked_unowned_colony = client.post(
+            open_admin_colony = client.post(
                 f"/api/games/{created['gameId']}/colonies",
                 json={
                     "name": "Admin Only Nest",
@@ -3015,40 +3663,16 @@ class DemoRunApiTest(unittest.TestCase):
                     "infoNeed": "medium",
                 },
             )
-            self.assertEqual(blocked_unowned_colony.status_code, 403)
-
-            allowed_unowned_colony = client.post(
-                f"/api/games/{created['gameId']}/colonies",
-                headers={ADMIN_TOKEN_HEADER: "secret"},
-                json={
-                    "name": "Admin Only Nest",
-                    "size": 20,
-                    "style": "balanced",
-                    "favoriteContext": "momentum",
-                    "infoNeed": "medium",
-                },
-            )
-            self.assertEqual(allowed_unowned_colony.status_code, 200)
+            self.assertEqual(open_admin_colony.status_code, 200)
 
             with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")):
-                allowed_demo = client.post(
-                    "/api/demo/run",
-                    headers={ADMIN_TOKEN_HEADER: "secret"},
-                    json={"seed": 99},
-                )
-            self.assertEqual(allowed_demo.status_code, 200)
+                open_demo = client.post("/api/demo/run", json={"seed": 99})
+            self.assertEqual(open_demo.status_code, 200)
 
-            health_before_session = client.get("/health").json()
-            self.assertFalse(health_before_session["adminAuthenticated"])
-            bad_session = client.post("/api/admin/session", json={"token": "wrong"})
-            self.assertEqual(bad_session.status_code, 403)
-            session = client.post("/api/admin/session", json={"token": "secret"})
-            self.assertEqual(session.status_code, 200)
-            self.assertTrue(session.json()["adminAuthenticated"])
-            health_after_session = client.get("/health").json()
-            self.assertTrue(health_after_session["adminAuthenticated"])
-            cookie_admin_games = client.get("/api/admin/games")
-            self.assertEqual(cookie_admin_games.status_code, 200)
+            health = client.get("/health").json()
+            self.assertFalse(health["adminToolsProtected"])
+            self.assertTrue(health["adminAuthenticated"])
+            self.assertEqual(client.get("/api/admin/games").status_code, 200)
 
             admin_room_payload = {
                 "fixtureId": 616161,
@@ -3079,16 +3703,9 @@ class DemoRunApiTest(unittest.TestCase):
                     }
                 ],
             }
-            blocked_admin_room = TestClient(app).post("/api/admin/rooms", json=admin_room_payload)
-            self.assertEqual(blocked_admin_room.status_code, 403)
-
-            allowed_admin_room = client.post(
-                "/api/admin/rooms",
-                headers={ADMIN_TOKEN_HEADER: "secret"},
-                json=admin_room_payload,
-            )
-            self.assertEqual(allowed_admin_room.status_code, 200)
-            admin_room = allowed_admin_room.json()
+            open_admin_room = client.post("/api/admin/rooms", json=admin_room_payload)
+            self.assertEqual(open_admin_room.status_code, 200)
+            admin_room = open_admin_room.json()
             self.assertEqual(admin_room["fixtureId"], 616161)
             self.assertEqual(len(admin_room["colonies"]), 3)
             self.assertEqual([colony["name"] for colony in admin_room["colonies"]], ["Admin Scout", "Admin Guard", "Admin Rush"])

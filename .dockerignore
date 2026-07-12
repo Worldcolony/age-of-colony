@@ -15,6 +15,10 @@ __pycache__
 *.log
 node_modules
 .next
+**/node_modules
+**/.next
 dist
 build
+**/__pycache__
+**/*.pyc
 docs/design

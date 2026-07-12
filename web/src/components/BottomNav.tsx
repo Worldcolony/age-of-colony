@@ -7,7 +7,7 @@ import { useStore } from "@/store/game";
 export function BottomNav() {
   const pathname = usePathname();
   const game = useStore((s) => s.game);
-  if (pathname === "/") return null; // title screen stays clean
+  if (pathname === "/" || pathname === "/admin") return null; // title/admin screens use their own navigation hierarchy
 
   const code = game?.roomCode;
   const id = game?.gameId;

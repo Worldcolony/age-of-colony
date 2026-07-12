@@ -774,6 +774,8 @@ class OpenRouterColonyAgent:
                         "Each item in ants is an autonomous agent with its own personality and memory. "
                         "Your job is not to guess what the colony wants: each ant follows its own objective "
                         "and decides whether to help the colony now or preserve its strength. "
+                        "Each ant also receives strategy orders. Follow those current orders while keeping "
+                        "the ant's personality and memory as its individual point of view. "
                         "Do not return a global decision: return exactly one decision per provided antId. "
                         "The only allowed output for each ant is one vote from game.market.availableVotes. "
                         "Do not invent confidence, score, probability, stake or info requests. "

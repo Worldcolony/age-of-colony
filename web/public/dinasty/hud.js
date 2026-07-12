@@ -16,6 +16,53 @@ DN.hud = (function () {
     }[ch]));
   }
 
+  // Shared inspector helpers live at module scope because the inspector is
+  // rendered outside initBackendControl(). Keeping private copies inside that
+  // initializer made wallet colonies and forecast-bearing ants throw a
+  // ReferenceError as soon as they were selected.
+  function shortPubkey(pubkey) {
+    const value = String(pubkey || '');
+    return value.length <= 12 ? value : value.slice(0, 4) + '…' + value.slice(-4);
+  }
+
+  function currentSelectedGame() {
+    const select = document.getElementById('forecast-game');
+    const key = select && select.value;
+    const games = (DN.databridge && DN.databridge.forecastGames) || [];
+    return games.find((game) =>
+      game && (game.market_key === key || game.match_id === key || game.id === key)
+    ) || {};
+  }
+
+  function inspectorMarketLabels(source) {
+    const supplied = source && source.match;
+    const match = supplied && typeof supplied === 'object' ? supplied : {};
+    const selected = currentSelectedGame();
+    return {
+      home: match.home_team || match.team1 || match.team_a || selected.home_team || 'Team A',
+      draw: 'Draw',
+      away: match.away_team || match.team2 || match.team_b || selected.away_team || 'Team B',
+    };
+  }
+
+  function inspectorMarketSideLabel(side, source) {
+    const labels = inspectorMarketLabels(source);
+    if (side === 'pass') return 'No stake';
+    return labels[side] || String(side || 'unknown');
+  }
+
+  function inspectorQualitativeLean(homeProbability, source) {
+    if (homeProbability == null) return '-';
+    const value = Number(homeProbability);
+    if (!Number.isFinite(value)) return '-';
+    const labels = inspectorMarketLabels(source);
+    if (value >= 0.62) return 'strong ' + labels.home;
+    if (value >= 0.54) return 'soft ' + labels.home;
+    if (value <= 0.38) return 'strong ' + labels.away;
+    if (value <= 0.46) return 'soft ' + labels.away;
+    return 'balanced';
+  }
+
   const ICON = {
     forage: '<svg viewBox="0 0 24 24"><path d="M4 18c4-1 4-6 8-6s4 5 8 4"/><circle cx="4" cy="18" r="1.4"/><circle cx="20" cy="16" r="1.4"/></svg>',
     defend: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg>',
@@ -482,11 +529,6 @@ DN.hud = (function () {
     function currentPubkey() {
       const w = window.DN && DN.wallet;
       return w && w.connected && w.pubkey ? w.pubkey : '';
-    }
-
-    function shortPubkey(pubkey) {
-      const value = String(pubkey || '');
-      return value.length <= 12 ? value : value.slice(0, 4) + '…' + value.slice(-4);
     }
 
     function hashString(value) {
@@ -2466,16 +2508,18 @@ DN.hud = (function () {
     const outcome = a && a.outcome;
     if (!fc && !outcome) return '';
     let html = '';
-	    if (fc) {
-	      const sideRaw = fc.side || 'draw';
-	      const sideLabel = marketSideLabel(sideRaw, { match: selectedGame });
-	      const lean = qualitativeLean(fc.home_probability, { match: selectedGame });
-	      const stake = fc.stake != null ? Math.round(fc.stake) + ' credits' : '—';
-	      html += `<div class="vital-bar" style="margin-top:9px"><div class="vlabel">
-	        <span>Forecast</span>
-	        <span style="font-family:var(--mono)">${sideLabel} · ${lean} · stake ${stake}</span>
-	      </div></div>`;
-	    }
+    if (fc) {
+      const sideRaw = fc.side || 'draw';
+      const selectedGame = currentSelectedGame();
+      const context = { match: selectedGame };
+      const sideLabel = inspectorMarketSideLabel(sideRaw, context);
+      const lean = inspectorQualitativeLean(fc.home_probability, context);
+      const stake = fc.stake != null ? Math.round(fc.stake) + ' credits' : '—';
+      html += `<div class="vital-bar" style="margin-top:9px"><div class="vlabel">
+        <span>Forecast</span>
+        <span style="font-family:var(--mono)">${esc(sideLabel)} · ${esc(lean)} · stake ${esc(stake)}</span>
+      </div></div>`;
+    }
     if (outcome) {
       const tone = outcome === 'correct' ? '#5FB84A' :
                    outcome === 'wrong'   ? '#D96E54' :

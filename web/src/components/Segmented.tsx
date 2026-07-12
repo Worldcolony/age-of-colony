@@ -10,9 +10,9 @@ export function Segmented<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="seg">
+    <div className="seg" role="group">
       {options.map((o) => (
-        <button key={o.value} type="button" data-active={o.value === value} onClick={() => onChange(o.value)}>
+        <button key={o.value} type="button" aria-pressed={o.value === value} data-active={o.value === value} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
@@ -30,9 +30,9 @@ export function Chips<T extends string>({
   onChange: (v: T) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-2" role="group">
       {options.map((o) => (
-        <button key={o} type="button" className="chip" data-active={o === value} onClick={() => onChange(o)}>
+        <button key={o} type="button" className="chip" aria-pressed={o === value} data-active={o === value} onClick={() => onChange(o)}>
           {o}
         </button>
       ))}

@@ -9,10 +9,67 @@ from app.txline import (
     build_timeline,
     filter_upcoming_fixtures,
     normalize_score_record,
+    normalize_fixtures,
 )
 
 
 class TxLineNormalizationTest(unittest.TestCase):
+    def test_zero_clock_and_minute_values_are_preserved(self):
+        from_clock = normalize_score_record({"FixtureId": 42, "Clock": {"Seconds": 0}})
+        from_minute = normalize_score_record(
+            {"FixtureId": 42, "Clock": {"Seconds": 120}, "dataSoccer": {"Minutes": 0}}
+        )
+
+        self.assertEqual(from_clock["clockSeconds"], 0)
+        self.assertEqual(from_clock["minute"], 1)
+        self.assertEqual(from_minute["minute"], 0)
+
+    def test_empty_clock_and_minute_values_use_valid_fallbacks(self):
+        record = normalize_score_record(
+            {
+                "FixtureId": 42,
+                "Clock": {"Seconds": "", "seconds": 120},
+                "dataSoccer": {"Minutes": "", "New": {"Minutes": 12}},
+            }
+        )
+
+        self.assertEqual(record["clockSeconds"], 120)
+        self.assertEqual(record["minute"], 12)
+
+    def test_timeline_sorts_mixed_numeric_sequence_types(self):
+        timeline = build_timeline(
+            [
+                {"FixtureId": 42, "Seq": "2", "Action": "corner"},
+                {"FixtureId": 42, "Seq": 1, "Action": "shot"},
+            ],
+            important_only=False,
+        )
+
+        self.assertEqual([event["seq"] for event in timeline["events"]], [1, "2"])
+
+    def test_timeline_sorts_large_integer_ids_without_precision_loss(self):
+        smaller = 9_007_199_254_740_992
+        larger = smaller + 1
+        timeline = build_timeline(
+            [
+                {"FixtureId": 42, "Ts": 1, "Seq": 1, "Id": larger, "Action": "corner"},
+                {"FixtureId": 42, "Ts": 1, "Seq": 1, "Id": smaller, "Action": "shot"},
+            ],
+            important_only=False,
+        )
+
+        self.assertEqual([event["id"] for event in timeline["events"]], [smaller, larger])
+
+    def test_fixtures_sort_mixed_upstream_number_types(self):
+        fixtures = normalize_fixtures(
+            [
+                {"FixtureId": "10", "StartTime": "2000"},
+                {"FixtureId": 2, "StartTime": 1000},
+            ]
+        )
+
+        self.assertEqual([fixture["fixtureId"] for fixture in fixtures], [2, "10"])
+
     def test_detects_soccer_highlights(self):
         record = {
             "fixtureId": 42,

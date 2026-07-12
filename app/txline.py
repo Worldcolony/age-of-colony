@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, AsyncIterator, Iterable
 
 import httpx
@@ -183,6 +184,19 @@ class TxLineClient:
         data = await self.get_json(f"/api/scores/updates/{epoch_day}/{hour}/{interval}")
         return data if isinstance(data, list) else []
 
+    async def score_stat_validation(
+        self,
+        fixture_id: int,
+        seq: int,
+        stat_keys: Iterable[int] = (1, 2),
+    ) -> dict[str, Any]:
+        keys = ",".join(str(int(key)) for key in stat_keys)
+        data = await self.get_json(
+            "/api/scores/stat-validation",
+            {"fixtureId": fixture_id, "seq": seq, "statKeys": keys},
+        )
+        return data if isinstance(data, dict) else {}
+
     async def stream_score_events(self) -> AsyncIterator[dict[str, Any]]:
         timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
         async with httpx.AsyncClient(base_url=self.settings.base_url, timeout=timeout) as client:
@@ -302,7 +316,13 @@ def normalize_fixtures(raw_fixtures: Iterable[dict[str, Any]], search: str | Non
                 for field in ("competition", "fixtureId", "participant1", "participant2")
             ).casefold()
         ]
-    return sorted(fixtures, key=lambda item: (item.get("startTime") or 0, item.get("fixtureId") or 0))
+    return sorted(
+        fixtures,
+        key=lambda item: (
+            _sortable_value(fixture_start_timestamp(item)),
+            _sortable_value(item.get("fixtureId")),
+        ),
+    )
 
 
 def fixture_start_timestamp(fixture: dict[str, Any]) -> float | None:
@@ -330,7 +350,14 @@ def filter_upcoming_fixtures(
     upcoming: list[dict[str, Any]] = []
     seen: set[Any] = set()
 
-    for fixture in sorted(fixtures, key=lambda item: (fixture_start_timestamp(item) or float("inf"), item.get("fixtureId") or 0)):
+    for fixture in sorted(
+        fixtures,
+        key=lambda item: (
+            fixture_start_timestamp(item) is None,
+            _sortable_value(fixture_start_timestamp(item)),
+            _sortable_value(item.get("fixtureId")),
+        ),
+    ):
         fixture_id = fixture.get("fixtureId")
         key = fixture_id if fixture_id is not None else (fixture.get("participant1"), fixture.get("participant2"), fixture.get("startTime"))
         if key in seen:
@@ -788,12 +815,14 @@ def _participant_label(
 
 
 def _match_minute(payload: dict[str, Any], soccer: dict[str, Any]) -> int | None:
-    minute = pick(soccer, "Minutes", "minutes") or nested_get(soccer, "New", "Minutes")
+    minute = _first_int(
+        soccer.get("Minutes"),
+        soccer.get("minutes"),
+        nested_get(soccer, "New", "Minutes"),
+        nested_get(soccer, "New", "minutes"),
+    )
     if minute is not None:
-        try:
-            return int(minute)
-        except (TypeError, ValueError):
-            return None
+        return minute
 
     seconds = _clock_seconds(payload, soccer)
     if seconds is None:
@@ -802,17 +831,13 @@ def _match_minute(payload: dict[str, Any], soccer: dict[str, Any]) -> int | None
 
 
 def _clock_seconds(payload: dict[str, Any], soccer: dict[str, Any]) -> int | None:
-    seconds = (
-        nested_get(payload, "clock", "seconds")
-        or nested_get(payload, "Clock", "Seconds")
-        or nested_get(payload, "Clock", "seconds")
-        or nested_get(soccer, "New", "Clock", "seconds")
-        or nested_get(soccer, "Previous", "Clock", "seconds")
+    return _first_int(
+        nested_get(payload, "clock", "seconds"),
+        nested_get(payload, "Clock", "Seconds"),
+        nested_get(payload, "Clock", "seconds"),
+        nested_get(soccer, "New", "Clock", "seconds"),
+        nested_get(soccer, "Previous", "Clock", "seconds"),
     )
-    try:
-        return int(seconds) if seconds is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 def _score_goals(score: dict[str, Any], *participant_keys: str) -> Any:
@@ -903,6 +928,18 @@ def _first_not_none(*values: Any) -> Any:
     for value in values:
         if value is not None:
             return value
+    return None
+
+
+def _first_int(*values: Any) -> int | None:
+    """Return the first integer-like value, skipping empty or malformed fallbacks."""
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
     return None
 
 
@@ -1147,8 +1184,25 @@ def _counter_to_dict(counter: Counter[str]) -> dict[str, int]:
     return dict(sorted(counter.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _sortable_value(value: Any) -> tuple[int, Decimal, str]:
+    """Return a stable key for upstream identifiers that may mix numbers and strings."""
+    if value is None or value == "":
+        return (0, Decimal(0), "")
+    try:
+        numeric = Decimal(str(value))
+        if numeric.is_finite():
+            return (0, numeric, "")
+    except (InvalidOperation, TypeError, ValueError):
+        pass
+    return (1, Decimal(0), str(value))
+
+
 def _event_sort_key(item: dict[str, Any]) -> tuple[Any, Any, Any]:
-    return (item.get("ts") or 0, item.get("seq") or 0, item.get("id") or 0)
+    return (
+        _sortable_value(item.get("ts")),
+        _sortable_value(item.get("seq")),
+        _sortable_value(item.get("id")),
+    )
 
 
 def _mark_discarded_action(event: dict[str, Any], previous: dict[str, Any] | None) -> None:

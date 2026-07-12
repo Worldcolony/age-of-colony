@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY web/package*.json ./web/
+COPY web/scripts ./web/scripts
 COPY --from=web-deps /app/web/node_modules ./web/node_modules
 COPY --from=web-build /app/web/.next ./web/.next
 COPY --from=web-build /app/web/public ./web/public

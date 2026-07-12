@@ -4,6 +4,7 @@ import hashlib
 import math
 import random
 import re
+import threading
 import time
 import uuid
 from collections import Counter, deque
@@ -18,6 +19,7 @@ VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
 JOINABLE_STATUSES = {"created", "waiting_kickoff", "running_live"}
+STRATEGY_EDITABLE_STATUSES = {"created", "waiting_kickoff", "running_replay", "running_live"}
 STARTING_COLONY_ANTS = 20
 STARTING_COLONY_FOOD = 20
 STYLE_ALIASES = {
@@ -137,6 +139,9 @@ class AntState:
     wounded_until_event: int = 0
     engaged_prediction_ids: set[str] = field(default_factory=set)
     memory: AntMemory = field(default_factory=AntMemory)
+    style_override: str | None = None
+    favorite_context_override: str | None = None
+    info_need_override: str | None = None
 
     def is_active(self, event_index: int) -> bool:
         return self.alive and self.wounded_until_event <= event_index
@@ -192,10 +197,13 @@ class ColonyState:
     player_anonymous_id: str | None = None
     ants: list[AntState] = field(default_factory=list)
     food: int = 0
+    food_reserved: int = 0
     larvae: int = 0
     larvae_ready_events: list[int] = field(default_factory=list)
     last_food_event_index: int = 0
     memory: ColonyMemory = field(default_factory=ColonyMemory)
+    strategy_revision: int = 0
+    strategy_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     @property
     def alive_ants(self) -> list[AntState]:
@@ -224,13 +232,30 @@ class ColonyState:
             "lossPenalty": round(-mortality_rate * 70, 2),
         }
         score = round(sum(score_breakdown.values()), 2)
+        upkeep_cost = food_drain_for_colony(self)
+        next_upkeep_in_events = max(
+            1,
+            FOOD_DRAIN_INTERVAL_EVENTS - ((event_index - self.last_food_event_index) % FOOD_DRAIN_INTERVAL_EVENTS),
+        )
+        available_food = max(0, self.food - self.food_reserved)
+        runway_upkeeps = available_food // upkeep_cost if upkeep_cost else None
+        if upkeep_cost == 0:
+            food_status = "stable"
+        elif available_food <= upkeep_cost:
+            food_status = "critical"
+        elif available_food <= upkeep_cost * 3:
+            food_status = "watch"
+        else:
+            food_status = "stable"
         state = {
             "colonyId": self.colony_id,
             "name": self.name,
             "size": self.size,
+            "simulationSeed": self.seed,
             "style": self.style,
             "favoriteContext": self.favorite_context,
             "infoNeed": self.info_need,
+            "strategyRevision": self.strategy_revision,
             "antsAlive": alive,
             "antsActive": ant_counts["activeCount"],
             "antsEngaged": ant_counts["engagedCount"],
@@ -245,10 +270,32 @@ class ColonyState:
             "growthRate": round(growth_rate, 3),
             "mortalityRate": round(mortality_rate, 3),
             "foodNet": self.memory.food_net,
+            "economy": {
+                "currency": "food",
+                "balance": self.food,
+                "reserved": self.food_reserved,
+                "available": available_food,
+                "net": self.memory.food_net,
+                "upkeepCost": upkeep_cost,
+                "upkeepEveryEvents": FOOD_DRAIN_INTERVAL_EVENTS,
+                "nextUpkeepInEvents": next_upkeep_in_events,
+                "lastUpkeepEventIndex": self.last_food_event_index,
+                "runwayUpkeeps": runway_upkeeps,
+                "status": food_status,
+            },
             "wins": self.memory.wins,
             "losses": self.memory.losses,
             "infoPurchases": self.memory.info_purchases,
             "archetypes": dict(Counter(ant.archetype for ant in self.ants)),
+            "antStrategies": {
+                ant.ant_id: {
+                    "style": ant.style_override,
+                    "favoriteContext": ant.favorite_context_override,
+                    "infoNeed": ant.info_need_override,
+                }
+                for ant in self.ants
+                if any((ant.style_override, ant.favorite_context_override, ant.info_need_override))
+            },
         }
         if self.player_id:
             state["playerId"] = self.player_id
@@ -297,7 +344,7 @@ class Opportunity:
 
     @property
     def info_cost(self) -> int:
-        return 8 if any(option.risk in {"wild", "chaos"} for option in self.options) else 5
+        return 3 if any(option.risk in {"wild", "chaos"} for option in self.options) else 2
 
     def public_state(self) -> dict[str, Any]:
         return {
@@ -314,6 +361,7 @@ class Opportunity:
                     "label": option.label,
                     "risk": option.risk,
                     "multiplier": option.multiplier,
+                    "lossMultiplier": RESOURCE_LOSS_MULTIPLIER[option.risk],
                 }
                 for option in self.options
             ],
@@ -331,6 +379,7 @@ class Prediction:
     deadline_clock: int | None
     deadline_event_index: int | None
     info_bought: bool = False
+    reserved_food: int = 0
     resolved: bool = False
     rallied: bool = False
     switched: bool = False
@@ -400,6 +449,7 @@ class GameRoom:
     competition: str | None = None
     start_time: Any = None
     start_time_iso: str | None = None
+    txline_validation: dict[str, Any] | None = None
     owner_anonymous_id: str | None = None
     owner_name: str | None = None
     seed: int = 7
@@ -414,12 +464,14 @@ class GameRoom:
     last_opportunity_event_index_by_key: dict[str, int] = field(default_factory=dict)
     log: list[GameLogEvent] = field(default_factory=list)
     agent_usage: dict[str, Any] | None = None
+    log_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.match_state = MatchState(self.fixture_id, self.participant1, self.participant2)
 
     def add_log(self, kind: str, message: str, data: dict[str, Any] | None = None) -> None:
-        self.log.append(GameLogEvent(len(self.log), kind, message, data or {}))
+        with self.log_lock:
+            self.log.append(GameLogEvent(len(self.log), kind, message, data or {}))
 
     def public_state(self) -> dict[str, Any]:
         colonies = [colony.public_state(self.event_index) for colony in self.colonies.values()]
@@ -434,6 +486,7 @@ class GameRoom:
             "competition": self.competition,
             "startTime": self.start_time,
             "startTimeIso": self.start_time_iso,
+            "txlineValidation": self.txline_validation,
             "owner": {
                 "anonymousId": self.owner_anonymous_id,
                 "name": self.owner_name,
@@ -539,6 +592,7 @@ class GameHarness:
             player_id=clean_player_id,
             player_anonymous_id=clean_anonymous_id,
             food=STARTING_COLONY_FOOD,
+            last_food_event_index=self.room.event_index,
         )
         colony.ants = generate_ants(colony)
         self.room.colonies[colony_id] = colony
@@ -603,38 +657,52 @@ class GameHarness:
         favorite_context: str | None = None,
         info_need: str | None = None,
     ) -> ColonyState:
-        # Tactics are a live steering tool: allowed before AND during the
-        # match (they only shape future votes and stakes), locked once it ends.
-        if self.room.status not in {"created", "waiting_kickoff", "running_replay", "running_live"}:
-            raise ValueError("The match is over — tactics no longer apply.")
+        if self.room.status not in STRATEGY_EDITABLE_STATUSES:
+            raise ValueError("strategies can only be changed before or during a match")
         colony = self.room.colonies.get(colony_id)
         if not colony:
             raise ValueError("colony not found")
+        if style is None and favorite_context is None and info_need is None:
+            raise ValueError("provide at least one colony strategy field")
 
+        next_style = colony.style
+        next_favorite_context = colony.favorite_context
+        next_info_need = colony.info_need
         if style is not None:
             style = normalize_style(style)
             if style not in VALID_STYLES:
                 raise ValueError("style must be cautious, balanced or aggressive")
-            colony.style = style
+            next_style = style
         if favorite_context is not None:
             favorite_context = normalize_context(favorite_context)
             if favorite_context not in VALID_CONTEXTS:
                 raise ValueError("favorite_context must be penalties, corners, momentum, chaos or balanced")
-            colony.favorite_context = favorite_context
+            next_favorite_context = favorite_context
         if info_need is not None:
             info_need = normalize_info_need(info_need)
             if info_need not in VALID_INFO_NEEDS:
                 raise ValueError("info_need must be low, medium or high")
-            colony.info_need = info_need
+            next_info_need = info_need
+
+        with colony.strategy_lock:
+            colony.style = next_style
+            colony.favorite_context = next_favorite_context
+            colony.info_need = next_info_need
+            colony.strategy_revision += 1
+            revision = colony.strategy_revision
 
         self.room.add_log(
             "strategy_updated",
-            f"{colony.name} strategy updated: {colony.style}, {colony.favorite_context}, info {colony.info_need}.",
+            (
+                f"{colony.name} strategy updated: {colony.style}, {colony.favorite_context}, "
+                f"info {colony.info_need}. New orders apply from the next decision window."
+            ),
             {
                 "colonyId": colony.colony_id,
                 "style": colony.style,
                 "favoriteContext": colony.favorite_context,
                 "infoNeed": colony.info_need,
+                "strategyRevision": revision,
             },
         )
         return colony
@@ -660,19 +728,29 @@ class GameHarness:
             raise ValueError("Your ants sat this market out — no prediction to rally.")
         if prediction.rallied:
             raise ValueError("Your ants already rallied on this market.")
-        if colony.food < RALLY_COST:
-            raise ValueError("Not enough food to rally (needs 3).")
 
         existing_ant_ids = set(prediction.ant_ids)
         idle_ants = [ant for ant in colony.alive_ants if ant.ant_id not in existing_ant_ids]
         if not idle_ants:
             raise ValueError("No idle ants left to rally.")
 
-        chosen = idle_ants[:RALLY_ANTS]
-        colony.food -= RALLY_COST
-        prediction.ant_ids.extend(ant.ant_id for ant in chosen)
-        prediction.rallied = True
+        loss_per_ant = RESOURCE_LOSS_MULTIPLIER[prediction.option.risk]
+        available_food = max(0, colony.food - colony.food_reserved)
+        collateral_budget = available_food - RALLY_COST
+        max_affordable_ants = int(collateral_budget // loss_per_ant)
+        if max_affordable_ants <= 0:
+            raise ValueError("Not enough available food to rally and cover the added risk.")
+
+        chosen = idle_ants[: min(RALLY_ANTS, max_affordable_ants)]
         added = len(chosen)
+        added_ant_ids = [ant.ant_id for ant in chosen]
+        added_reserved_food = int(round(added * loss_per_ant))
+        colony.food -= RALLY_COST
+        colony.memory.food_net -= RALLY_COST
+        colony.food_reserved += added_reserved_food
+        prediction.reserved_food += added_reserved_food
+        prediction.ant_ids.extend(added_ant_ids)
+        prediction.rallied = True
         self.room.add_log(
             "rally",
             f"{colony.name} rallies — {added} ants join {prediction.option.label} (-3 food).",
@@ -681,7 +759,17 @@ class GameHarness:
                 "opportunityId": opportunity_id,
                 "predictionId": prediction.prediction_id,
                 "ants": added,
+                "antIds": list(prediction.ant_ids),
+                "antIdsAdded": added_ant_ids,
+                "antStrategiesAdded": {
+                    ant.ant_id: dict(ant_strategy_state(ant, colony))
+                    for ant in chosen
+                },
+                "option": prediction.option.__dict__,
                 "cost": RALLY_COST,
+                "foodReservedAdded": added_reserved_food,
+                "foodReserved": prediction.reserved_food,
+                "strategyRevision": colony.strategy_revision,
             },
         )
         return added
@@ -710,7 +798,14 @@ class GameHarness:
         if removable <= 0:
             raise ValueError("Your last ant won't abandon the call.")
 
+        removed_ant_ids = list(prediction.ant_ids[-removable:])
+        released_reserved_food = min(
+            prediction.reserved_food,
+            int(round(removable * RESOURCE_LOSS_MULTIPLIER[prediction.option.risk])),
+        )
         del prediction.ant_ids[-removable:]
+        prediction.reserved_food -= released_reserved_food
+        colony.food_reserved = max(0, colony.food_reserved - released_reserved_food)
         self.room.add_log(
             "recall",
             f"{colony.name} recalls {removable} ants from {prediction.option.label}.",
@@ -719,6 +814,11 @@ class GameHarness:
                 "opportunityId": opportunity_id,
                 "predictionId": prediction.prediction_id,
                 "ants": removable,
+                "antIds": list(prediction.ant_ids),
+                "antIdsRemoved": removed_ant_ids,
+                "option": prediction.option.__dict__,
+                "foodReservedReleased": released_reserved_food,
+                "foodReserved": prediction.reserved_food,
             },
         )
         return removable
@@ -757,7 +857,18 @@ class GameHarness:
         if colony.food < SWITCH_COST:
             raise ValueError("Not enough food to pivot (needs 2).")
 
+        previous_option = prediction.option
+        next_reserved_food = int(round(len(prediction.ant_ids) * RESOURCE_LOSS_MULTIPLIER[new_option.risk]))
+        reserved_food_delta = next_reserved_food - prediction.reserved_food
+        available_food = max(0, colony.food - colony.food_reserved)
+        required_available_food = max(0, SWITCH_COST + reserved_food_delta)
+        if available_food < required_available_food:
+            raise ValueError("Not enough available food to pivot and cover the new risk.")
+
         colony.food -= SWITCH_COST
+        colony.memory.food_net -= SWITCH_COST
+        colony.food_reserved = max(0, colony.food_reserved + reserved_food_delta)
+        prediction.reserved_food = next_reserved_food
         prediction.option = new_option
         prediction.switched = True
         self.room.add_log(
@@ -768,9 +879,80 @@ class GameHarness:
                 "opportunityId": opportunity_id,
                 "predictionId": prediction.prediction_id,
                 "optionId": option_id,
+                "antIds": list(prediction.ant_ids),
+                "option": new_option.__dict__,
+                "previousOption": previous_option.__dict__,
                 "cost": SWITCH_COST,
+                "foodReservedDelta": reserved_food_delta,
+                "foodReserved": prediction.reserved_food,
             },
         )
+
+    def update_ant_strategy(
+        self,
+        colony_id: str,
+        ant_id: str,
+        *,
+        style: str | None = None,
+        favorite_context: str | None = None,
+        info_need: str | None = None,
+        inherit_global: bool = False,
+    ) -> AntState:
+        if self.room.status not in STRATEGY_EDITABLE_STATUSES:
+            raise ValueError("ant strategies can only be changed before or during a match")
+        colony = self.room.colonies.get(colony_id)
+        if not colony:
+            raise ValueError("colony not found")
+        ant = find_ant(colony, ant_id)
+        if not ant:
+            raise ValueError("ant not found")
+        if not ant.alive:
+            raise ValueError("dead ants cannot receive new orders")
+
+        if not inherit_global and style is None and favorite_context is None and info_need is None:
+            raise ValueError("provide an ant strategy or set inheritGlobal to true")
+        if style is not None:
+            style = normalize_style(style)
+            if style not in VALID_STYLES:
+                raise ValueError("style must be cautious, balanced or aggressive")
+        if favorite_context is not None:
+            favorite_context = normalize_context(favorite_context)
+            if favorite_context not in VALID_CONTEXTS:
+                raise ValueError("favorite_context must be penalties, corners, momentum, chaos or balanced")
+        if info_need is not None:
+            info_need = normalize_info_need(info_need)
+            if info_need not in VALID_INFO_NEEDS:
+                raise ValueError("info_need must be low, medium or high")
+
+        with colony.strategy_lock:
+            if inherit_global:
+                ant.style_override = None
+                ant.favorite_context_override = None
+                ant.info_need_override = None
+            else:
+                if style is not None:
+                    ant.style_override = style
+                if favorite_context is not None:
+                    ant.favorite_context_override = favorite_context
+                if info_need is not None:
+                    ant.info_need_override = info_need
+            colony.strategy_revision += 1
+            revision = colony.strategy_revision
+            strategy = ant_strategy_state(ant, colony)
+        self.room.add_log(
+            "ant_strategy_updated",
+            (
+                f"{colony.name} updates {ant.ant_id}: {strategy['style']}, "
+                f"{strategy['favoriteContext']}, info {strategy['infoNeed']}."
+            ),
+            {
+                "colonyId": colony.colony_id,
+                "antId": ant.ant_id,
+                "strategy": strategy,
+                "strategyRevision": revision,
+            },
+        )
+        return ant
 
     def process_events(self, events: Iterable[dict[str, Any]]) -> None:
         self.room.status = "running_replay"
@@ -811,17 +993,35 @@ class GameHarness:
             self._apply_colony_upkeep(colony)
 
         opportunities = build_opportunities(event, self.room.event_index, self.room.match_state)
-        for opportunity in opportunities:
+        for opportunity_index, opportunity in enumerate(opportunities):
             if not self._claim_opportunity_slot(opportunity):
                 continue
             self.room.opportunities[opportunity.opportunity_id] = opportunity
             self.room.add_log("opportunity", opportunity.label, {"opportunity": opportunity.public_state()})
+            strategy_snapshots = {
+                colony.colony_id: colony_strategy_snapshot(colony)
+                for colony in self.room.colonies.values()
+            }
+            remaining_windows = max(1, len(opportunities) - opportunity_index)
             for colony in self.room.colonies.values():
-                self._decide_for_colony(colony, opportunity)
+                available_food = max(0, colony.food - colony.food_reserved)
+                self._decide_for_colony(
+                    colony,
+                    opportunity,
+                    strategy_snapshot=strategy_snapshots[colony.colony_id],
+                    food_budget=available_food // remaining_windows,
+                )
 
         self._clear_old_opportunities()
 
-    def _decide_for_colony(self, colony: ColonyState, opportunity: Opportunity) -> None:
+    def _decide_for_colony(
+        self,
+        colony: ColonyState,
+        opportunity: Opportunity,
+        *,
+        strategy_snapshot: dict[str, Any] | None = None,
+        food_budget: int | None = None,
+    ) -> None:
         if not colony.alive_ants:
             return
         if not colony.active_ants(self.room.event_index):
@@ -832,7 +1032,8 @@ class GameHarness:
             )
             return
 
-        first_vote = self._run_vote(colony, opportunity)
+        strategy_snapshot = strategy_snapshot or colony_strategy_snapshot(colony)
+        first_vote = self._run_vote(colony, opportunity, strategy_snapshot=strategy_snapshot)
         self.room.add_log("vote", describe_vote(colony, first_vote), {"colonyId": colony.colony_id, "vote": public_vote(first_vote)})
 
         info_packet = None
@@ -850,6 +1051,7 @@ class GameHarness:
         if should_buy_info(colony, opportunity, first_vote, agent_decision=pre_agent_decision):
             info_packet = build_info_packet(opportunity, colony, self.room.match_state)
             colony.food = max(0, colony.food - info_packet.cost)
+            colony.memory.food_net -= info_packet.cost
             colony.memory.info_purchases += 1
             opportunity.info_bought_by.add(colony.colony_id)
             bought_info = True
@@ -863,7 +1065,12 @@ class GameHarness:
                 f"Info received: {info_packet.summary}",
                 {"colonyId": colony.colony_id, "opportunityId": opportunity.opportunity_id},
             )
-            final_vote = self._run_vote(colony, opportunity, info_packet=info_packet)
+            final_vote = self._run_vote(
+                colony,
+                opportunity,
+                info_packet=info_packet,
+                strategy_snapshot=strategy_snapshot,
+            )
             self.room.add_log("vote", describe_vote(colony, final_vote, after_info=True), {"colonyId": colony.colony_id, "vote": public_vote(final_vote)})
             final_agent_decision = None
             if final_vote.get("source") != "deepseek_ant_agents":
@@ -885,26 +1092,63 @@ class GameHarness:
             self.room.event_index,
             bought_info=bought_info,
             agent_decision=final_agent_decision,
+            strategy_style=str(strategy_snapshot["style"]),
+            food_budget=food_budget,
         )
         if not prediction:
+            preferred_option, _ = top_voted_option(opportunity, final_vote)
+            required_food = RESOURCE_LOSS_MULTIPLIER[preferred_option.risk] if preferred_option else 1
+            available_food = max(0, colony.food - colony.food_reserved)
+            insufficient_food = available_food < required_food
             self.room.add_log(
                 "observe",
-                f"{colony.name} watches this window without committing ants.",
-                {"colonyId": colony.colony_id, "opportunityId": opportunity.opportunity_id},
+                (
+                    f"{colony.name} cannot back this market: not enough food for one vote."
+                    if insufficient_food
+                    else f"{colony.name} watches this window without backing a market."
+                ),
+                {
+                    "colonyId": colony.colony_id,
+                    "opportunityId": opportunity.opportunity_id,
+                    "reason": "insufficient_food" if insufficient_food else "no_commitment",
+                    "food": colony.food,
+                    "foodAvailable": available_food,
+                    "requiredFood": required_food,
+                },
             )
             return
 
         self.room.predictions[prediction.prediction_id] = prediction
+        chosen_decisions = {
+            str(item.get("antId")): {
+                "vote": item.get("vote"),
+                "weight": round(float(item.get("weight") or 0), 3),
+                "reason": str(item.get("reason") or "")[:180],
+            }
+            for item in final_vote.get("predictions", {}).get(prediction.option.option_id, [])
+            if str(item.get("antId") or "") in prediction.ant_ids
+        }
+        ant_strategies = {
+            ant_id: dict(strategy_snapshot.get("ants", {}).get(ant_id) or {})
+            for ant_id in prediction.ant_ids
+        }
         self.room.add_log(
             "prediction",
-            f"{colony.name} stakes {len(prediction.ant_ids)} ants on {prediction.option.label}.",
+            f"{colony.name} backs {prediction.option.label} with {len(prediction.ant_ids)} ant votes.",
             {
                 "colonyId": colony.colony_id,
                 "opportunityId": opportunity.opportunity_id,
                 "predictionId": prediction.prediction_id,
                 "option": prediction.option.__dict__,
                 "ants": len(prediction.ant_ids),
+                "antIds": list(prediction.ant_ids),
+                "antDecisions": chosen_decisions,
+                "antStrategies": ant_strategies,
+                "market": opportunity.public_state(),
+                "foodReserved": prediction.reserved_food,
+                "foodBudget": food_budget,
                 "infoBought": bought_info,
+                "strategyRevision": strategy_snapshot["revision"],
             },
         )
 
@@ -914,6 +1158,7 @@ class GameHarness:
         opportunity: Opportunity,
         *,
         info_packet: InfoPacket | None = None,
+        strategy_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         decide_ants = getattr(self.decision_agent, "decide_ants", None)
         if not callable(decide_ants):
@@ -935,7 +1180,12 @@ class GameHarness:
                 "stage": "post_info" if info_packet else "pre_info",
             },
         )
-        agent_vote = self._ant_agent_vote(colony, opportunity, info_packet=info_packet)
+        agent_vote = self._ant_agent_vote(
+            colony,
+            opportunity,
+            info_packet=info_packet,
+            strategy_snapshot=strategy_snapshot,
+        )
         if agent_vote:
             self.room.add_log(
                 "ant_agent_vote",
@@ -952,6 +1202,7 @@ class GameHarness:
         opportunity: Opportunity,
         *,
         info_packet: InfoPacket | None = None,
+        strategy_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         decide_ants = getattr(self.decision_agent, "decide_ants", None)
         if not callable(decide_ants):
@@ -963,6 +1214,7 @@ class GameHarness:
 
         ant_counts = colony_ant_counts(colony, self.room.event_index)
         stage = "post_info" if info_packet else "pre_info"
+        orders = strategy_snapshot or colony_strategy_snapshot(colony)
         context = {
             "match": {
                 "fixtureId": self.room.fixture_id,
@@ -974,10 +1226,13 @@ class GameHarness:
             },
             "colony": {
                 "name": colony.name,
-                "style": colony.style,
-                "favoriteContext": colony.favorite_context,
-                "infoNeed": colony.info_need,
+                "style": orders["style"],
+                "favoriteContext": orders["favoriteContext"],
+                "infoNeed": orders["infoNeed"],
+                "strategyRevision": orders["revision"],
                 "food": colony.food,
+                "foodReserved": colony.food_reserved,
+                "foodAvailable": max(0, colony.food - colony.food_reserved),
                 "antsAlive": ant_counts["aliveCount"],
                 "antsActive": ant_counts["activeCount"],
                 "antsEngaged": ant_counts["engagedCount"],
@@ -997,7 +1252,11 @@ class GameHarness:
             "market": agent_market_context(opportunity),
             "infoPacket": info_packet.__dict__ if info_packet else None,
         }
-        ants = [ant_agent_context(ant, opportunity) for ant in active_ants]
+        ant_orders = orders.get("ants") or {}
+        ants = [
+            ant_agent_context(ant, opportunity, colony, strategy=ant_orders.get(ant.ant_id))
+            for ant in active_ants
+        ]
         decisions = decide_ants(game_id=self.room.game_id, stage=stage, context=context, ants=ants)
         self._sync_agent_usage()
         vote = vote_from_ant_agent_decisions(colony, opportunity, self.room.event_index, decisions or [], info_packet=info_packet)
@@ -1028,13 +1287,14 @@ class GameHarness:
             return
         colony.last_food_event_index += ticks * FOOD_DRAIN_INTERVAL_EVENTS
         drain = food_drain_for_colony(colony) * ticks
-        colony.food -= drain
-        colony.memory.food_net -= drain
-        if colony.food >= 0:
+        available_food = max(0, colony.food - colony.food_reserved)
+        paid = min(available_food, drain)
+        colony.food -= paid
+        colony.memory.food_net -= paid
+        deficit = drain - paid
+        if deficit <= 0:
             return
 
-        deficit = abs(colony.food)
-        colony.food = 0
         deaths = min(deficit, len(colony.alive_ants))
         for ant in colony.alive_ants[:deaths]:
             ant.alive = False
@@ -1050,10 +1310,11 @@ class GameHarness:
         if not colony.larvae_ready_events:
             return
         ready = [event_index for event_index in colony.larvae_ready_events if event_index <= self.room.event_index]
-        if not ready or colony.food <= 0:
+        available_food = max(0, colony.food - colony.food_reserved)
+        if not ready or available_food <= 0:
             return
 
-        hatch_count = min(len(ready), colony.food)
+        hatch_count = min(len(ready), available_food)
         remaining_ready = hatch_count
         next_queue: list[int] = []
         for ready_event_index in colony.larvae_ready_events:
@@ -1207,6 +1468,7 @@ class GameHarness:
             return
 
         prediction.resolved = True
+        colony.food_reserved = max(0, colony.food_reserved - prediction.reserved_food)
         colony.memory.attempts += 1
         colony.memory.context_attempts[opportunity.context] = colony.memory.context_attempts.get(opportunity.context, 0) + 1
         for ant_id in prediction.ant_ids:
@@ -1229,10 +1491,10 @@ class GameHarness:
                     ant.memory.recent_losses = 0
                     if prediction.info_bought:
                         ant.memory.info_successes += 1
-            message = f"Result {colony.name}: +{food_gain} resources on {prediction.option.label}."
+            message = f"Result {colony.name}: +{food_gain} food on {prediction.option.label}."
             data = {"win": True, "food": food_gain, "resourceDelta": food_gain, "reason": reason}
         else:
-            food_loss = max(1, int(round(stake * RESOURCE_LOSS_MULTIPLIER[prediction.option.risk])))
+            food_loss = prediction.reserved_food or max(1, int(round(stake * RESOURCE_LOSS_MULTIPLIER[prediction.option.risk])))
             actual_loss = min(colony.food, food_loss)
             colony.food -= actual_loss
             colony.memory.food_net -= actual_loss
@@ -1243,7 +1505,7 @@ class GameHarness:
                 ant.memory.losses_by_context[opportunity.context] = ant.memory.losses_by_context.get(opportunity.context, 0) + 1
                 ant.memory.recent_losses += 1
             colony.memory.losses += 1
-            message = f"Result {colony.name}: -{actual_loss} resources on {prediction.option.label}."
+            message = f"Result {colony.name}: -{actual_loss} food on {prediction.option.label}."
             data = {"win": False, "food": -actual_loss, "resourceDelta": -actual_loss, "resourceLoss": actual_loss, "reason": reason}
 
         self.room.add_log(
@@ -1254,6 +1516,9 @@ class GameHarness:
                 "predictionId": prediction.prediction_id,
                 "opportunityId": opportunity.opportunity_id,
                 "option": prediction.option.__dict__,
+                "ants": len(prediction.ant_ids),
+                "antIds": list(prediction.ant_ids),
+                "foodReserved": prediction.reserved_food,
                 "resolvedOutcome": outcome,
                 **data,
             },
@@ -1292,6 +1557,7 @@ class GameHarness:
         if not colony:
             return
         prediction.resolved = True
+        colony.food_reserved = max(0, colony.food_reserved - prediction.reserved_food)
         self.room.add_log(
             "void",
             f"{colony.name}: prediction voided on {prediction.option.label}.",
@@ -1302,6 +1568,8 @@ class GameHarness:
                 "option": prediction.option.__dict__,
                 "reason": reason,
                 "ants": len(prediction.ant_ids),
+                "antIds": list(prediction.ant_ids),
+                "foodReserved": prediction.reserved_food,
             },
         )
 
@@ -1337,6 +1605,7 @@ class GameManager:
         competition: str | None = None,
         start_time: Any = None,
         start_time_iso: str | None = None,
+        txline_validation: dict[str, Any] | None = None,
     ) -> GameRoom:
         game_id = f"game_{uuid.uuid4().hex[:10]}"
         clean_room_code = self._reserve_room_code(room_code)
@@ -1349,6 +1618,7 @@ class GameManager:
             competition=(competition or "").strip()[:120] or None,
             start_time=start_time,
             start_time_iso=(start_time_iso or "").strip()[:80] or None,
+            txline_validation=dict(txline_validation) if txline_validation else None,
             owner_anonymous_id=(owner_anonymous_id or "").strip()[:80] or None,
             owner_name=(owner_name or "").strip()[:32] or None,
             seed=seed if seed is not None else stable_seed(game_id, fixture_id) % 1_000_000,
@@ -1409,6 +1679,274 @@ def normalize_room_code(value: str | int | None) -> str:
 def generate_ants(colony: ColonyState) -> list[AntState]:
     rng = random.Random(colony.seed)
     return [spawn_ant(colony, index, rng) for index in range(colony.size)]
+
+
+def ant_strategy_state(ant: AntState, colony: ColonyState) -> dict[str, Any]:
+    inherits_global = not any(
+        (ant.style_override, ant.favorite_context_override, ant.info_need_override)
+    )
+    return {
+        "style": ant.style_override or colony.style,
+        "favoriteContext": ant.favorite_context_override or colony.favorite_context,
+        "infoNeed": ant.info_need_override or colony.info_need,
+        "inheritsGlobal": inherits_global,
+        "source": "colony" if inherits_global else "custom",
+    }
+
+
+def colony_strategy_snapshot(colony: ColonyState) -> dict[str, Any]:
+    with colony.strategy_lock:
+        return {
+            "revision": colony.strategy_revision,
+            "style": colony.style,
+            "favoriteContext": colony.favorite_context,
+            "infoNeed": colony.info_need,
+            "ants": {
+                ant.ant_id: dict(ant_strategy_state(ant, colony))
+                for ant in colony.ants
+            },
+        }
+
+
+def ant_public_state(ant: AntState, colony: ColonyState, event_index: int) -> dict[str, Any]:
+    attempts = sum(ant.memory.attempts_by_context.values())
+    wins = sum(ant.memory.wins_by_context.values())
+    losses = sum(ant.memory.losses_by_context.values())
+    if not ant.alive:
+        status = "dead"
+    elif ant.wounded_until_event > event_index:
+        status = "wounded"
+    else:
+        status = "active"
+    return {
+        "antId": ant.ant_id,
+        "archetype": ant.archetype,
+        "status": status,
+        "alive": ant.alive,
+        "active": ant.is_active(event_index),
+        "naturalFocus": ant.favorite_context,
+        "influence": round(ant.influence, 3),
+        "strategy": ant_strategy_state(ant, colony),
+        "performance": {
+            "attempts": attempts,
+            "wins": wins,
+            "losses": losses,
+            "successRate": round(wins / attempts, 3) if attempts else None,
+            "recentLosses": ant.memory.recent_losses,
+        },
+    }
+
+
+def ant_bet_history(room: GameRoom, colony_id: str, ant_id: str) -> list[dict[str, Any]]:
+    """Build one ant's durable betting ledger from persisted game log events."""
+    opportunities: dict[str, dict[str, Any]] = {}
+    resolutions: dict[str, GameLogEvent] = {}
+    predictions: list[GameLogEvent] = []
+    tactics: dict[str, list[GameLogEvent]] = {}
+
+    for event in sorted(room.log, key=lambda item: item.index):
+        data = event.data if isinstance(event.data, dict) else {}
+        if event.kind == "opportunity":
+            opportunity = data.get("opportunity")
+            if isinstance(opportunity, dict) and opportunity.get("opportunityId"):
+                opportunities[str(opportunity["opportunityId"])] = opportunity
+        elif event.kind == "prediction":
+            predictions.append(event)
+        elif event.kind in {"rally", "recall", "switch"} and data.get("predictionId"):
+            tactics.setdefault(str(data["predictionId"]), []).append(event)
+        elif event.kind in {"settlement", "void"} and data.get("predictionId"):
+            resolutions[str(data["predictionId"])] = event
+
+    history: list[dict[str, Any]] = []
+    for event in predictions:
+        data = event.data if isinstance(event.data, dict) else {}
+        if str(data.get("colonyId") or "") != colony_id:
+            continue
+
+        prediction_id = str(data.get("predictionId") or "")
+        opportunity_id = str(data.get("opportunityId") or "")
+        option = data.get("option") if isinstance(data.get("option"), dict) else {}
+        market = data.get("market") if isinstance(data.get("market"), dict) else opportunities.get(opportunity_id, {})
+        initial_ant_ids = [str(value) for value in data.get("antIds", [])] if isinstance(data.get("antIds"), list) else []
+        current_ant_ids = list(initial_ant_ids)
+        joined_event = event if ant_id in current_ant_ids else None
+        recalled_event: GameLogEvent | None = None
+        recalled_vote_count: int | None = None
+        ant_decisions = data.get("antDecisions") if isinstance(data.get("antDecisions"), dict) else {}
+        ant_strategies = data.get("antStrategies") if isinstance(data.get("antStrategies"), dict) else {}
+        decision = ant_decisions.get(ant_id) if isinstance(ant_decisions.get(ant_id), dict) else {}
+        strategy = ant_strategies.get(ant_id) if isinstance(ant_strategies.get(ant_id), dict) else None
+
+        for tactic in tactics.get(prediction_id, []):
+            tactic_data = tactic.data if isinstance(tactic.data, dict) else {}
+            if tactic.kind == "rally":
+                explicit_added = tactic_data.get("antIdsAdded")
+                if isinstance(explicit_added, list):
+                    added_ant_ids = [str(value) for value in explicit_added]
+                else:
+                    logged_ant_ids = tactic_data.get("antIds")
+                    added_ant_ids = (
+                        [str(value) for value in logged_ant_ids if str(value) not in current_ant_ids]
+                        if isinstance(logged_ant_ids, list)
+                        else []
+                    )
+                current_ant_ids.extend(value for value in added_ant_ids if value not in current_ant_ids)
+                if ant_id in added_ant_ids and joined_event is None:
+                    joined_event = tactic
+                    added_strategies = (
+                        tactic_data.get("antStrategiesAdded")
+                        if isinstance(tactic_data.get("antStrategiesAdded"), dict)
+                        else {}
+                    )
+                    strategy = (
+                        added_strategies.get(ant_id)
+                        if isinstance(added_strategies.get(ant_id), dict)
+                        else None
+                    )
+                    decision = {"reason": "Joined through a live rally."}
+            elif tactic.kind == "switch" and ant_id in current_ant_ids:
+                switched_option = tactic_data.get("option")
+                if isinstance(switched_option, dict):
+                    option = switched_option
+                else:
+                    switched_option_id = str(tactic_data.get("optionId") or "")
+                    market_options = market.get("options") if isinstance(market.get("options"), list) else []
+                    option = next(
+                        (
+                            candidate
+                            for candidate in market_options
+                            if isinstance(candidate, dict)
+                            and str(candidate.get("optionId") or candidate.get("option_id") or "") == switched_option_id
+                        ),
+                        option,
+                    )
+            elif tactic.kind == "recall":
+                explicit_removed = tactic_data.get("antIdsRemoved")
+                if isinstance(explicit_removed, list):
+                    removed_ant_ids = [str(value) for value in explicit_removed]
+                else:
+                    remaining_ant_ids = tactic_data.get("antIds")
+                    removed_ant_ids = (
+                        [value for value in current_ant_ids if value not in {str(item) for item in remaining_ant_ids}]
+                        if isinstance(remaining_ant_ids, list)
+                        else []
+                    )
+                if ant_id in removed_ant_ids and ant_id in current_ant_ids:
+                    recalled_event = tactic
+                    recalled_vote_count = len(current_ant_ids)
+                current_ant_ids = [value for value in current_ant_ids if value not in set(removed_ant_ids)]
+
+        if joined_event is None:
+            continue
+
+        resolution = None if recalled_event else resolutions.get(prediction_id)
+        resolution_data = resolution.data if resolution and isinstance(resolution.data, dict) else {}
+        if recalled_event:
+            status = "recalled"
+        elif resolution and resolution.kind == "settlement":
+            status = "won" if bool(resolution_data.get("win")) else "lost"
+        elif resolution and resolution.kind == "void":
+            status = "void"
+        else:
+            status = "open"
+
+        if resolution:
+            resolved_option = resolution_data.get("option")
+            if isinstance(resolved_option, dict):
+                option = resolved_option
+        if recalled_event:
+            vote_count = max(1, recalled_vote_count or 1)
+        elif resolution:
+            vote_count = max(1, _safe_history_int(resolution_data.get("ants"), len(current_ant_ids)))
+        else:
+            vote_count = max(1, len(current_ant_ids))
+
+        option_risk = str(option.get("risk") or "")
+        if option_risk in RESOURCE_LOSS_MULTIPLIER:
+            food_at_risk = float(RESOURCE_LOSS_MULTIPLIER[option_risk])
+        else:
+            food_reserved = _safe_history_float(data.get("foodReserved"))
+            initial_vote_count = max(1, _safe_history_int(data.get("ants"), len(initial_ant_ids)))
+            food_at_risk = round(food_reserved / initial_vote_count, 2) if food_reserved is not None else None
+        resource_delta = (
+            _safe_history_float(resolution_data.get("resourceDelta"))
+            if resolution and resolution.kind == "settlement"
+            else None
+        )
+        resolved_event = recalled_event or resolution
+        resolved_data = (
+            recalled_event.data
+            if recalled_event and isinstance(recalled_event.data, dict)
+            else resolution_data
+        )
+
+        history.append(
+            {
+                "predictionId": prediction_id,
+                "opportunityId": opportunity_id,
+                "status": status,
+                "marketLabel": market.get("label") or "Market",
+                "context": market.get("context"),
+                "minute": market.get("minute"),
+                "optionId": option.get("option_id") or option.get("optionId"),
+                "optionLabel": option.get("label") or "Prediction",
+                "risk": option.get("risk"),
+                "multiplier": option.get("multiplier"),
+                "foodAtRisk": food_at_risk,
+                "colonyFoodDelta": resource_delta,
+                "antShareDelta": round(resource_delta / vote_count, 2) if resource_delta is not None else None,
+                "voteCount": vote_count,
+                "infoBought": bool(data.get("infoBought")),
+                "strategyRevision": (
+                    joined_event.data.get("strategyRevision", data.get("strategyRevision"))
+                    if isinstance(joined_event.data, dict)
+                    else data.get("strategyRevision")
+                ),
+                "strategy": strategy,
+                "decisionReason": decision.get("reason"),
+                "createdEventIndex": joined_event.index,
+                "createdAt": joined_event.created_at,
+                "resolvedEventIndex": resolved_event.index if resolved_event else None,
+                "resolvedAt": resolved_event.created_at if resolved_event else None,
+                "resolutionReason": "recalled" if recalled_event else resolved_data.get("reason"),
+                "resolvedOutcome": resolved_data.get("resolvedOutcome") if resolution else None,
+            }
+        )
+
+    return sorted(history, key=lambda item: item["createdEventIndex"], reverse=True)
+
+
+def ant_strategy_history(room: GameRoom, colony_id: str, ant_id: str) -> list[dict[str, Any]]:
+    history: list[dict[str, Any]] = []
+    for event in room.log:
+        if event.kind != "ant_strategy_updated" or not isinstance(event.data, dict):
+            continue
+        if str(event.data.get("colonyId") or "") != colony_id or str(event.data.get("antId") or "") != ant_id:
+            continue
+        strategy = event.data.get("strategy") if isinstance(event.data.get("strategy"), dict) else {}
+        history.append(
+            {
+                "eventIndex": event.index,
+                "changedAt": event.created_at,
+                "strategyRevision": event.data.get("strategyRevision"),
+                "strategy": strategy,
+            }
+        )
+    return sorted(history, key=lambda item: item["eventIndex"], reverse=True)
+
+
+def _safe_history_float(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_history_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def colony_ant_counts(colony: ColonyState, event_index: int) -> dict[str, int]:
@@ -1746,7 +2284,7 @@ def run_vote(
                 best_score = score
 
         threshold = ant.confidence_threshold
-        if colony.food < food_drain_for_colony(colony) * 2:
+        if max(0, colony.food - colony.food_reserved) < food_drain_for_colony(colony) * 2:
             threshold -= 0.10
         if best_option is None or best_score < threshold:
             neutral += 1
@@ -1762,10 +2300,23 @@ def run_vote(
     }
 
 
-def ant_agent_context(ant: AntState, opportunity: Opportunity) -> dict[str, Any]:
+def ant_agent_context(
+    ant: AntState,
+    opportunity: Opportunity,
+    colony: ColonyState | None = None,
+    *,
+    strategy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     attempts = ant.memory.attempts_by_context.get(opportunity.context, 0)
     wins = ant.memory.wins_by_context.get(opportunity.context, 0)
     losses = ant.memory.losses_by_context.get(opportunity.context, 0)
+    effective_strategy = strategy or (ant_strategy_state(ant, colony) if colony else {
+        "style": ant.style_override or "balanced",
+        "favoriteContext": ant.favorite_context_override or ant.favorite_context,
+        "infoNeed": ant.info_need_override or "medium",
+        "inheritsGlobal": False,
+        "source": "ant",
+    })
     return {
         "antId": ant.ant_id,
         "archetype": ant.archetype,
@@ -1776,11 +2327,13 @@ def ant_agent_context(ant: AntState, opportunity: Opportunity) -> dict[str, Any]
         "personality": {
             "riskAppetite": round(ant.risk_appetite, 3),
             "favoriteContext": ant.favorite_context,
+            "infoHunger": round(ant.info_hunger, 3),
             "lossSensitivity": round(ant.loss_sensitivity, 3),
             "momentumBias": round(ant.momentum_bias, 3),
             "chaosBias": round(ant.chaos_bias, 3),
             "influence": round(ant.influence, 3),
         },
+        "strategy": effective_strategy,
         "memory": {
             "context": opportunity.context,
             "attempts": attempts,
@@ -1844,6 +2397,7 @@ def market_available_votes(opportunity: Opportunity) -> list[dict[str, Any]]:
                 "optionId": option.option_id,
                 "risk": option.risk,
                 "multiplier": option.multiplier,
+                "lossMultiplier": RESOURCE_LOSS_MULTIPLIER[option.risk],
             }
         )
     items.append(
@@ -1990,7 +2544,8 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 def ant_wants_info(ant: AntState, colony: ColonyState, opportunity: Opportunity, rng: random.Random) -> bool:
     max_risk = max(RISK_RULES[option.risk]["multiplier"] for option in opportunity.options)
-    food_pressure = 0.12 if colony.food < len(colony.alive_ants) * 0.35 else 0.0
+    available_food = max(0, colony.food - colony.food_reserved)
+    food_pressure = 0.12 if available_food < len(colony.alive_ants) * 0.35 else 0.0
     context_bonus = 0.08 if prefers_market(ant.favorite_context, opportunity, None) or prefers_market(colony.favorite_context, opportunity, None) else 0.0
     score = ant.info_hunger + (max_risk / 100) + context_bonus - food_pressure + rng.uniform(-0.16, 0.10)
     threshold = {"low": 0.78, "medium": 0.66, "high": 0.54}[colony.info_need]
@@ -2066,7 +2621,7 @@ def should_buy_info(
 ) -> bool:
     if colony.colony_id in opportunity.info_bought_by:
         return False
-    if colony.food < info_cost_for_colony(colony, opportunity):
+    if max(0, colony.food - colony.food_reserved) < info_cost_for_colony(colony, opportunity):
         return False
     active_weight = max(1.0, float(vote["activeCount"]))
     request_weight = sum(item["weight"] for item in vote["infoRequests"])
@@ -2106,6 +2661,8 @@ def create_prediction(
     *,
     bought_info: bool,
     agent_decision: ColonyAgentDecision | None = None,
+    strategy_style: str | None = None,
+    food_budget: int | None = None,
 ) -> Prediction | None:
     best_option = None
     best_votes: list[dict[str, Any]] = []
@@ -2127,23 +2684,31 @@ def create_prediction(
         return None
 
     active_count = max(1, vote["activeCount"])
+    effective_style = strategy_style if strategy_style in VALID_STYLES else colony.style
     if agent_decision and agent_decision.authoritative:
         support_fraction = len(best_votes) / active_count
         stake_fraction = min(clamp(agent_decision.stake_fraction, 0.02, 0.80), max(0.02, support_fraction))
         stake = max(1, int(round(active_count * stake_fraction)))
     else:
-        threshold = {"cautious": 0.16, "balanced": 0.12, "aggressive": 0.09}[colony.style]
+        threshold = {"cautious": 0.16, "balanced": 0.12, "aggressive": 0.09}[effective_style]
         if len(best_votes) / active_count < threshold:
             return None
 
-        stake_factor = {"cautious": 0.42, "balanced": 0.58, "aggressive": 0.76}[colony.style]
+        stake_factor = {"cautious": 0.42, "balanced": 0.58, "aggressive": 0.76}[effective_style]
         risk_boost = {"safe": 0.90, "risky": 0.80, "wild": 0.66, "chaos": 0.55}[best_option.risk]
-        if colony.food < food_drain_for_colony(colony) * 2:
+        if max(0, colony.food - colony.food_reserved) < food_drain_for_colony(colony) * 2:
             stake_factor += 0.14
         stake = max(1, int(round(len(best_votes) * stake_factor * risk_boost)))
-    stake = min(stake, len(best_votes))
+    loss_per_ant = RESOURCE_LOSS_MULTIPLIER[best_option.risk]
+    available_food = max(0, colony.food - colony.food_reserved)
+    collateral_budget = available_food if food_budget is None else min(available_food, max(0, food_budget))
+    max_affordable_stake = int(collateral_budget // loss_per_ant)
+    if max_affordable_stake <= 0:
+        return None
+    stake = min(stake, len(best_votes), max_affordable_stake)
     chosen_votes = sorted(best_votes, key=lambda item: item["weight"], reverse=True)[:stake]
-    return Prediction(
+    reserved_food = int(round(stake * loss_per_ant))
+    prediction = Prediction(
         prediction_id=f"pred_{uuid.uuid4().hex[:10]}",
         colony_id=colony.colony_id,
         opportunity_id=opportunity.opportunity_id,
@@ -2153,7 +2718,10 @@ def create_prediction(
         deadline_clock=opportunity.deadline_clock,
         deadline_event_index=opportunity.deadline_event_index,
         info_bought=bought_info,
+        reserved_food=reserved_food,
     )
+    colony.food_reserved += reserved_food
+    return prediction
 
 
 def top_voted_option(opportunity: Opportunity, vote: dict[str, Any]) -> tuple[OpportunityOption | None, list[dict[str, Any]]]:

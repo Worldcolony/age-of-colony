@@ -9,6 +9,8 @@ import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity, Style, FavoriteContext, InfoNeed, StrategyPatch } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
+import { ColonyResourceCard } from "@/components/ColonyResourceCard";
+import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
@@ -103,6 +105,7 @@ export default function CockpitPage() {
   const [ralliedMarkets, setRalliedMarkets] = useState<Set<string>>(new Set());
   const [switchedMarkets, setSwitchedMarkets] = useState<Set<string>>(new Set());
   const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
+  const [watchedColonyId, setWatchedColonyId] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const anonId = useMemo(() => getAnonId(), []);
 
@@ -186,6 +189,7 @@ export default function CockpitPage() {
         const replay = await api.getReplay(id);
         if (cancelled) return;
         setGame(replay.game);
+        if (replay.game.status === "created") setSheetOpen(true);
         const ownColony = findOwnColony(replay.game, anonId);
         if (ownColony) setMyColonyId(ownColony.colonyId);
         addEvents(replay.events ?? []);
@@ -195,6 +199,7 @@ export default function CockpitPage() {
           const g = await api.getGame(id);
           if (cancelled) return;
           setGame(g);
+          if (g.status === "created") setSheetOpen(true);
           const ownColony = findOwnColony(g, anonId);
           if (ownColony) setMyColonyId(ownColony.colonyId);
           setLastSyncAt(Date.now());
@@ -221,6 +226,7 @@ export default function CockpitPage() {
     onState: (g) => {
       setStreamState("live");
       setGame(g);
+      if (g.status === "created") setSheetOpen(true);
       setLastSyncAt(Date.now());
     },
   });
@@ -230,14 +236,18 @@ export default function CockpitPage() {
     sortedRef.current = sorted;
   }, [sorted]);
   const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
-  const spectatorFallback = (game?.players?.length ?? 0) === 0 ? sorted[0] : undefined;
+  const adminRoom = (game?.players?.length ?? 0) === 0;
+  const spectatorFallback = adminRoom
+    ? sorted.find((colony) => colony.colonyId === watchedColonyId) ?? sorted[0]
+    : undefined;
   const mine = ownColony ?? spectatorFallback;
-  const colonyFocusLabel = ownColony ? "Your colony" : "Watched colony";
+  const colonyFocusLabel = ownColony ? "Your colony" : adminRoom ? "Admin colony" : "Watched colony";
   const myIdx = mine ? sorted.findIndex((c) => c.colonyId === mine.colonyId) : -1;
   const rank = myIdx >= 0 ? myIdx + 1 : 0;
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
   const status = game?.status ?? "";
+  const txlineProof = game?.txlineValidation;
   const txlineWaiting = isTxlineWaiting(game);
   const txlineStateLabel = matchStateLabel(game);
   const markets = useMemo(() => buildMarkets(game?.activeOpportunities ?? [], events), [game?.activeOpportunities, events]);
@@ -332,12 +342,6 @@ export default function CockpitPage() {
     mineIdRef.current = mine?.colonyId ?? null;
   }, [mine?.colonyId]);
 
-  // Pre-match rooms have nothing on the map yet — surface the sheet's
-  // "back to room" guidance instead of an empty world.
-  useEffect(() => {
-    if (status === "created") setSheetOpen(true);
-  }, [status]);
-
   // Arrival shot: fly the camera to your mound once, so you always know
   // where "you" are on the map before the markets start moving.
   const introFlown = useRef(false);
@@ -356,6 +360,7 @@ export default function CockpitPage() {
           type="button"
           data-mine={colony.colonyId === mine?.colonyId}
           onClick={() => {
+            if (adminRoom) setWatchedColonyId(colony.colonyId);
             worldLink.focusColony(colony.colonyId);
             setSheetOpen(false); // drop the sheet so you see the flight
           }}
@@ -411,6 +416,15 @@ export default function CockpitPage() {
       )}
       {activeTab === "feed" && <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />}
       <TacticsPanel gameId={id} colony={mine} anonId={anonId} onGame={setGame} push={push} />
+      {mine && (ownColony || adminRoom) && (
+        <ColonyCommandPanel
+          gameId={id}
+          status={status}
+          colony={mine}
+          anonymousId={anonId}
+          onGameChange={setGame}
+        />
+      )}
     </>
   );
 
@@ -480,7 +494,7 @@ export default function CockpitPage() {
           <h1 className="hud-title text-[13px]">Live cockpit</h1>
           <p className="text-xs text-ink-faint">{lastSyncAt ? `Synced ${formatClock(lastSyncAt)}` : "Syncing..."}</p>
         </div>
-        <span className={`status-pill ${RUNNING.has(status) ? "!border-rust/50 !text-rust" : ""}`}>
+        <span className={`status-pill ${RUNNING.has(status) ? "!border-rust/50 !text-rust" : ""}`} aria-live="polite">
           {RUNNING.has(status) && <span className="live-dot" />}
           {streamState === "reconnecting" ? "reconnect" : status === "created" ? "not started" : status.replace("_", " ") || "live"}
         </span>
@@ -489,6 +503,17 @@ export default function CockpitPage() {
       <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(520px,1.2fr)_minmax(360px,0.95fr)] 2xl:grid-cols-[360px_minmax(580px,1fr)_430px]">
         <aside className="grid min-w-0 content-start gap-4">
           <section className="glass match-card-media flex min-w-0 flex-col gap-3 p-4">
+            {txlineProof?.verified && (
+              <div
+                className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-lime/40 bg-lime/10 px-3 py-2"
+                title={txlineProof.dailyScoresPda || undefined}
+              >
+                <span className="text-xs font-bold text-lime">✓ TxLINE final score verified</span>
+                <span className="truncate font-mono text-[9px] uppercase tracking-wide text-ink-faint">
+                  seq {txlineProof.seq ?? "—"} · {txlineProof.network}
+                </span>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3">
               <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p1)}</span>
               <div className="min-w-0 flex-1 text-center">
@@ -505,7 +530,16 @@ export default function CockpitPage() {
             </div>
           </section>
 
-          <RankCard mine={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
+          <ColonyResourceCard colony={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
+          {mine && (ownColony || adminRoom) && (
+            <ColonyCommandPanel
+              gameId={id}
+              status={status}
+              colony={mine}
+              anonymousId={anonId}
+              onGameChange={setGame}
+            />
+          )}
           <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
         </aside>
 
@@ -584,7 +618,12 @@ export default function CockpitPage() {
         </main>
 
         <aside className="grid min-w-0 content-start gap-4">
-          <ColonyRoster colonies={sorted} activeColonyId={mine?.colonyId} onOpenRanks={() => router.push(`/results/${id}`)} />
+          <ColonyRoster
+            colonies={sorted}
+            activeColonyId={mine?.colonyId}
+            onOpenRanks={() => router.push(`/results/${id}`)}
+            onSelectColony={adminRoom ? setWatchedColonyId : undefined}
+          />
           <EventStreamCard feedRows={aggregatedFeed.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
         </aside>
       </div>
@@ -694,11 +733,13 @@ function CockpitTabs({
     { id: "feed", label: "Feed" },
   ];
   return (
-    <div className="seg sticky top-2 z-20 bg-[rgba(228,218,193,0.95)] backdrop-blur-md">
+    <div className="seg sticky top-2 z-20 bg-[rgba(228,218,193,0.95)] backdrop-blur-md" role="tablist" aria-label="Cockpit views">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
+          role="tab"
+          aria-selected={active === tab.id}
           data-active={active === tab.id}
           onClick={() => onChange(tab.id)}
           className="!flex items-center justify-center gap-2"
@@ -903,6 +944,7 @@ function MarketRail({
           <button
             key={market.id}
             type="button"
+            aria-pressed={selected}
             onClick={() => onSelect(market.id)}
             className={`min-w-[124px] rounded-md border-2 p-3 text-left transition ${
               selected
@@ -949,6 +991,7 @@ function SettledRail({
           <button
             key={market.id}
             type="button"
+            aria-pressed={selected}
             onClick={() => onSelect(market.id)}
             className={`min-w-[132px] rounded-md border-2 p-3 text-left transition ${
               selected
@@ -1017,11 +1060,8 @@ function FocusedMarketPanel({
 
       <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="open" />
 
-      {distribution.rows.length ? (
-        <Distribution distribution={distribution} title="All colonies vote split" />
-      ) : (
-        <OptionPreview opportunity={market.opportunity} />
-      )}
+      <OptionPreview opportunity={market.opportunity} />
+      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="All colonies vote split" />}
 
       <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink-faint">
         <span className="rounded-full bg-[rgba(176,126,28,0.14)] px-2 py-1 text-gold-deep">
@@ -1081,19 +1121,28 @@ function ActionBar({
 
   const alreadyRallied = ralliedMarkets.has(market.id)
     || market.rallies.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
-  const canAffordRally = (colony.food ?? 0) >= 3;
+  const availableFood = colony.economy?.available ?? colony.food ?? 0;
+  const currentOption = market.opportunity?.options?.find(
+    (option) => String(option.optionId ?? option.value ?? "") === String(stake?.optionId ?? ""),
+  );
+  const currentLossMultiplier = Number(currentOption?.lossMultiplier ?? 1);
+  const canAffordRally = availableFood >= 3 + currentLossMultiplier;
   const rallyDisabled = !isOpen || !canAffordRally || alreadyRallied || anyBusy || !hasPrediction;
 
   const recallDisabled = !isOpen || !stake || stake.ants <= 1 || anyBusy;
 
   const alreadySwitched = switchedMarkets.has(market.id)
     || market.switches.some((event) => String(event.data?.colonyId ?? "") === String(colony.colonyId));
-  const canAffordSwitch = (colony.food ?? 0) >= 2;
-  const switchDisabled = !isOpen || !stake || alreadySwitched || !canAffordSwitch || anyBusy;
-
   const switchOptions = (market.opportunity?.options ?? []).filter(
     (option) => String(option.optionId ?? option.value ?? option.label ?? "") !== String(stake?.optionId ?? ""),
   );
+  const canAffordSwitchOption = (lossMultiplier: number | undefined) => {
+    if (!stake || colony.food < 2) return false;
+    const reservedDelta = stake.ants * (Number(lossMultiplier ?? 1) - currentLossMultiplier);
+    return availableFood >= Math.max(0, 2 + reservedDelta);
+  };
+  const hasAffordableSwitch = switchOptions.some((option) => canAffordSwitchOption(option.lossMultiplier));
+  const switchDisabled = !isOpen || !stake || alreadySwitched || !hasAffordableSwitch || anyBusy;
 
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-[color:var(--brd-soft)] pt-3">
@@ -1143,6 +1192,8 @@ function ActionBar({
                 key={option.optionId || option.value || option.label}
                 type="button"
                 className="chip"
+                disabled={!canAffordSwitchOption(option.lossMultiplier)}
+                title={!canAffordSwitchOption(option.lossMultiplier) ? "Not enough available food for this risk." : undefined}
                 onClick={() => {
                   onSwitch(market, String(option.optionId ?? option.value ?? ""));
                   setSwitchOpen(false);
@@ -1159,7 +1210,8 @@ function ActionBar({
 
       <p className="text-[11px] text-ink-faint">
         {!hasPrediction && isOpen && "Your ants haven't staked this market yet — actions unlock on their next call."}
-        {hasPrediction && !canAffordRally && !alreadyRallied && " Not enough food to rally."}
+        {hasPrediction && !canAffordRally && !alreadyRallied && " Not enough available food to rally and cover the risk."}
+        {hasPrediction && !hasAffordableSwitch && !alreadySwitched && " No affordable pivot at the moment."}
       </p>
     </div>
   );
@@ -1225,7 +1277,7 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
 
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <PulseMetric
-          label="Resources"
+          label="All colonies food"
           value={signedValue(summary.resourceDelta)}
           tone={summary.resourceDelta >= 0 ? "green" : undefined}
         />
@@ -1301,7 +1353,7 @@ function ColonyDecisionPanel({
 
       <div className="mt-3 grid gap-2 md:grid-cols-3">
         <DecisionCell label="Decision" value={decision.value} detail={decision.detail} tone={decision.tone} />
-        <DecisionCell label="Committed" value={commit.value} detail={commit.detail} tone={commit.tone} />
+        <DecisionCell label="Backed" value={commit.value} detail={commit.detail} tone={commit.tone} />
         <DecisionCell label="Result" value={result.value} detail={result.detail} tone={result.cellTone} />
       </div>
 
@@ -1510,21 +1562,15 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
     <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, options.length)}, minmax(0, 1fr))` }}>
       {options.slice(0, 3).map((option) => (
         <div key={option.optionId || option.label} className="well p-2 text-center text-xs font-bold text-ink-soft">
-          {option.label || option.value}
+          <span className="block">{option.label || option.value}</span>
+          {(option.multiplier || option.lossMultiplier) && (
+            <span className="mt-1 block font-mono text-[10px] text-ink-faint">
+              Win ×{option.multiplier ?? "–"} · Lose ×{option.lossMultiplier ?? 1}
+            </span>
+          )}
         </div>
       ))}
     </div>
-  );
-}
-
-function RankCard({ mine, rank, spectator }: { mine?: Colony; rank: number; spectator?: boolean }) {
-  if (!mine) return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete.</div>;
-  return (
-    <section className="glass grid min-w-0 grid-cols-3 gap-1 p-3 text-center">
-      <Vital label="Rank" value={`#${rank}`} tone="gold" />
-      <Vital label={spectator ? "Lead ants" : "My ants"} value={mine.antsAlive} />
-      <Vital label="Resources" value={mine.food} tone="green" />
-    </section>
   );
 }
 
@@ -1532,10 +1578,12 @@ function ColonyRoster({
   colonies,
   activeColonyId,
   onOpenRanks,
+  onSelectColony,
 }: {
   colonies: Colony[];
   activeColonyId?: string;
   onOpenRanks: () => void;
+  onSelectColony?: (colonyId: string) => void;
 }) {
   if (!colonies.length) {
     return (
@@ -1559,12 +1607,16 @@ function ColonyRoster({
         {colonies.map((colony, index) => {
           const active = colony.colonyId === activeColonyId;
           return (
-            <div
+            <button
+              type="button"
               key={colony.colonyId}
-              className={`rounded-md border-2 p-3 ${
+              aria-pressed={active}
+              disabled={!onSelectColony}
+              onClick={() => onSelectColony?.(colony.colonyId)}
+              className={`w-full rounded-md border-2 p-3 text-left disabled:cursor-default disabled:opacity-100 ${
                 active
                   ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
-                  : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)]"
+                  : `border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] ${onSelectColony ? "hover:border-gold/60" : ""}`
               }`}
             >
               <div className="flex items-start justify-between gap-3">
@@ -1577,15 +1629,15 @@ function ColonyRoster({
                     {labelize(colony.style)} · {labelize(colony.favoriteContext)} · info {labelize(colony.infoNeed)}
                   </p>
                 </div>
-                {active && <span className="status-pill">active</span>}
+                {active && <span className="status-pill">{onSelectColony ? "selected" : "active"}</span>}
               </div>
 
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <MiniStat label="Score" value={Math.round(colony.score ?? 0)} tone="gold" />
                 <MiniStat label="Ants" value={colony.antsAlive ?? 0} />
-                <MiniStat label="Resources" value={colony.food ?? 0} tone="green" />
+                <MiniStat label="Food" value={colony.food ?? 0} tone="green" />
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -1605,16 +1657,6 @@ function MiniStat({ label, value, tone }: { label: string; value: number | strin
 
 function labelize(value: string | null | undefined): string {
   return String(value || "balanced").replace(/_/g, " ");
-}
-
-function Vital({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
-  const color = tone === "gold" ? "text-gold" : tone === "green" ? "text-green" : "text-ink";
-  return (
-    <div className="border-r border-[color:var(--brd-soft)] last:border-r-0">
-      <p className="text-[11px] font-bold text-ink-faint">{label}</p>
-      <p className={`font-mono text-lg font-bold ${color}`}>{value}</p>
-    </div>
-  );
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -1973,7 +2015,7 @@ function colonyCommitSummary(activity: ColonyMarketActivity) {
   if (activity.predictionEvent && ants > 0) {
     return {
       value: `${ants} ants`,
-      detail: option ? `on ${option}` : "committed",
+      detail: option ? `on ${option}` : "market support",
       tone: "gold" as const,
     };
   }
@@ -1995,7 +2037,7 @@ function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "set
     if (settlement?.win) {
       return {
         badge: "won",
-        value: resourceDelta > 0 ? `${signedValue(resourceDelta)} resources` : "Won",
+        value: resourceDelta > 0 ? `${signedValue(resourceDelta)} food` : "Won",
         detail: eventOptionLabel(activity.settlementEvent) || "resolved",
         tone: "!border-green/50 !text-green",
         cellTone: "green" as const,
@@ -2003,7 +2045,7 @@ function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "set
     }
     return {
       badge: "lost",
-      value: resourceDelta < 0 ? `${signedValue(resourceDelta)} resources` : "Lost",
+      value: resourceDelta < 0 ? `${signedValue(resourceDelta)} food` : "Lost",
       detail: eventOptionLabel(activity.settlementEvent) || "resolved",
       tone: "!border-rust/50 !text-rust",
       cellTone: "rust" as const,
@@ -2022,7 +2064,7 @@ function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "set
   if (mode === "open") {
     return {
       badge: "open",
-      value: activity.predictionEvent ? "Committed" : "Pending",
+      value: activity.predictionEvent ? "Backed" : "Pending",
       detail: activity.predictionEvent ? "waiting for result" : "no position yet",
       tone: "!border-gold/50 !text-gold",
       cellTone: activity.predictionEvent ? "gold" as const : "muted" as const,

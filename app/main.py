@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import hmac
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -19,12 +18,17 @@ from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
+    FOOD_DRAIN_INTERVAL_EVENTS,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     ColonyState,
     GameLogEvent,
     GameRoom,
     PlayerState,
+    ant_bet_history,
+    ant_public_state,
+    ant_strategy_history,
+    find_ant,
     generate_ants,
     normalize_room_code,
 )
@@ -39,10 +43,19 @@ from .txline import (
     build_match_details,
     build_timeline,
     epoch_day_from_date,
+    epoch_to_iso,
     filter_upcoming_fixtures,
     normalize_fixtures,
     normalize_score_record,
     parse_date_to_epoch_day,
+)
+from .txline_validation import (
+    TxLineOnChainValidationError,
+    final_score_from_stats,
+    find_finalized_score_record,
+    txline_network,
+    validate_txline_proof_onchain,
+    winner_from_score,
 )
 
 
@@ -50,6 +63,7 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Age of Colony TXLine Monitor", version="0.1.0")
+_txline_validation_cache: dict[str, dict[str, Any]] = {}
 
 # CORS — allow the standalone Next.js frontend (separate origin) to call the API.
 # Set WEB_ORIGINS to a comma-separated allowlist in production; defaults to "*" for dev.
@@ -130,9 +144,6 @@ LIVE_ACTIVITY_ACTIONS = {
     "var",
 }
 REPLAY_MAX_DELAY_SECONDS = 8.0
-ADMIN_TOKEN_HEADER = "x-aoc-admin-token"
-ADMIN_SESSION_COOKIE = "aoc_admin_session"
-ADMIN_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
 
 
 def _env_float(name: str, default: float) -> float:
@@ -145,32 +156,9 @@ def _env_float(name: str, default: float) -> float:
 LIVE_AUTO_FINISH_AFTER_SECONDS = max(0.0, _env_float("LIVE_AUTO_FINISH_AFTER_SECONDS", 9000.0))
 
 
-def _admin_token() -> str | None:
-    return (os.getenv("AOC_ADMIN_TOKEN") or "").strip() or None
-
-
-def _admin_session_value(expected: str) -> str:
-    return hmac.new(expected.encode("utf-8"), b"age-of-colony-admin-session-v1", hashlib.sha256).hexdigest()
-
-
-def _request_has_admin_session(request: Request, expected: str) -> bool:
-    supplied = (request.headers.get(ADMIN_TOKEN_HEADER) or "").strip()
-    if supplied and hmac.compare_digest(supplied, expected):
-        return True
-    cookie = (request.cookies.get(ADMIN_SESSION_COOKIE) or "").strip()
-    return bool(cookie and hmac.compare_digest(cookie, _admin_session_value(expected)))
-
-
-def _is_secure_request(request: Request) -> bool:
-    return request.url.scheme == "https" or (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip() == "https"
-
-
-def require_admin_tool(request: Request) -> None:
-    expected = _admin_token()
-    if not expected:
-        return
-    if not _request_has_admin_session(request, expected):
-        raise HTTPException(status_code=403, detail="Admin token required for replay/debug tools.")
+def require_admin_tool(_: Request) -> None:
+    """Admin/debug tools are intentionally open during the current build phase."""
+    return
 
 
 class CreateGameRequest(BaseModel):
@@ -231,6 +219,14 @@ class SwitchCallRequest(BaseModel):
     anonymousId: str | None = None
 
 
+class UpdateAntStrategyRequest(BaseModel):
+    style: str | None = None
+    favoriteContext: str | None = None
+    infoNeed: str | None = None
+    inheritGlobal: bool = False
+    anonymousId: str | None = None
+
+
 class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
@@ -245,10 +241,6 @@ class FinishGameRequest(BaseModel):
 
 class DemoRunRequest(BaseModel):
     seed: int | None = None
-
-
-class AdminSessionRequest(BaseModel):
-    token: str
 
 
 class RunPreviousTxRequest(BaseModel):
@@ -319,7 +311,6 @@ async def index() -> FileResponse:
 async def health(request: Request) -> dict[str, Any]:
     settings = TxLineSettings.from_env()
     agent_settings = OpenRouterSettings.from_env()
-    admin_token = _admin_token()
     return {
         "ok": True,
         "txlineConfigured": settings.configured,
@@ -338,31 +329,10 @@ async def health(request: Request) -> dict[str, Any]:
             "inputPerMillionUsd": agent_settings.input_price_per_million_usd,
             "outputPerMillionUsd": agent_settings.output_price_per_million_usd,
         },
-        "adminToolsProtected": bool(admin_token),
-        "adminAuthenticated": bool(admin_token and _request_has_admin_session(request, admin_token)),
+        "adminToolsProtected": False,
+        "adminAuthenticated": True,
         "supabase": supabase_store.public_status(),
     }
-
-
-@app.post("/api/admin/session")
-async def create_admin_session(payload: AdminSessionRequest, request: Request) -> JSONResponse:
-    expected = _admin_token()
-    if not expected:
-        return JSONResponse({"ok": True, "protected": False, "adminAuthenticated": True})
-    supplied = payload.token.strip()
-    if not supplied or not hmac.compare_digest(supplied, expected):
-        raise HTTPException(status_code=403, detail="Admin token required for replay/debug tools.")
-    response = JSONResponse({"ok": True, "protected": True, "adminAuthenticated": True})
-    response.set_cookie(
-        ADMIN_SESSION_COOKIE,
-        _admin_session_value(expected),
-        max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
-        httponly=True,
-        secure=_is_secure_request(request),
-        samesite="lax",
-        path="/",
-    )
-    return response
 
 
 @app.post("/api/games")
@@ -576,10 +546,10 @@ async def delete_queen(
 
 @app.patch("/api/games/{game_id}/colonies/{colony_id}/strategy")
 async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateColonyStrategyRequest) -> dict[str, Any]:
-    room = _get_game_or_404(game_id)
+    room = await _get_game_or_restore_404(game_id)
     _ensure_colony_owner(room, colony_id, payload.anonymousId, action="update this colony")
     try:
-        game_manager.harness(game_id).update_colony_strategy(
+        game_manager.harness(room.game_id).update_colony_strategy(
             colony_id,
             style=payload.style,
             favorite_context=payload.favoriteContext,
@@ -625,6 +595,92 @@ async def switch_call(game_id: str, payload: SwitchCallRequest) -> dict[str, Any
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
     return room.public_state()
+
+
+@app.get("/api/games/{game_id}/colonies/{colony_id}/ants")
+async def list_colony_ants(
+    game_id: str,
+    colony_id: str,
+    anonymousId: str | None = Query(default=None),
+) -> dict[str, Any]:
+    room = await _get_game_or_restore_404(game_id)
+    _ensure_colony_owner(room, colony_id, anonymousId, action="view these ants")
+    colony = room.colonies.get(colony_id)
+    if not colony:
+        raise HTTPException(status_code=404, detail="Colony not found.")
+    return {
+        "colonyId": colony.colony_id,
+        "strategyRevision": colony.strategy_revision,
+        "globalStrategy": {
+            "style": colony.style,
+            "favoriteContext": colony.favorite_context,
+            "infoNeed": colony.info_need,
+        },
+        "ants": [ant_public_state(ant, colony, room.event_index) for ant in colony.ants],
+    }
+
+
+@app.get("/api/games/{game_id}/colonies/{colony_id}/ants/{ant_id}")
+async def get_ant_detail(
+    game_id: str,
+    colony_id: str,
+    ant_id: str,
+    anonymousId: str | None = Query(default=None),
+) -> dict[str, Any]:
+    room = await _get_game_or_restore_404(game_id)
+    _ensure_colony_owner(room, colony_id, anonymousId, action="view this ant")
+    await _ensure_room_log_hydrated(room)
+    colony = room.colonies.get(colony_id)
+    if not colony:
+        raise HTTPException(status_code=404, detail="Colony not found.")
+    ant = find_ant(colony, ant_id)
+    if not ant:
+        raise HTTPException(status_code=404, detail="Ant not found.")
+    bets = ant_bet_history(room, colony.colony_id, ant.ant_id)
+    return {
+        "colonyId": colony.colony_id,
+        "strategyRevision": colony.strategy_revision,
+        "ant": ant_public_state(ant, colony, room.event_index),
+        "bets": bets,
+        "strategyHistory": ant_strategy_history(room, colony.colony_id, ant.ant_id),
+        "summary": {
+            "total": len(bets),
+            "open": len([bet for bet in bets if bet["status"] == "open"]),
+            "won": len([bet for bet in bets if bet["status"] == "won"]),
+            "lost": len([bet for bet in bets if bet["status"] == "lost"]),
+            "void": len([bet for bet in bets if bet["status"] == "void"]),
+            "recalled": len([bet for bet in bets if bet["status"] == "recalled"]),
+        },
+    }
+
+
+@app.patch("/api/games/{game_id}/colonies/{colony_id}/ants/{ant_id}/strategy")
+async def update_ant_strategy(
+    game_id: str,
+    colony_id: str,
+    ant_id: str,
+    payload: UpdateAntStrategyRequest,
+) -> dict[str, Any]:
+    room = await _get_game_or_restore_404(game_id)
+    _ensure_colony_owner(room, colony_id, payload.anonymousId, action="update this ant")
+    try:
+        ant = game_manager.harness(room.game_id).update_ant_strategy(
+            colony_id,
+            ant_id,
+            style=payload.style,
+            favorite_context=payload.favoriteContext,
+            info_need=payload.infoNeed,
+            inherit_global=payload.inheritGlobal,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    colony = room.colonies[colony_id]
+    await _sync_room_to_supabase_async(room)
+    return {
+        "colonyId": colony.colony_id,
+        "strategyRevision": colony.strategy_revision,
+        "ant": ant_public_state(ant, colony, room.event_index),
+    }
 
 
 @app.post("/api/games/{game_id}/start")
@@ -815,6 +871,7 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
         seed=old_room.seed,
         owner_anonymous_id=old_room.owner_anonymous_id,
         owner_name=old_room.owner_name,
+        txline_validation=old_room.txline_validation,
     )
     harness = game_manager.harness(room.game_id)
     for player in old_room.players:
@@ -844,6 +901,7 @@ async def create_admin_room(payload: AdminRoomRequest, request: Request) -> dict
         competition=payload.competition,
         start_time=payload.startTime,
         start_time_iso=payload.startTimeIso,
+        txline_validation=_txline_validation_cache.get(str(payload.fixtureId)),
         seed=payload.seed,
     )
     harness = game_manager.harness(room.game_id)
@@ -898,20 +956,17 @@ async def admin_replay_fixtures(
     playable: list[dict[str, Any]] = []
     inspected = 0
 
-    for fixture in fixtures:
-        if len(playable) >= limit:
-            break
+    async def inspect_fixture(fixture: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
         fixture_id = fixture.get("fixtureId")
         if fixture_id is None:
-            continue
+            return False, None
         try:
             source_records = await _fetch_score_sources(client, int(fixture_id))
-        except (TypeError, ValueError):
-            continue
-        inspected += 1
+        except (TypeError, ValueError, httpx.HTTPError):
+            return True, None
         chosen_source, records = _choose_best_source(source_records)
         if not records:
-            continue
+            return True, None
         enriched = dict(fixture)
         enriched.update(
             {
@@ -921,7 +976,20 @@ async def admin_replay_fixtures(
                 "sourceCounts": {name: len(items) for name, items in source_records.items()},
             }
         )
-        playable.append(enriched)
+        return True, enriched
+
+    batch_size = 8
+    for start in range(0, len(fixtures), batch_size):
+        batch = fixtures[start : start + batch_size]
+        results = await asyncio.gather(*(inspect_fixture(fixture) for fixture in batch))
+        for was_inspected, enriched in results:
+            inspected += int(was_inspected)
+            if enriched is not None:
+                playable.append(enriched)
+            if len(playable) >= limit:
+                break
+        if len(playable) >= limit:
+            break
 
     return {
         "mode": "replay-fixtures",
@@ -933,6 +1001,81 @@ async def admin_replay_fixtures(
         "count": len(playable),
         "fixtures": playable,
     }
+
+
+@app.post("/api/admin/fixtures/{fixture_id}/txline-validation")
+async def validate_admin_fixture_with_txline(
+    fixture_id: int,
+    request: Request,
+    participant1: str | None = Query(default=None),
+    participant2: str | None = Query(default=None),
+) -> dict[str, Any]:
+    require_admin_tool(request)
+    settings = TxLineSettings.from_env()
+    network = txline_network(settings.base_url)
+    client = TxLineClient(settings)
+    records = await client.score_historical(fixture_id)
+    finalized = find_finalized_score_record(records)
+    if finalized is None:
+        _txline_validation_cache.pop(str(fixture_id), None)
+        return {
+            "status": "pending",
+            "verified": False,
+            "fixtureId": fixture_id,
+            "network": network,
+            "participant1": participant1,
+            "participant2": participant2,
+            "historyCount": len(records),
+            "reason": "No game_finalised record with statusId=100 is available yet.",
+        }
+
+    raw_seq = finalized.get("Seq") if finalized.get("Seq") is not None else finalized.get("seq")
+    try:
+        seq = int(raw_seq)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="The final TxLINE score record has no valid sequence number.") from exc
+
+    proof = await client.score_stat_validation(fixture_id, seq, (1, 2))
+    if not proof:
+        raise HTTPException(status_code=502, detail="TxLINE returned no stat-validation proof for the final score.")
+    try:
+        onchain = await validate_txline_proof_onchain(proof, network=network)
+    except TxLineOnChainValidationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    stats = onchain.get("stats") if isinstance(onchain.get("stats"), list) else proof.get("statsToProve", [])
+    score = final_score_from_stats(stats)
+    winner = winner_from_score(score)
+    winner_label = participant1 if winner == "participant1" else participant2 if winner == "participant2" else "Draw" if winner == "draw" else None
+    verified = bool(onchain.get("verified"))
+    result = {
+        "status": "verified" if verified else "failed",
+        "verified": verified,
+        "fixtureId": fixture_id,
+        "network": network,
+        "participant1": participant1,
+        "participant2": participant2,
+        "seq": seq,
+        "action": finalized.get("Action") or finalized.get("action"),
+        "statusId": finalized.get("StatusId") if finalized.get("StatusId") is not None else finalized.get("statusId"),
+        "finalizedAt": epoch_to_iso(finalized.get("Ts") or finalized.get("ts")),
+        "score": score,
+        "winner": winner,
+        "winnerLabel": winner_label,
+        "stats": stats,
+        "programId": onchain.get("programId"),
+        "dailyScoresPda": onchain.get("dailyScoresPda"),
+        "rootAccountExists": bool(onchain.get("rootAccountExists")),
+        "rootAccountOwner": onchain.get("rootAccountOwner"),
+        "epochDay": onchain.get("epochDay"),
+        "method": "validateStatV2",
+        "mode": "read-only simulation",
+    }
+    if verified:
+        _txline_validation_cache[str(fixture_id)] = dict(result)
+    else:
+        _txline_validation_cache.pop(str(fixture_id), None)
+    return result
 
 
 @app.post("/api/games/run-previous")
@@ -1429,16 +1572,28 @@ async def live_events(
 
 
 async def _fetch_score_sources(client: TxLineClient, fixture_id: int) -> dict[str, list[dict[str, Any]]]:
-    historical, updates, snapshot = await asyncio.gather(
+    results = await asyncio.gather(
         client.score_historical(fixture_id),
         client.score_updates(fixture_id),
         client.score_snapshot(fixture_id),
+        return_exceptions=True,
     )
-    return {
-        "historical": historical,
-        "updates": updates,
-        "snapshot": snapshot,
-    }
+    sources: dict[str, list[dict[str, Any]]] = {}
+    errors: list[Exception] = []
+    successful_source = False
+    for name, result in zip(("historical", "updates", "snapshot"), results, strict=True):
+        if isinstance(result, asyncio.CancelledError):
+            raise result
+        if isinstance(result, Exception):
+            errors.append(result)
+            sources[name] = []
+            continue
+        successful_source = True
+        sources[name] = result if isinstance(result, list) else []
+
+    if not successful_source and errors:
+        raise errors[0]
+    return sources
 
 
 def _choose_best_source(source_records: dict[str, list[dict[str, Any]]]) -> tuple[str, list[dict[str, Any]]]:
@@ -1626,6 +1781,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
         competition=public_state.get("competition") or row.get("competition"),
         start_time=public_state.get("startTime") or row.get("start_time"),
         start_time_iso=public_state.get("startTimeIso") or row.get("start_time_iso"),
+        txline_validation=public_state.get("txlineValidation") if isinstance(public_state.get("txlineValidation"), dict) else None,
         owner_anonymous_id=owner.get("anonymousId") if isinstance(owner, dict) else None,
         owner_name=owner.get("name") if isinstance(owner, dict) else None,
         seed=clean_seed,
@@ -1651,6 +1807,12 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             food = int(colony_state["food"]) if colony_state.get("food") is not None else STARTING_COLONY_FOOD
         except (TypeError, ValueError):
             food = STARTING_COLONY_FOOD
+        economy = colony_state.get("economy") if isinstance(colony_state.get("economy"), dict) else {}
+        fallback_upkeep_index = room.event_index - (room.event_index % FOOD_DRAIN_INTERVAL_EVENTS)
+        try:
+            last_food_event_index = int(economy.get("lastUpkeepEventIndex", fallback_upkeep_index))
+        except (TypeError, ValueError):
+            last_food_event_index = fallback_upkeep_index
         colony = ColonyState(
             colony_id=colony_id,
             name=str(colony_state.get("name") or f"Colony {len(room.colonies) + 1}")[:40],
@@ -1658,12 +1820,36 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             style=str(colony_state.get("style") or "balanced"),
             favorite_context=str(colony_state.get("favoriteContext") or "balanced"),
             info_need=str(colony_state.get("infoNeed") or "medium"),
-            seed=clean_seed,
+            seed=_safe_int(colony_state.get("simulationSeed")) or clean_seed,
             player_id=str(colony_state.get("playerId"))[:80] if colony_state.get("playerId") else None,
             player_anonymous_id=str(colony_state.get("playerAnonymousId"))[:80] if colony_state.get("playerAnonymousId") else None,
             food=food,
+            larvae=max(0, _safe_int(colony_state.get("larvae")) or 0),
+            last_food_event_index=max(0, last_food_event_index),
+            strategy_revision=max(0, _safe_int(colony_state.get("strategyRevision")) or 0),
         )
         colony.ants = generate_ants(colony)
+        try:
+            alive_count = max(0, int(colony_state.get("antsAlive", len(colony.ants))))
+        except (TypeError, ValueError):
+            alive_count = len(colony.ants)
+        for ant in colony.ants[alive_count:]:
+            ant.alive = False
+        colony.memory.food_net = _safe_int(colony_state.get("foodNet")) or _safe_int(economy.get("net")) or 0
+        colony.memory.wins = max(0, _safe_int(colony_state.get("wins")) or 0)
+        colony.memory.losses = max(0, _safe_int(colony_state.get("losses")) or 0)
+        colony.memory.attempts = colony.memory.wins + colony.memory.losses
+        colony.memory.info_purchases = max(0, _safe_int(colony_state.get("infoPurchases")) or 0)
+        ant_strategies = colony_state.get("antStrategies") or {}
+        if isinstance(ant_strategies, dict):
+            ants_by_id = {ant.ant_id: ant for ant in colony.ants}
+            for ant_id, strategy in ant_strategies.items():
+                ant = ants_by_id.get(str(ant_id))
+                if not ant or not isinstance(strategy, dict):
+                    continue
+                ant.style_override = strategy.get("style") or None
+                ant.favorite_context_override = strategy.get("favoriteContext") or None
+                ant.info_need_override = strategy.get("infoNeed") or None
         room.colonies[colony.colony_id] = colony
     _merge_restored_events(room, events or [])
     if events is not None:

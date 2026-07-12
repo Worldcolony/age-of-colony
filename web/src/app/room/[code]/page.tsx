@@ -170,8 +170,12 @@ export default function RoomPage() {
     setMsg("");
     try {
       const g = await api.startGame(game.gameId, "live", { anonymousId: anonId });
-      setGame(g);
-      router.push(`/cockpit/${g.gameId}`);
+      syncGame(g);
+      if (g.status && RUNNING.has(g.status)) {
+        router.push(`/cockpit/${g.gameId}`);
+      } else if (g.status === "waiting_kickoff") {
+        setMsg("Room locked. The live game will open automatically at kickoff.");
+      }
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -244,8 +248,11 @@ export default function RoomPage() {
           <Field label="Focus">
             <Chips options={GROUNDS} value={ground} onChange={setGround} />
           </Field>
-          <Field label="Risk level">
-            <Segmented options={INFO} value={info} onChange={setInfo} />
+          <Field label="Info appetite">
+            <div className="grid gap-2">
+              <Segmented options={INFO} value={info} onChange={setInfo} />
+              <p className="text-xs text-ink-faint">Sets how much evidence ants prefer. Paid intel is not active yet.</p>
+            </div>
           </Field>
           <button className="btn btn-primary" disabled={joining || !game?.gameId} onClick={joinAndCreateColony}>
             {joining ? "Joining..." : "⚔️ Found colony & join"}

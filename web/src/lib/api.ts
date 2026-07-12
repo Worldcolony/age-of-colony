@@ -1,9 +1,14 @@
 // Age of Colony — typed API client for the FastAPI engine.
 import type {
+  AntDetailResponse,
+  AntStrategyPatch,
+  AntStrategyResponse,
+  ColonyAntsResponse,
   CreateColonyBody,
   Fixture,
   GameState,
   StrategyPatch,
+  TxLineValidation,
 } from "./types";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
@@ -55,9 +60,6 @@ const authHeaders = (auth: QueenAuth): Record<string, string> => ({
   "x-aoc-ts": String(auth.ts),
 });
 
-const adminHeaders = (adminToken?: string): Record<string, string> =>
-  adminToken ? { "x-aoc-admin-token": adminToken } : {};
-
 export interface QueenRecord {
   wallet: string;
   name: string;
@@ -100,18 +102,19 @@ export interface ReplayFixtureList {
   fixtures?: ReplayFixture[];
 }
 
+export type TxLineValidationResult = TxLineValidation;
+
 export const api = {
   health: () => req<Record<string, unknown>>("/health"),
-  adminSession: (token: string) => req<{ ok: boolean; protected?: boolean; adminAuthenticated?: boolean }>("/api/admin/session", "POST", { token }),
 
   upcomingFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
     req<FixtureList>(`/api/fixtures/upcoming${qs(p)}`),
-  recentFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }, adminToken?: string) =>
-    req<FixtureList>(`/api/fixtures/recent${qs(p)}`, "GET", undefined, adminHeaders(adminToken)),
-  replayFixtures: (
-    p?: { days?: number; limit?: number; scan_limit?: number; competition_id?: number; search?: string },
-    adminToken?: string,
-  ) => req<ReplayFixtureList>(`/api/admin/replay-fixtures${qs(p)}`, "GET", undefined, adminHeaders(adminToken)),
+  recentFixtures: (p?: { days?: number; limit?: number; competition_id?: number; search?: string }) =>
+    req<FixtureList>(`/api/fixtures/recent${qs(p)}`),
+  replayFixtures: (p?: { days?: number; limit?: number; scan_limit?: number; competition_id?: number; search?: string }) =>
+    req<ReplayFixtureList>(`/api/admin/replay-fixtures${qs(p)}`),
+  validateFixture: (fixtureId: number, p?: { participant1?: string | null; participant2?: string | null }) =>
+    req<TxLineValidationResult>(`/api/admin/fixtures/${fixtureId}/txline-validation${qs(p)}`, "POST"),
   liveTarget: (p?: { days?: number }) => req<FixtureList>(`/api/fixtures/live-target${qs(p)}`),
 
   createGame: (body: {
@@ -119,7 +122,7 @@ export const api = {
     participant1?: string | null;
     participant2?: string | null;
     competition?: string | null;
-    startTime?: number | null;
+    startTime?: number | string | null;
     startTimeIso?: string | null;
     seed?: number;
     anonymousId?: string;
@@ -141,8 +144,8 @@ export const api = {
     req<QueenRecord>(`/api/queens/${encodeURIComponent(wallet)}`, "PUT", body, authHeaders(auth)),
   deleteQueen: (wallet: string, auth: QueenAuth) =>
     req<{ deleted: boolean }>(`/api/queens/${encodeURIComponent(wallet)}`, "DELETE", undefined, authHeaders(auth)),
-  addColony: (id: string, body: CreateColonyBody, adminToken?: string) =>
-    req<GameState>(`/api/games/${id}/colonies`, "POST", body, adminHeaders(adminToken)),
+  addColony: (id: string, body: CreateColonyBody) =>
+    req<GameState>(`/api/games/${id}/colonies`, "POST", body),
   updateStrategy: (id: string, cid: string, body: StrategyPatch) =>
     req<GameState>(`/api/games/${id}/colonies/${encodeURIComponent(cid)}/strategy`, "PATCH", body),
   rally: (id: string, body: { colonyId: string; opportunityId: string; anonymousId: string }) =>
@@ -151,10 +154,24 @@ export const api = {
     req<GameState>(`/api/games/${id}/recall`, "POST", body),
   switchCall: (id: string, body: { colonyId: string; opportunityId: string; optionId: string; anonymousId: string }) =>
     req<GameState>(`/api/games/${id}/switch-call`, "POST", body),
+  getColonyAnts: (id: string, cid: string, anonymousId?: string) =>
+    req<ColonyAntsResponse>(
+      `/api/games/${id}/colonies/${encodeURIComponent(cid)}/ants${qs({ anonymousId })}`,
+    ),
+  getAntDetail: (id: string, cid: string, antId: string, anonymousId?: string) =>
+    req<AntDetailResponse>(
+      `/api/games/${id}/colonies/${encodeURIComponent(cid)}/ants/${encodeURIComponent(antId)}${qs({ anonymousId })}`,
+    ),
+  updateAntStrategy: (id: string, cid: string, antId: string, body: AntStrategyPatch) =>
+    req<AntStrategyResponse>(
+      `/api/games/${id}/colonies/${encodeURIComponent(cid)}/ants/${encodeURIComponent(antId)}/strategy`,
+      "PATCH",
+      body,
+    ),
   startGame: (
     id: string,
     mode: "replay" | "live" = "live",
-    opts?: { anonymousId?: string; replayDelaySeconds?: number; replayTimeScale?: number; adminToken?: string },
+    opts?: { anonymousId?: string; replayDelaySeconds?: number; replayTimeScale?: number },
   ) =>
     req<GameState>(`/api/games/${id}/start`, "POST", {
       mode,
@@ -162,10 +179,9 @@ export const api = {
       anonymousId: opts?.anonymousId,
       replayDelaySeconds: opts?.replayDelaySeconds,
       replayTimeScale: opts?.replayTimeScale,
-    }, adminHeaders(opts?.adminToken)),
+    }),
   rerun: (
     id: string,
-    adminToken?: string,
     opts?: { replayDelaySeconds?: number; replayTimeScale?: number },
   ) =>
     req<GameState>(
@@ -177,25 +193,24 @@ export const api = {
         replayDelaySeconds: opts?.replayDelaySeconds,
         replayTimeScale: opts?.replayTimeScale,
       },
-      adminHeaders(adminToken),
     ),
 
-  demoMatches: (adminToken?: string) => req<FixtureList>("/api/demo/matches", "GET", undefined, adminHeaders(adminToken)),
-  demoRun: (body?: Record<string, unknown>, adminToken?: string) => req<GameState>("/api/demo/run", "POST", body ?? {}, adminHeaders(adminToken)),
-  runPrevious: (body?: Record<string, unknown>, adminToken?: string) =>
-    req<GameState>("/api/games/run-previous", "POST", body ?? {}, adminHeaders(adminToken)),
+  demoMatches: () => req<FixtureList>("/api/demo/matches"),
+  demoRun: (body?: Record<string, unknown>) => req<GameState>("/api/demo/run", "POST", body ?? {}),
+  runPrevious: (body?: Record<string, unknown>) =>
+    req<GameState>("/api/games/run-previous", "POST", body ?? {}),
   adminCreateRoom: (body: {
     fixtureId: number | string;
     participant1?: string | null;
     participant2?: string | null;
     competition?: string | null;
-    startTime?: number | null;
+    startTime?: number | string | null;
     startTimeIso?: string | null;
     seed?: number;
     colonies: CreateColonyBody[];
-  }, adminToken?: string) => req<GameState>("/api/admin/rooms", "POST", body, adminHeaders(adminToken)),
-  adminGames: (limit = 50, adminToken?: string) =>
-    req<AdminGameList>(`/api/admin/games${qs({ limit })}`, "GET", undefined, adminHeaders(adminToken)),
+  }) => req<GameState>("/api/admin/rooms", "POST", body),
+  adminGames: (limit = 50) =>
+    req<AdminGameList>(`/api/admin/games${qs({ limit })}`),
 };
 
 export const sseUrl = (gameId: string) => `${API_BASE}/api/games/${gameId}/events`;

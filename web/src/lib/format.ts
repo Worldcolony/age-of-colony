@@ -57,10 +57,10 @@ export function fmtWhen(t?: number): string {
 }
 
 export function startMs(startTime?: number | string | null, startTimeIso?: string | null): number | null {
-  if (typeof startTime === "number" && Number.isFinite(startTime)) return startTime;
+  if (typeof startTime === "number" && Number.isFinite(startTime)) return epochMs(startTime);
   if (typeof startTime === "string" && startTime.trim()) {
     const numeric = Number(startTime);
-    if (Number.isFinite(numeric)) return numeric;
+    if (Number.isFinite(numeric)) return epochMs(numeric);
     const parsed = Date.parse(startTime);
     if (Number.isFinite(parsed)) return parsed;
   }
@@ -69,6 +69,11 @@ export function startMs(startTime?: number | string | null, startTimeIso?: strin
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
+}
+
+function epochMs(value: number): number {
+  // TXLine returns Unix seconds, while browser Date APIs expect milliseconds.
+  return Math.abs(value) < 10_000_000_000 ? value * 1000 : value;
 }
 
 export function fmtKickoff(startTime?: number | string | null, startTimeIso?: string | null): string {

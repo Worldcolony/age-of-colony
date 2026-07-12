@@ -33,7 +33,14 @@ Optional:
 ```bash
 export TXLINE_BASE_URL="https://txline.txodds.com"
 export TXLINE_COMPETITION_ID="123"
+export TXLINE_SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
+export TXLINE_VALIDATION_TIMEOUT_SECONDS="30"
 ```
+
+The admin dashboard can validate a finalized score against TxLINE's Solana
+Merkle root. The backend fetches the V2 stat proof, then runs
+`validateStatV2` as a read-only simulation: it does not submit a transaction
+or spend SOL. The current bridge supports mainnet proofs.
 
 OpenRouter colony agent:
 
@@ -57,13 +64,7 @@ export COLONY_AGENT_ANT_BATCH_SIZE="50"
 
 `COLONY_AGENT_MAX_PARALLEL_ANT_CALLS` controls how many ant calls can run at the same time. `OPENROUTER_MAX_RETRIES` retries transient DeepSeek/OpenRouter failures and malformed ant JSON, but it never replaces a vote with a local policy. `COLONY_AGENT_ANT_BATCH_SIZE` is only used when `COLONY_AGENT_CALL_MODE=batch` is selected for faster replay debugging. At the end of a run, the journal shows AI cost calculated from OpenRouter `usage` tokens and `OPENROUTER_INPUT_PRICE_PER_MILLION_USD` / `OPENROUTER_OUTPUT_PRICE_PER_MILLION_USD`.
 
-Admin/debug replay tools:
-
-```bash
-export AOC_ADMIN_TOKEN="long-random-secret"
-```
-
-When `AOC_ADMIN_TOKEN` is configured, replay/debug endpoints require the `x-aoc-admin-token` header. The public lobby does not link to `/admin`; admins can open `/admin` directly, enter the token, replay previous TXLine matches, and create multiple admin-only colonies for simulation.
+The replay/debug dashboard is currently open at `/admin` without a token. It can replay previous TXLine matches and create multiple admin-only colonies for simulation.
 
 ## Installation
 
@@ -95,7 +96,6 @@ Required Railway variables:
 TXLINE_JWT=...
 TXLINE_API_TOKEN=...
 OPENROUTER_API_KEY=...
-AOC_ADMIN_TOKEN=...
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
@@ -129,12 +129,6 @@ Admin persistence endpoints:
 - `GET /api/games/{game_id}`: current in-memory state, with Supabase fallback
 - `GET /api/games/{game_id}/replay`: current replay journal, with Supabase fallback
 
-When `AOC_ADMIN_TOKEN` is set, admin/debug endpoints must include:
-
-```bash
-x-aoc-admin-token: <AOC_ADMIN_TOKEN>
-```
-
 ## Useful Endpoints
 
 - `GET /api/fixtures`: TXLine fixtures with `date`, `start_epoch_day`, `competition_id`, and `search` filters
@@ -147,6 +141,8 @@ x-aoc-admin-token: <AOC_ADMIN_TOKEN>
 - `GET /api/scores/{fixture_id}/full?include_raw=true`: full package with raw TXLine records, timeline, inventory, and latest known state
 - `GET /api/scores/interval?date=YYYY-MM-DD&hour=12&interval=0`: historical updates for one 5-minute interval
 - `GET /api/live/events`: SSE proxy for the live TXLine score stream
+- `POST /api/admin/fixtures/{fixture_id}/txline-validation`: verify the final
+  `game_finalised` score with `validateStatV2` against the on-chain daily root
 
 ## Age of Colony Endpoints
 
@@ -157,6 +153,10 @@ x-aoc-admin-token: <AOC_ADMIN_TOKEN>
 - `GET /api/games/{game_id}`: current room state
 - `GET /api/games/{game_id}/events`: SSE stream of votes, predictions, settlements, and leaderboard updates
 - `GET /api/games/{game_id}/replay`: full journal for debugging and replayability
+- `GET /api/games/{game_id}/colonies/{colony_id}/ants`: owned colony roster with effective per-ant strategies and performance
+- `GET /api/games/{game_id}/colonies/{colony_id}/ants/{ant_id}`: one ant's persisted bet ledger, exact strategy snapshots, reasons, and strategy-change history
+- `PATCH /api/games/{game_id}/colonies/{colony_id}/strategy`: change the colony orders for the next market window
+- `PATCH /api/games/{game_id}/colonies/{colony_id}/ants/{ant_id}/strategy`: override one living ant or return it to the colony strategy
 - `GET /api/fixtures/recent`: recent completed fixtures, filterable by competition/search
 - `POST /api/games/run-previous`: find the latest completed fixture with TXLine data and run Age of Colony on it
 - `GET /api/demo/matches`: list demo matches available without TXLine credentials
@@ -183,12 +183,13 @@ V0 markets exposed to agents:
 - each ant votes one of the market's exposed choices, such as `yes/no/abstain` or `option_a/option_b/option_c/abstain`
 - concrete paid info is disabled for now
 
-V0 colony resources:
+V0 colony economy:
 
-- alive ants
-- wounded ants
-- food
-- larvae
+- `food` is the single spendable resource: correct calls earn `ant support × payout`; wrong calls lose `ant support × loss rate`
+- the maximum possible loss is reserved while a call is open, so the same food cannot back several risks at once
+- food also pays colony upkeep every `24` match events; a food shortage removes ants
+- alive ants provide the votes a colony can use on each market
+- wounded ants and larvae remain reserved for a later gameplay pass and are not presented as active resources in the cockpit
 
 Starting configuration:
 
@@ -196,6 +197,9 @@ Starting configuration:
 - dominant style: `cautious`, `balanced`, `aggressive`
 - favorite ground: `penalties`, `corners`, `momentum`, `chaos`, `balanced`
 - info need: `low`, `medium`, `high`
+- colony orders can be changed during a live match and apply from the next market window
+- each ant follows the colony orders by default and can receive an individual override during the match
+- each committed ant bet records the selected option, reason, food exposure, strategy revision, and final won/lost/void result in the durable game journal
 
 In the interface:
 

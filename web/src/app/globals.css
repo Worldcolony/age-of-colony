@@ -4,11 +4,11 @@
 @theme {
   --color-ink: #2c2820;
   --color-ink-soft: #5e5440;
-  --color-ink-faint: #8c7e60;
+  --color-ink-faint: #716348;
   --color-gold: #b07e1c;
   --color-gold-deep: #876012;
-  --color-green: #4e7e2a;
-  --color-rust: #c25a3a;
+  --color-green: #456f25;
+  --color-rust: #a9462f;
   --color-parch: #f3ebd3;
   --color-parch-strong: #f9f3e2;
   --color-slot: #e4dac1;
@@ -16,7 +16,7 @@
   --color-danger: #b42318;
 
   /* legacy accent names remapped to warm tones so existing utilities stay warm */
-  --color-cyan: #b07e1c;   /* → gold */
+  --color-cyan: #876012;   /* → gold-deep for readable small text */
   --color-lime: #4e7e2a;   /* → green */
   --color-magenta: #c25a3a; /* → rust */
   --color-amber: #876012;  /* → gold-deep */
@@ -120,7 +120,7 @@ body {
   }
   .btn:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(90, 70, 30, 0.4); }
   .btn:disabled { opacity: 0.5; filter: grayscale(0.3); pointer-events: none; }
-  .btn-primary { background: var(--color-gold); border-color: var(--color-gold-deep); color: #fff8e8; }
+  .btn-primary { background: var(--color-gold); border-color: var(--color-gold-deep); color: #261a05; }
   .btn-primary:hover { filter: brightness(1.05); }
   .btn-magenta { background: var(--color-rust); border-color: #9a3f26; color: #fff3ec; }
   .btn-ghost { background: rgba(249, 243, 226, 0.62); color: var(--color-ink-soft); box-shadow: none; }
@@ -160,7 +160,7 @@ body {
     transition: all 0.1s ease;
     cursor: pointer;
   }
-  .seg button[data-active="true"] { background: var(--color-gold); color: #fff8e8; box-shadow: var(--pixel-shadow); }
+  .seg button[data-active="true"] { background: var(--color-gold); color: #261a05; box-shadow: var(--pixel-shadow); }
 
   .chip {
     padding: 8px 13px;
@@ -184,8 +184,8 @@ body {
   }
   .icon-btn {
     display: inline-grid;
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
     place-items: center;
     border-radius: var(--radius-glass);
     border: 2px solid var(--brd-strong);
@@ -257,10 +257,36 @@ body {
     border: 2px solid var(--brd-soft);
     border-radius: var(--radius-glass);
   }
+  .resource-granary {
+    background:
+      linear-gradient(90deg, transparent 0 74%, rgba(176, 126, 28, 0.08) 74% 77%, transparent 77%),
+      repeating-linear-gradient(0deg, rgba(176, 126, 28, 0.08) 0 2px, transparent 2px 9px),
+      rgba(255, 250, 236, 0.82);
+  }
+  .resource-rules summary::marker { color: var(--color-gold-deep); }
 }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-rust); animation: pulse 1.1s infinite; }
+
+/* live orders leave a short pheromone trace across the command parchment */
+.colony-command-panel::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 16px;
+  width: 92px;
+  height: 4px;
+  background: repeating-linear-gradient(90deg, var(--color-gold-deep) 0 8px, transparent 8px 13px);
+  box-shadow: 2px 2px 0 rgba(74, 58, 30, 0.18);
+  pointer-events: none;
+}
+.colony-command-disclosure { animation: command-unfold 160ms ease-out both; }
+.ant-order-editor { background: rgba(249, 243, 226, 0.58); }
+@keyframes command-unfold {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* readability scrim over the 3D world — sunlit parchment haze, not a dark wash */
 .scrim {
@@ -295,6 +321,7 @@ body {
   .ant-march > span { animation: none; }
   .live-dot { animation: none; }
   .blink { animation: none; }
+  .colony-command-disclosure { animation: none; }
 }
 
 /* parchment bottom tab bar */
@@ -329,7 +356,7 @@ body {
   color: var(--color-ink-faint);
 }
 .tabbar a .ic { font-size: 19px; line-height: 1; filter: grayscale(0.55) opacity(0.75); }
-.tabbar a[data-active="true"] { background: var(--color-gold); color: #fff8e8; box-shadow: var(--pixel-shadow); }
+.tabbar a[data-active="true"] { background: var(--color-gold); color: #261a05; box-shadow: var(--pixel-shadow); }
 .tabbar a[data-active="true"] .ic { filter: none; }
 .tabbar a[data-disabled="true"] { opacity: 0.4; pointer-events: none; }
 
