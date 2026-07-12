@@ -1215,7 +1215,54 @@ async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=
             "games": games[:limit],
             "hint": "Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to persist admin games.",
         }
-    return await asyncio.to_thread(supabase_store.list_games, limit=limit)
+    stored_payload = await asyncio.to_thread(supabase_store.list_games, limit=limit)
+    payload = stored_payload if isinstance(stored_payload, dict) else {}
+    stored_games = payload.get("games")
+    if not isinstance(stored_games, list):
+        stored_games = []
+    games = [
+        game
+        for row in stored_games
+        if (game := _admin_game_public_state(row)) is not None
+    ]
+    return {**payload, "count": len(games), "games": games}
+
+
+def _admin_game_public_state(row: Any) -> dict[str, Any] | None:
+    """Flatten a persisted Supabase row into the public GameState contract."""
+    if not isinstance(row, dict):
+        return None
+    stored_public_state = row.get("public_state")
+    state = dict(stored_public_state) if isinstance(stored_public_state, dict) else {}
+    game_id = state.get("gameId") or row.get("game_id") or row.get("gameId")
+    if not game_id:
+        return None
+
+    fallback_fields = {
+        "fixtureId": "fixture_id",
+        "participant1": "participant1",
+        "participant2": "participant2",
+        "status": "status",
+        "mode": "mode",
+        "eventIndex": "event_index",
+        "agentUsage": "agent_usage",
+    }
+    for public_key, stored_key in fallback_fields.items():
+        if state.get(public_key) is None and row.get(stored_key) is not None:
+            state[public_key] = row[stored_key]
+
+    state["gameId"] = str(game_id)
+    state["status"] = str(state.get("status") or "created")
+    try:
+        state["eventIndex"] = int(state.get("eventIndex") or 0)
+    except (TypeError, ValueError):
+        state["eventIndex"] = 0
+    for collection_key in ("players", "colonies", "activeOpportunities"):
+        if not isinstance(state.get(collection_key), list):
+            state[collection_key] = []
+    if not isinstance(state.get("match"), dict):
+        state["match"] = {"score": None}
+    return state
 
 
 def _stored_game_can_resume_live(stored_game: dict[str, Any]) -> bool:

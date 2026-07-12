@@ -3710,6 +3710,48 @@ class DemoRunApiTest(unittest.TestCase):
             self.assertEqual(len(admin_room["colonies"]), 3)
             self.assertEqual([colony["name"] for colony in admin_room["colonies"]], ["Admin Scout", "Admin Guard", "Admin Rush"])
 
+    def test_admin_games_flattens_supabase_rows_for_the_dashboard(self):
+        class StoredAdminGames:
+            configured = True
+
+            def list_games(self, *, limit):
+                return {
+                    "source": "supabase",
+                    "configured": True,
+                    "count": 2,
+                    "games": [
+                        {
+                            "game_id": "game_stored_admin",
+                            "fixture_id": "4242",
+                            "status": "finished",
+                            "event_index": 18,
+                            "public_state": {
+                                "participant1": "France",
+                                "participant2": "Japan",
+                                "colonies": [{"colonyId": "col_1", "name": "Stored Nest"}],
+                            },
+                        },
+                        {"public_state": "invalid"},
+                    ],
+                }
+
+        with patch("app.main.supabase_store", StoredAdminGames()):
+            response = TestClient(app).get("/api/admin/games")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(len(payload["games"]), 1)
+        game = payload["games"][0]
+        self.assertEqual(game["gameId"], "game_stored_admin")
+        self.assertEqual(game["fixtureId"], "4242")
+        self.assertEqual(game["status"], "finished")
+        self.assertEqual(game["eventIndex"], 18)
+        self.assertEqual(game["colonies"][0]["name"], "Stored Nest")
+        self.assertEqual(game["players"], [])
+        self.assertEqual(game["activeOpportunities"], [])
+        self.assertEqual(game["match"], {"score": None})
+
     def test_admin_replay_fixtures_only_returns_matches_with_score_data(self):
         class FakeTxLineClient:
             async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):

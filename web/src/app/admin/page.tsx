@@ -48,6 +48,45 @@ function freshDefaultColonies(): AdminColonyDraft[] {
   return DEFAULT_ADMIN_COLONIES.map((colony) => ({ ...colony }));
 }
 
+function normalizeAdminGames(value: unknown): GameState[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(normalizeAdminGame)
+    .filter((game): game is GameState => game !== null);
+}
+
+function normalizeAdminGame(value: unknown): GameState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const nested = row.public_state;
+  const state = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : row;
+  const gameId = state.gameId ?? row.game_id ?? row.gameId;
+  if (gameId == null || String(gameId).trim() === "") return null;
+
+  const eventIndex = Number(state.eventIndex ?? row.event_index ?? 0);
+  const match = state.match && typeof state.match === "object" && !Array.isArray(state.match)
+    ? state.match as GameState["match"]
+    : { score: null };
+  return {
+    ...(state as Partial<GameState>),
+    gameId: String(gameId),
+    fixtureId: (state.fixtureId ?? row.fixture_id) as GameState["fixtureId"],
+    participant1: (state.participant1 ?? row.participant1 ?? null) as GameState["participant1"],
+    participant2: (state.participant2 ?? row.participant2 ?? null) as GameState["participant2"],
+    status: String(state.status ?? row.status ?? "created"),
+    mode: (state.mode ?? row.mode ?? null) as GameState["mode"],
+    eventIndex: Number.isFinite(eventIndex) ? eventIndex : 0,
+    players: Array.isArray(state.players) ? state.players as GameState["players"] : [],
+    colonies: Array.isArray(state.colonies) ? state.colonies as GameState["colonies"] : [],
+    activeOpportunities: Array.isArray(state.activeOpportunities)
+      ? state.activeOpportunities as GameState["activeOpportunities"]
+      : [],
+    match,
+  };
+}
+
 export default function AdminPage() {
   const router = useRouter();
   const resetGame = useStore((s) => s.resetGame);
@@ -177,7 +216,7 @@ export default function AdminPage() {
 
   async function loadGames() {
     const data = await api.adminGames(50);
-    setGames(data.games ?? []);
+    setGames(normalizeAdminGames(data.games));
   }
 
   async function refreshDashboard() {
