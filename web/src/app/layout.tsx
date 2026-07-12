@@ -4,6 +4,8 @@ import "./globals.css";
 import WorldColonyBackdrop from "@/three/WorldColonyBackdrop";
 import { BottomNav } from "@/components/BottomNav";
 import { QueenSync } from "@/lib/queen";
+import { WalletProvider } from "@/hooks/useWallet";
+import { WalletHudButton } from "@/components/WalletHudButton";
 
 const pixelify = Pixelify_Sans({ weight: ["400", "500", "600", "700"], subsets: ["latin"], variable: "--font-pixelify" });
 const pressStart = Press_Start_2P({ weight: "400", subsets: ["latin"], variable: "--font-press" });
@@ -25,13 +27,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${pixelify.variable} ${pressStart.variable} ${silkscreen.variable}`}>
       <body>
-        <WorldColonyBackdrop />
-        <div aria-hidden className="scrim" />
-        <div className="app-shell relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-[110px] pt-3">
-          {children}
-        </div>
-        <BottomNav />
-        <QueenSync />
+        <WalletProvider>
+          <WorldColonyBackdrop />
+          <div aria-hidden className="scrim" />
+          <WalletHudButton />
+          <div className="app-shell relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-[110px] pt-3">
+            {children}
+          </div>
+          <BottomNav />
+          <QueenSync />
+        </WalletProvider>
       </body>
     </html>
   );

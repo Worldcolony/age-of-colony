@@ -2,6 +2,7 @@
 // The world runs isolated in an iframe (/world.html); this posts game state
 // into it so rooms and colonies exist as real 3D mounds, not just panels.
 import type { Colony } from "@/lib/types";
+import { colonySugar } from "@/lib/sugar";
 
 export interface WorldColonyPayload {
   id: string;
@@ -10,6 +11,7 @@ export interface WorldColonyPayload {
   ants?: number;
   size?: number;
   food?: number;
+  sugar?: number;
   accuracy?: number;
   score?: number;
 }
@@ -34,7 +36,8 @@ export function colonyPayload(colony: Colony, index: number): WorldColonyPayload
     accent: ACCENTS[index % ACCENTS.length],
     ants: colony.antsAlive,
     size: colony.size,
-    food: colony.food,
+    food: colonySugar(colony),
+    sugar: colonySugar(colony),
     accuracy: colony.accuracy,
     score: colony.score,
   };
@@ -54,7 +57,7 @@ export const worldLink = {
   pulse(n = 1) {
     post({ type: "aoc:pulse", n });
   },
-  /** Floating combat text over a mound: "+12 food", "-3 ants", "market open". */
+  /** Floating combat text over a mound: "+12 Sugar", "market open". */
   fx(colonyId: string | null, kind: "gain" | "loss" | "market" | "info" | "rally" | "death" | "recall" | "switch" | "victory", text: string) {
     post({ type: "aoc:fx", id: colonyId ?? undefined, kind, text });
   },

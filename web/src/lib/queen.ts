@@ -4,8 +4,7 @@
 // fallback (used when the engine or its queen store is unreachable).
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, queenAuthMessage, type QueenAuth } from "@/lib/api";
-import { signWalletMessage } from "@/hooks/useWallet";
+import { api, ApiError } from "@/lib/api";
 import { useStore } from "@/store/game";
 
 export interface Queen {
@@ -43,13 +42,6 @@ export function removeQueenLocal(pubkey: string): void {
 
 function applyName(name: string | null) {
   useStore.getState().setWallet({ name });
-}
-
-// Sign the ownership challenge (message format must match app/queen_auth.py).
-async function signQueenChallenge(pubkey: string): Promise<QueenAuth> {
-  const ts = Math.floor(Date.now() / 1000);
-  const signature = await signWalletMessage(queenAuthMessage(pubkey, ts));
-  return { signature, ts };
 }
 
 // Loads the wallet's queen (server-first, local fallback) and mirrors her
@@ -123,15 +115,14 @@ export function useQueen() {
       setSource("local");
       applyName(full.name);
       try {
-        const auth = await signQueenChallenge(pk); // Phantom popup: prove the throne is yours
-        const remote = await api.putQueen(pk, { name: q.name, motto: q.motto, emblem: q.emblem }, auth);
+        const remote = await api.putQueen(pk, { name: q.name, motto: q.motto, emblem: q.emblem });
         const merged: Queen = { ...full, crownedAt: remote.crownedAt ?? full.crownedAt };
         saveQueenLocal(pk, merged);
         setQueen(merged);
         setSource("server");
         return merged;
       } catch {
-        return full; // signature declined / engine offline — local cache holds her
+        return full; // expired session / engine offline — local cache holds her
       }
     },
     [wallet.pubkey],
@@ -145,10 +136,9 @@ export function useQueen() {
     setSource(null);
     applyName(null);
     try {
-      const auth = await signQueenChallenge(pk);
-      await api.deleteQueen(pk, auth);
+      await api.deleteQueen(pk);
     } catch {
-      /* signature declined or offline — server copy stays; local is cleared */
+      /* expired session or offline — server copy stays; local is cleared */
     }
   }, [wallet.pubkey]);
 

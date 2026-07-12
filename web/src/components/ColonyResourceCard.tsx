@@ -1,3 +1,5 @@
+import { colonyAvailableSugar, colonyReservedSugar, colonySugar, colonySugarNet } from "@/lib/sugar";
+import { optionLabel, STYLE_OPTIONS } from "@/lib/strategy";
 import type { Colony } from "@/lib/types";
 
 export function ColonyResourceCard({
@@ -10,74 +12,54 @@ export function ColonyResourceCard({
   spectator?: boolean;
 }) {
   if (!colony) {
-    return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete.</div>;
+    return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete for Sugar.</div>;
   }
 
-  const economy = colony.economy;
-  const food = economy?.balance ?? colony.food ?? 0;
-  const reserved = economy?.reserved ?? 0;
-  const available = economy?.available ?? Math.max(0, food - reserved);
-  const foodNet = economy?.net ?? colony.foodNet ?? food - 20;
-  const upkeep = economy?.upkeepCost ?? Math.max(1, Math.ceil((colony.antsAlive ?? 0) / 50));
-  const upkeepEvery = economy?.upkeepEveryEvents ?? 24;
-  const nextUpkeep = economy?.nextUpkeepInEvents ?? upkeepEvery;
-  const runway = economy?.runwayUpkeeps ?? (upkeep > 0 ? Math.floor(available / upkeep) : null);
-  const status = economy?.status ?? (available <= upkeep ? "critical" : available <= upkeep * 3 ? "watch" : "stable");
-  const runwayWidth = runway == null ? 100 : Math.max(4, Math.min(100, (runway / 12) * 100));
-  const statusCopy = status === "critical" ? "critical" : status === "watch" ? "watch" : "steady";
-  const statusClass = status === "critical"
-    ? "!border-rust/60 !text-rust"
-    : status === "watch"
-      ? "!border-gold/60 !text-gold-deep"
-      : "!border-green/50 !text-green";
+  const sugar = colonySugar(colony);
+  const reserved = colonyReservedSugar(colony);
+  const available = colonyAvailableSugar(colony);
+  const net = colonySugarNet(colony);
+  const temperament = optionLabel(STYLE_OPTIONS, colony.style);
 
   return (
-    <section className="glass bracket overflow-hidden p-4" aria-labelledby="colony-reserves-title">
+    <section className="glass bracket overflow-hidden p-4" aria-labelledby="colony-sugar-title">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="eyebrow">Colony reserves</p>
-          <h2 id="colony-reserves-title" className="text-base font-bold">Food keeps every order alive</h2>
+          <p className="eyebrow">{spectator ? "Selected colony" : "Your colony"}</p>
+          <h2 id="colony-sugar-title" className="text-base font-bold">Most Sugar wins the match</h2>
         </div>
-        <span className={`status-pill ${statusClass}`}>{statusCopy}</span>
+        <span className="status-pill !border-green/50 !text-green">#{rank || "–"}</span>
       </div>
 
-      <div className="mt-4 grid grid-cols-[1.25fr_1fr] gap-3">
-        <div className="resource-granary rounded-md border-2 border-[color:rgba(176,126,28,0.48)] p-3">
-          <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-gold-deep">Food bank</p>
-          <p className="mt-1 flex items-baseline gap-2" aria-live="polite" aria-atomic="true">
-            <strong className="font-mono text-4xl text-ink">{food}</strong>
-            <span className={`font-mono text-xs font-bold ${foodNet < 0 ? "text-rust" : "text-green"}`}>
-              {foodNet > 0 ? "+" : ""}{foodNet} net
-            </span>
-          </p>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-[rgba(74,58,30,0.16)]" aria-hidden="true">
-            <span
-              className={`block h-full rounded-full ${status === "critical" ? "bg-rust" : status === "watch" ? "bg-gold" : "bg-green"}`}
-              style={{ width: `${runwayWidth}%` }}
-            />
+      <div className="resource-granary mt-4 rounded-md border-2 border-[color:rgba(176,126,28,0.48)] p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-gold-deep">Sugar</p>
+            <p className="mt-1 flex items-baseline gap-2" aria-live="polite" aria-atomic="true">
+              <strong className="font-mono text-4xl text-ink">{sugar}</strong>
+              <span className={`font-mono text-xs font-bold ${net < 0 ? "text-rust" : "text-green"}`}>
+                {net > 0 ? "+" : ""}{net} this match
+              </span>
+            </p>
           </div>
-          <p className="mt-2 text-[11px] font-bold text-ink-faint">
-            {runway == null ? "No upkeep while the colony is empty" : `${runway} upkeep cycle${runway === 1 ? "" : "s"} covered`}
-          </p>
-          <p className="mt-1 text-[11px] text-ink-faint">
-            {available} available{reserved > 0 ? ` · ${reserved} backing open calls` : " · nothing locked"}
-          </p>
+          <div className="text-right text-xs font-bold text-ink-faint">
+            <p>{available} available</p>
+            <p>{reserved > 0 ? `${reserved} backing open calls` : "No Sugar at risk"}</p>
+          </div>
         </div>
+      </div>
 
-        <div className="grid grid-cols-2 gap-2 text-center">
-          <ResourceMetric label="Rank" value={`#${rank || "–"}`} tone="gold" />
-          <ResourceMetric label={spectator ? "Lead ants" : "Ants"} value={colony.antsAlive ?? 0} />
-          <ResourceMetric label="Upkeep" value={`-${upkeep}`} />
-          <ResourceMetric label="Due in" value={`${nextUpkeep} ev`} />
-        </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+        <ResourceMetric label="Temperament" value={temperament} tone="gold" />
+        <ResourceMetric label="Fixed voters" value={`${colony.size || 20} ants`} />
       </div>
 
       <details className="resource-rules mt-3 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.66)] p-3">
-        <summary className="cursor-pointer text-sm font-bold text-ink-soft">How food works</summary>
+        <summary className="cursor-pointer text-sm font-bold text-ink-soft">How a colony enters a market</summary>
         <div className="mt-3 grid gap-2 text-xs leading-relaxed text-ink-soft">
-          <p><b className="text-green">Win:</b> ant support × the market payout adds food.</p>
-          <p><b className="text-rust">Risk:</b> ant support × the displayed loss rate is locked until the result, then returned on a win or removed on a loss.</p>
-          <p><b className="text-gold-deep">Upkeep:</b> {upkeep} food every {upkeepEvery} match events. No food means no new backing; a shortage costs ants.</p>
+          <p><b className="text-gold-deep">1. Vote:</b> the colony&apos;s fixed ants choose an outcome or pass.</p>
+          <p><b className="text-green">2. Consensus:</b> the colony enters only when support clears its temperament threshold.</p>
+          <p><b className="text-rust">3. Result:</b> a correct call adds the displayed Sugar reward; a miss removes the displayed Sugar risk.</p>
         </div>
       </details>
     </section>

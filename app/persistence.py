@@ -70,6 +70,7 @@ class SupabaseGameStore:
             "participant1": room.participant1,
             "participant2": room.participant2,
             "owner_anonymous_id": getattr(room, "owner_anonymous_id", None),
+            "owner_wallet": getattr(room, "owner_wallet", None),
             "owner_name": getattr(room, "owner_name", None),
             "status": room.status,
             "mode": room.mode,
@@ -91,6 +92,7 @@ class SupabaseGameStore:
                 raise
             legacy_row = dict(row)
             legacy_row.pop("owner_anonymous_id", None)
+            legacy_row.pop("owner_wallet", None)
             legacy_row.pop("owner_name", None)
             self._request_json(
                 "aoc_games?on_conflict=game_id",
@@ -111,7 +113,7 @@ class SupabaseGameStore:
                 "event_index": int(event.index),
                 "kind": event.kind,
                 "message": event.message,
-                "data": _json_safe(event.data),
+                "data": _json_safe(event.public_state().get("data", {})),
                 "created_at_unix": float(event.created_at),
             }
             for event in room.log
@@ -163,6 +165,7 @@ class SupabaseGameStore:
                 "participant1",
                 "participant2",
                 "owner_anonymous_id",
+                "owner_wallet",
                 "owner_name",
                 "status",
                 "mode",
@@ -211,6 +214,8 @@ class SupabaseGameStore:
                 "fixture_id",
                 "participant1",
                 "participant2",
+                "owner_anonymous_id",
+                "owner_name",
                 "status",
                 "mode",
                 "seed",
@@ -388,4 +393,4 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _missing_owner_columns(detail: str) -> bool:
-    return "owner_anonymous_id" in detail or "owner_name" in detail
+    return "owner_anonymous_id" in detail or "owner_wallet" in detail or "owner_name" in detail

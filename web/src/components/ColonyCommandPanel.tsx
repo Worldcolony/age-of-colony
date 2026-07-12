@@ -598,7 +598,7 @@ function AntDetailPanel({
         <div role="tabpanel" className="grid gap-3">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs leading-relaxed text-ink-faint">
-              Food belongs to the colony. Each row shows this ant&apos;s vote and the colony position it joined.
+              Sugar belongs to the colony. Each row shows this ant&apos;s vote and the colony position it joined.
             </p>
             <button
               type="button"
@@ -678,10 +678,10 @@ function AntBetLedger({ bets }: { bets: AntBet[] }) {
             </div>
             <div className="well min-w-[132px] px-3 py-2 text-right">
               <p className="text-[10px] font-bold uppercase tracking-wide text-ink-faint">
-                {bet.status === "open" ? "Food at risk" : "Colony impact"}
+                {bet.status === "open" ? "Sugar at risk" : "Colony impact"}
               </p>
               <p className={`font-mono text-lg font-bold ${foodTone(bet)}`}>
-                {bet.status === "open" ? formatFood(bet.foodAtRisk) : formatSignedFood(bet.colonyFoodDelta)}
+                {bet.status === "open" ? formatFood(bet.sugarAtRisk ?? bet.foodAtRisk) : formatSignedFood(bet.colonySugarDelta ?? bet.colonyFoodDelta)}
               </p>
               <p className="text-[10px] text-ink-faint">{bet.voteCount} ant vote{bet.voteCount === 1 ? "" : "s"}</p>
             </div>
@@ -991,13 +991,13 @@ function foodTone(bet: AntBet): string {
 
 function formatFood(value: number | null | undefined): string {
   if (value == null) return "—";
-  return `${formatNumber(value)} food`;
+  return `${formatNumber(value)} Sugar`;
 }
 
 function formatSignedFood(value: number | null | undefined): string {
   if (value == null) return "—";
   const prefix = value > 0 ? "+" : "";
-  return `${prefix}${formatNumber(value)} food`;
+  return `${prefix}${formatNumber(value)} Sugar`;
 }
 
 function formatNumber(value: number): string {

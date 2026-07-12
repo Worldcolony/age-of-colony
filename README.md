@@ -37,6 +37,22 @@ export TXLINE_SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
 export TXLINE_VALIDATION_TIMEOUT_SECONDS="30"
 ```
 
+Player rooms use Phantom as the player identity. The wallet signs one short
+login message, which the backend exchanges for an HttpOnly session cookie.
+This flow never creates a Solana transaction, never asks for a payment, and
+never spends SOL. Configure a stable secret of at least 32 bytes in production:
+
+```bash
+export WALLET_SESSION_SECRET="..."
+export WALLET_AUTH_DOMAIN="your-age-of-colony-domain.example"
+export WALLET_AUTH_URI="https://your-age-of-colony-domain.example"
+```
+
+The default session lasts one hour. `WALLET_SESSION_TTL_SECONDS` and
+`WALLET_CHALLENGE_TTL_SECONDS` can override the defaults. If the session secret
+is absent, development still works with a process-local secret, but wallet
+sessions are invalidated when the backend restarts.
+
 The admin dashboard can validate a finalized score against TxLINE's Solana
 Merkle root. The backend fetches the V2 stat proof, then runs
 `validateStatV2` as a read-only simulation: it does not submit a transaction
@@ -96,6 +112,8 @@ Required Railway variables:
 TXLINE_JWT=...
 TXLINE_API_TOKEN=...
 OPENROUTER_API_KEY=...
+WALLET_SESSION_SECRET=...
+WALLET_COOKIE_SECURE=true
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
@@ -171,35 +189,55 @@ TXLine event
 -> individual ant votes via DeepSeek/OpenRouter
 -> explicit error if DeepSeek/OpenRouter is unavailable
 -> ant commitment
--> settlement + food/larvae/losses/memory
+-> settlement + Sugar + memory
 ```
 
 V0 markets exposed to agents:
 
-- safe bet: `will there be a goal in the next 10 minutes?`, including stoppage time
-- precision bet: `who scores the next goal?` with team A, team B, or no goal before deadline
-- chaos bet: `who commits the next foul?`; no foul before the deadline voids the market
-- hero bet: `is the penalty scored?`; goal is safer, missed/saved is rarer and pays more
+- `will there be a goal in the next 10 minutes?`, including stoppage time
+- `who scores the next goal?`, with team A, team B, or no goal before full time
+- `who wins the next corner?`, with team A, team B, or no corner before full time
+- `who wins the next free kick?`, with team A, team B, or no free kick before full time
+- `who gets the next yellow card?`, with team A, team B, or no card before full time
+- `is the penalty scored?`; a miss or save is rarer and earns more Sugar
 - each ant votes one of the market's exposed choices, such as `yes/no/abstain` or `option_a/option_b/option_c/abstain`
 - concrete paid info is disabled for now
 
 V0 colony economy:
 
-- `food` is the single spendable resource: correct calls earn `ant support × payout`; wrong calls lose `ant support × loss rate`
-- the maximum possible loss is reserved while a call is open, so the same food cannot back several risks at once
-- food also pays colony upkeep every `24` match events; a food shortage removes ants
-- alive ants provide the votes a colony can use on each market
-- wounded ants and larvae remain reserved for a later gameplay pass and are not presented as active resources in the cockpit
+- **Sugar is the score and the only resource.** Every colony starts with `20 Sugar`; the public API exposes `sugar`, while `food` remains a compatibility alias.
+- entering any market reserves exactly `2 Sugar`, regardless of how many ants support the call
+- a colony can reserve at most `10 Sugar` at once, so it can hold at most five open positions
+- a loss removes the reserved `2 Sugar`; a void releases it; a win releases it and adds the market's fixed integer reward
+- supporting ant IDs are retained in the journal, but neither reward nor loss is multiplied by the number of supporting ants
+- several markets may remain open at the same time, and the same ant may support more than one market
+- there is no upkeep, starvation, ant death, wound, larva, hatch, or ant-purchase loop in Sugar V0
+
+Fixed V0 rewards:
+
+| Market result | Reward |
+| --- | ---: |
+| Penalty scored | `+1 Sugar` |
+| Penalty missed or saved | `+5 Sugar` |
+| Goal in the next 10 minutes | `+4 Sugar` |
+| No goal in the next 10 minutes | `+1 Sugar` |
+| Team scores the next goal | `+4 Sugar` |
+| No goal before full time | `+1 Sugar` |
+| Team wins the next corner | `+2 Sugar` |
+| No corner before full time | `+1 Sugar` |
+| Team wins the next free kick | `+2 Sugar` |
+| No free kick before full time | `+1 Sugar` |
+| Team gets the next yellow card | `+3 Sugar` |
+| No yellow card before full time | `+1 Sugar` |
 
 Starting configuration:
 
-- fair start: every colony begins with `20` ants and `20` food
-- dominant style: `cautious`, `balanced`, `aggressive`
-- favorite ground: `penalties`, `corners`, `momentum`, `chaos`, `balanced`
-- info need: `low`, `medium`, `high`
-- colony orders can be changed during a live match and apply from the next market window
-- each ant follows the colony orders by default and can receive an individual override during the match
-- each committed ant bet records the selected option, reason, food exposure, strategy revision, and final won/lost/void result in the durable game journal
+- fair start: every colony begins with exactly `20` ants and `20 Sugar`; requested legacy sizes do not change the roster
+- the V0 player setup asks only for a temperament: `cautious`, `balanced`, or `aggressive`
+- a colony enters a market when the top raw ant vote reaches its style threshold: cautious `70%`, balanced `60%`, aggressive `51%`; reaching the threshold exactly is enough
+- if two options share the top raw vote count, the colony observes and does not enter the market
+- `favoriteContext`, `infoNeed`, live strategy patches, and per-ant overrides remain compatibility/debug API fields; they are not part of the core Sugar V0 player rules
+- each committed ant bet records its supporting ants, selected option, `2 Sugar` exposure, strategy revision, consensus, entry threshold, and final won/lost/void result in the durable game journal
 
 In the interface:
 
@@ -208,3 +246,13 @@ In the interface:
 - **Run replay** starts the active admin room in replay mode; the journal fills while ants vote and settlements resolve
 
 The raw TXLine explorer endpoints remain available for debugging, but the main page now focuses on the playable colony loop.
+
+### Local Sugar balance playtest
+
+Run the production market engine with deterministic local voters and no network or LLM calls:
+
+```bash
+python3 tools/playtest_sugar.py --runs 300 --policies all --seed 20260712
+```
+
+The report compares temperament entry rates, final Sugar distributions, first-place share, Sugar per entry, observation reasons, contexts, and reward break-even sums. It uses the single bundled demo timeline, so it is a reproducible integration/sensitivity test rather than evidence of real football probabilities.

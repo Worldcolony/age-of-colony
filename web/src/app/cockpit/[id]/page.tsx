@@ -1,39 +1,37 @@
 "use client";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
-import { getAnonId } from "@/lib/anon";
+import { findIdentityColony, usePlayerIdentity } from "@/lib/playerIdentity";
 import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
-import { isStrategyEditableStatus, strategySummary } from "@/lib/strategy";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
-import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
+import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
-const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, hatch: 1.6, game_started: 3 };
+const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, game_started: 3 };
 const MARKET_MEMORY_KINDS = new Set([
   "opportunity",
   "ant_agent_start",
   "ant_agent_vote",
   "vote",
   "prediction",
-  "rally",
-  "recall",
-  "switch",
+  "observe",
   "settlement",
   "void",
+  "market_closed",
   "markets_closed",
 ]);
 const KIND_EDGE: Record<string, string> = {
-  opportunity: "#b07e1c", markets_closed: "#b07e1c",
-  settlement: "#4e7e2a", hatch: "#4e7e2a", info_result: "#4e7e2a",
+  opportunity: "#b07e1c", market_closed: "#b07e1c", markets_closed: "#b07e1c",
+  settlement: "#4e7e2a", info_result: "#4e7e2a",
   vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
-  game_error: "#c25a3a", starvation: "#c25a3a", void: "#c25a3a",
-  rally: "#b07e1c", recall: "#3fa89f", switch: "#b07e1c",
+  observe: "#8c7e60",
+  game_error: "#c25a3a", void: "#c25a3a",
 };
 
 interface PublicVote {
@@ -42,7 +40,6 @@ interface PublicVote {
   agentDecisionCount?: number;
   aliveCount?: number;
   engagedCount?: number;
-  woundedCount?: number;
   voteCounts?: Record<string, number>;
   voteLabels?: Record<string, string>;
   predictions?: Record<string, { count?: number; weight?: number } | number>;
@@ -57,19 +54,17 @@ interface MarketModel {
   starts: GameEvent[];
   votes: GameEvent[];
   predictions: GameEvent[];
+  observations: GameEvent[];
   settlements: GameEvent[];
   voids: GameEvent[];
-  rallies: GameEvent[];
-  recalls: GameEvent[];
-  switches: GameEvent[];
+  closures: GameEvent[];
   lastIndex: number;
 }
 
 type CockpitTab = "live" | "settled" | "feed";
 
-// A row in the aggregated event stream — one or more consecutive raw engine
-// events of the same kind + colony, folded together so spam (e.g. four
-// starvation ticks in a row) reads as one legible line with a ×N count.
+// A row in the aggregated event stream — consecutive events of the same kind
+// and colony are folded together so the live feed stays legible.
 interface FeedRow {
   key: string;
   kind: string;
@@ -88,6 +83,7 @@ interface ColonyMarketActivity {
   stake: ReturnType<typeof colonyStake>;
   voteEvent?: GameEvent;
   predictionEvent?: GameEvent;
+  observeEvent?: GameEvent;
   settlementEvent?: GameEvent;
   voidEvent?: GameEvent;
   distribution: ReturnType<typeof aggregateVotes>;
@@ -114,27 +110,23 @@ function CockpitRun({ id }: { id: string }) {
   const myColonyId = useStore((s) => s.myColonyId);
   const setMyColonyId = useStore((s) => s.setMyColonyId);
   const mf = useStore((s) => s.matchFixture);
+  const identity = usePlayerIdentity();
 
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<CockpitTab>("live");
   const [sheetOpen, setSheetOpen] = useState(false); // map first — this is the game screen
-  const [mobileSheetView, setMobileSheetView] = useState<"board" | "ants">("board");
-  const [desktopCommandOpen, setDesktopCommandOpen] = useState(false);
+  const [mobileSheetView, setMobileSheetView] = useState<"board" | "colony">("board");
   const [cockpitLoading, setCockpitLoading] = useState(true);
   const [cockpitError, setCockpitError] = useState("");
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
-  const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
   const [watchedColonyId, setWatchedColonyId] = useState<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const snapshotRequestSequence = useRef(0);
   const snapshotReadyRef = useRef(false);
   const pendingStreamEventsRef = useRef<GameEvent[]>([]);
-  const desktopDialogRef = useRef<HTMLElement | null>(null);
-  const anonId = useMemo(() => getAnonId(), []);
-
   const { toasts, push } = useGameToasts();
   const mineIdRef = useRef<string | null>(null);
   const liveRef = useRef(false); // suppress fx/toasts while loading history
@@ -154,33 +146,18 @@ function CockpitRun({ id }: { id: string }) {
     const colonyId = typeof event.data?.colonyId === "string" ? event.data.colonyId : null;
     const isMine = Boolean(colonyId && colonyId === mineIdRef.current);
     if (event.kind === "settlement") {
-      const food = Number(event.data?.food ?? 0);
+      const sugar = Number(event.data?.sugar ?? event.data?.resourceDelta ?? event.data?.food ?? 0);
       const win = Boolean(event.data?.win);
-      const foodText = food > 0 ? `+${food} food` : food < 0 ? `${food} food` : win ? "safe call" : "missed";
-      worldLink.fx(colonyId, win ? "gain" : "loss", foodText);
+      const sugarText = sugar > 0 ? `+${sugar} Sugar` : sugar < 0 ? `${sugar} Sugar` : win ? "correct call" : "missed call";
+      worldLink.fx(colonyId, win ? "gain" : "loss", sugarText);
       if (isMine) {
         const label = (event.data?.option as { label?: string } | undefined)?.label ?? "market";
-        push(`${win ? "🏆" : "💀"} ${foodText} — ${label}`, win ? "gain" : "loss");
+        push(`${win ? "🍬" : "✕"} ${sugarText} — ${label}`, win ? "gain" : "loss");
       }
     } else if (event.kind === "opportunity") {
       const label = (event.data?.opportunity as Opportunity | undefined)?.label ?? event.message ?? "New market";
       worldLink.fx(null, "market", "🎯 market open");
       push(`🎯 ${cleanMarketLabel(String(label))} — ants are voting`, "market");
-    } else if (event.kind === "hatch") {
-      worldLink.fx(colonyId, "gain", "🥚 +larvae");
-      if (isMine) push("🥚 Your colony hatched new ants", "gain");
-    } else if (event.kind === "starvation") {
-      worldLink.fx(colonyId, "death", "☠️ −1 ant");
-      if (isMine) push("☠️ Your ants are starving — win markets to feed them", "loss");
-    } else if (event.kind === "rally") {
-      worldLink.fx(colonyId, "rally", "📣 rally!");
-      if (isMine) push(`📣 ${event.message}`, "market");
-    } else if (event.kind === "recall") {
-      worldLink.fx(colonyId, "recall", "🛡 recall");
-      if (isMine) push(`🛡 ${event.message}`, "market");
-    } else if (event.kind === "switch") {
-      worldLink.fx(colonyId, "switch", "🔀 pivot!");
-      if (isMine) push(`🔀 ${event.message}`, "market");
     } else if (event.kind === "game_finished") {
       push("🏁 Full time! Tap Ranks for the podium", "info");
       const winner = sortedRef.current[0];
@@ -227,7 +204,7 @@ function CockpitRun({ id }: { id: string }) {
         if (cancelled || requestId !== snapshotRequestSequence.current) return;
         setGame(replay.game);
         if (replay.game.status === "created") setSheetOpen(true);
-        const ownColony = findOwnColony(replay.game, anonId);
+        const ownColony = findIdentityColony(replay.game, identity.snapshot);
         if (ownColony) setMyColonyId(ownColony.colonyId);
         addEvents(replay.events ?? [], { historical: true });
         snapshotReadyRef.current = true;
@@ -243,7 +220,7 @@ function CockpitRun({ id }: { id: string }) {
           if (cancelled || requestId !== snapshotRequestSequence.current) return;
           setGame(g);
           if (g.status === "created") setSheetOpen(true);
-          const ownColony = findOwnColony(g, anonId);
+          const ownColony = findIdentityColony(g, identity.snapshot);
           if (ownColony) setMyColonyId(ownColony.colonyId);
           snapshotReadyRef.current = true;
           const pendingStreamEvents = pendingStreamEventsRef.current.splice(0);
@@ -297,15 +274,12 @@ function CockpitRun({ id }: { id: string }) {
     },
   });
 
-  const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => (b.score || 0) - (a.score || 0)), [game?.colonies]);
+  const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => colonySugar(b) - colonySugar(a)), [game?.colonies]);
   useEffect(() => {
     sortedRef.current = sorted;
   }, [sorted]);
-  const ownColony = useMemo(() => findOwnColony(game, anonId), [game, anonId]);
+  const ownColony = useMemo(() => findIdentityColony(game, identity.snapshot), [game, identity.snapshot]);
   const adminRoom = (game?.players?.length ?? 0) === 0;
-  const hasPinnedAdminColony = Boolean(
-    watchedColonyId && sorted.some((colony) => colony.colonyId === watchedColonyId),
-  );
   const spectatorFallback = adminRoom
     ? sorted.find((colony) => colony.colonyId === watchedColonyId) ?? sorted[0]
     : undefined;
@@ -321,7 +295,12 @@ function CockpitRun({ id }: { id: string }) {
   const txlineStateLabel = matchStateLabel(game);
   const markets = useMemo(() => buildMarkets(game?.activeOpportunities ?? [], events), [game?.activeOpportunities, events]);
   const openMarkets = markets.filter((market) => market.status === "open");
-  const settledMarkets = markets.filter((market) => market.status !== "open" && (market.settlements.length || market.voids.length));
+  const settledMarkets = markets.filter((market) => market.status !== "open" && (
+    market.settlements.length
+    || market.voids.length
+    || market.observations.length
+    || market.closures.length
+  ));
   const selectedMarket = openMarkets.find((market) => market.id === selectedMarketId) ?? openMarkets[0];
   const selectedSettled = settledMarkets.find((market) => market.id === selectedSettledId) ?? settledMarkets[0];
   const effectiveSelectedMarketId = selectedMarket?.id ?? null;
@@ -336,74 +315,15 @@ function CockpitRun({ id }: { id: string }) {
   const aggregatedFeed = useMemo(() => aggregateFeed(usefulEvents, colonyNames), [usefulEvents, colonyNames]);
   const feedRows = aggregatedFeed.slice(0, activeTab === "feed" ? 18 : 5);
 
-  // The market action bar: three mid-match verbs on top of your ants' call.
-  // Only one action is ever in flight per market at a time (actionBusyKey is
-  // `${marketId}:${verb}`), so the three buttons can't race each other.
-  async function handleRally(market: MarketModel): Promise<boolean> {
-    if (!mine || actionBusyKey) return false;
-    setActionBusyKey(`${market.id}:rally`);
-    try {
-      const action = await api.rally(id, { colonyId: mine.colonyId, opportunityId: market.id, anonymousId: anonId });
-      snapshotRequestSequence.current += 1;
-      setGame(action);
-      addEvent(action.event);
-      return true;
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Rally failed — try again.";
-      push(message, "loss");
-      return false;
-    } finally {
-      setActionBusyKey(null);
-    }
-  }
-
-  // Pull back up to 5 ants from a call you've soured on — free, repeatable,
-  // but you always keep your last ant in the market.
-  async function handleRecall(market: MarketModel): Promise<boolean> {
-    if (!mine || actionBusyKey) return false;
-    setActionBusyKey(`${market.id}:recall`);
-    try {
-      const action = await api.recall(id, { colonyId: mine.colonyId, opportunityId: market.id, anonymousId: anonId });
-      snapshotRequestSequence.current += 1;
-      setGame(action);
-      addEvent(action.event);
-      return true;
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Recall failed — try again.";
-      push(message, "loss");
-      return false;
-    } finally {
-      setActionBusyKey(null);
-    }
-  }
-
-  // Pivot your whole call to a different option — once per market, costs food.
-  async function handleSwitch(market: MarketModel, optionId: string): Promise<boolean> {
-    if (!mine || actionBusyKey) return false;
-    setActionBusyKey(`${market.id}:switch`);
-    try {
-      const action = await api.switchCall(id, { colonyId: mine.colonyId, opportunityId: market.id, optionId, anonymousId: anonId });
-      snapshotRequestSequence.current += 1;
-      setGame(action);
-      addEvent(action.event);
-      return true;
-    } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Change call failed — try again.";
-      push(message, "loss");
-      return false;
-    } finally {
-      setActionBusyKey(null);
-    }
-  }
-
   useEffect(() => {
-    if (ownColony?.colonyId && myColonyId !== ownColony.colonyId) {
-      setMyColonyId(ownColony.colonyId);
+    const nextColonyId = ownColony?.colonyId ?? null;
+    if (myColonyId !== nextColonyId) {
+      setMyColonyId(nextColonyId);
     }
   }, [myColonyId, ownColony?.colonyId, setMyColonyId]);
 
   // Keep the 3D world's mounds in lockstep with the live game — founds any
-  // colony that isn't in the world yet and feeds it live ants/food/score.
+  // colony that isn't in the world yet and feeds it live Sugar/rank data.
   useEffect(() => {
     if (game?.colonies?.length) worldLink.syncColonies(game.colonies, mine?.colonyId ?? null);
   }, [game?.colonies, mine?.colonyId]);
@@ -421,60 +341,6 @@ function CockpitRun({ id }: { id: string }) {
     const t = window.setTimeout(() => worldLink.focusColony(mine.colonyId), 900);
     return () => window.clearTimeout(t);
   }, [mine?.colonyId]);
-
-  useEffect(() => {
-    const desktopViewport = window.matchMedia("(min-width: 1280px)");
-    const closeHiddenDialog = (event: MediaQueryListEvent) => {
-      if (!event.matches) setDesktopCommandOpen(false);
-    };
-    desktopViewport.addEventListener("change", closeHiddenDialog);
-    return () => desktopViewport.removeEventListener("change", closeHiddenDialog);
-  }, []);
-
-  useEffect(() => {
-    if (!desktopCommandOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusableSelector = [
-      "button:not([disabled])",
-      "input:not([disabled])",
-      "select:not([disabled])",
-      "textarea:not([disabled])",
-      "a[href]",
-      '[tabindex]:not([tabindex="-1"])',
-    ].join(",");
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setDesktopCommandOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const dialog = desktopDialogRef.current;
-      const focusable = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector)) : [];
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    const focusFrame = window.requestAnimationFrame(() => {
-      desktopDialogRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
-    });
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
-      previousFocus?.focus();
-    };
-  }, [desktopCommandOpen]);
 
   if (!game || lastSyncAt === null) {
     return (
@@ -494,7 +360,6 @@ function CockpitRun({ id }: { id: string }) {
           key={colony.colonyId}
           type="button"
           data-mine={colony.colonyId === mine?.colonyId}
-          disabled={Boolean(adminRoom && actionBusyKey)}
           onClick={() => {
             if (adminRoom) setWatchedColonyId(colony.colonyId);
             worldLink.focusColony(colony.colonyId);
@@ -503,7 +368,7 @@ function CockpitRun({ id }: { id: string }) {
         >
           <span className="rk">#{index + 1}</span>
           <span className="truncate">{colony.name}</span>
-          <span className="text-xs text-ink-faint">🐜{colony.antsAlive}</span>
+          <span className="text-xs text-ink-faint">🍬{colonySugar(colony)}</span>
         </button>
       ))}
     </div>
@@ -525,13 +390,8 @@ function CockpitRun({ id }: { id: string }) {
           settledMarkets={settledMarkets}
           colony={mine}
           colonyLabel={colonyFocusLabel}
-          runStatus={status}
           waitingForKickoff={txlineWaiting}
           matchStateLabel={txlineStateLabel}
-          actionBusyKey={actionBusyKey}
-          onRally={handleRally}
-          onRecall={handleRecall}
-          onSwitch={handleSwitch}
           onSelectMarket={setSelectedMarketId}
           onSelectSettled={(marketId) => {
             setSelectedSettledId(marketId);
@@ -565,20 +425,20 @@ function CockpitRun({ id }: { id: string }) {
         }
         resources={[
           { icon: "🏆", value: rank ? `#${rank}` : "—", title: "Rank" },
-          { icon: "🐜", value: mine?.antsAlive ?? "—", title: "Ants alive" },
-          { icon: "🍖", value: mine?.food ?? "—", title: "Food stores" },
+          { icon: "🐜", value: mine?.size ?? 20, title: "Fixed ant voters" },
+          { icon: "🍬", value: mine ? colonySugar(mine) : "—", title: "Sugar" },
         ]}
         nav={[
           { icon: "🏟️", label: "Room", onClick: () => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby") },
           { icon: "🏆", label: "Ranks", onClick: () => router.push(`/results/${id}`) },
           {
-            icon: "🐜",
-            label: "Ants",
-            active: sheetOpen && mobileSheetView === "ants",
+            icon: "🍬",
+            label: "Colony",
+            active: sheetOpen && mobileSheetView === "colony",
             disabled: !mine || (!ownColony && !adminRoom),
             onClick: () => {
-              if (adminRoom && mine && !hasPinnedAdminColony) setWatchedColonyId(mine.colonyId);
-              setMobileSheetView("ants");
+              if (adminRoom && mine) setWatchedColonyId(mine.colonyId);
+              setMobileSheetView("colony");
               setSheetOpen(true);
             },
           },
@@ -588,7 +448,7 @@ function CockpitRun({ id }: { id: string }) {
             type="button"
             className={`g-cta ${openMarkets.length ? "rust" : ""}`}
             onClick={() => {
-              if (mobileSheetView === "ants") {
+              if (mobileSheetView === "colony") {
                 setMobileSheetView("board");
                 setSheetOpen(true);
                 return;
@@ -596,12 +456,12 @@ function CockpitRun({ id }: { id: string }) {
               setSheetOpen((value) => !value);
             }}
           >
-            {mobileSheetView === "ants"
+            {mobileSheetView === "colony"
               ? openMarkets.length ? `🎯 Markets · ${openMarkets.length}` : "📊 Decision board"
               : sheetOpen ? "⛰️ View the map" : openMarkets.length ? `🎯 Markets · ${openMarkets.length} live` : "📊 Decision board"}
           </button>
         }
-        sheetTitle={mobileSheetView === "ants" ? "My ants & colony" : "Decision board"}
+        sheetTitle={mobileSheetView === "colony" ? "Colony & Sugar" : "Decision board"}
         open={sheetOpen}
         onOpenChange={(open) => {
           setSheetOpen(open);
@@ -609,20 +469,8 @@ function CockpitRun({ id }: { id: string }) {
         }}
         hint={selectedMarket ? undefined : RUNNING.has(status) ? "colony rings flash as your ants vote" : "drag to orbit · tap a mound"}
       >
-        {mobileSheetView === "ants" && mine && (ownColony || adminRoom) ? (
-          <ColonyCommandPanel
-            gameId={id}
-            status={status}
-            colony={mine}
-            anonymousId={anonId}
-            onGameChange={setGame}
-            initialScope="ants"
-            expandedByDefault
-            onRequestClose={() => {
-              setMobileSheetView("board");
-              setSheetOpen(false);
-            }}
-          />
+        {mobileSheetView === "colony" && mine && (ownColony || adminRoom) ? (
+          <ColonyResourceCard colony={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
         ) : status === "created" ? (
           <div className="flex flex-col gap-3 text-center">
             <p className="text-lg font-bold">Room is not live yet</p>
@@ -633,7 +481,7 @@ function CockpitRun({ id }: { id: string }) {
           </div>
         ) : (
           <>
-            <p className="loop-strip">🐜 ants vote → 🎯 markets settle → 🍖 food feeds your mound → 🏆 richest colony wins</p>
+            <p className="loop-strip">🐜 ants vote → 🤝 consensus enters → 🍬 results change Sugar → 🏆 most Sugar wins</p>
             {colonyRail}
             {mobileTabs}
           </>
@@ -700,16 +548,6 @@ function CockpitRun({ id }: { id: string }) {
           </section>
 
           <ColonyResourceCard colony={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
-          {mine && (ownColony || adminRoom) && (
-            <ColonyControlLauncher
-              colony={mine}
-              status={status}
-              onOpen={() => {
-                if (adminRoom && !hasPinnedAdminColony) setWatchedColonyId(mine.colonyId);
-                setDesktopCommandOpen(true);
-              }}
-            />
-          )}
           <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
         </aside>
 
@@ -751,13 +589,8 @@ function CockpitRun({ id }: { id: string }) {
                   settledMarkets={settledMarkets}
                   colony={mine}
                   colonyLabel={colonyFocusLabel}
-                  runStatus={status}
                   waitingForKickoff={txlineWaiting}
                   matchStateLabel={txlineStateLabel}
-                  actionBusyKey={actionBusyKey}
-                  onRally={handleRally}
-                  onRecall={handleRecall}
-                  onSwitch={handleSwitch}
                   onSelectMarket={setSelectedMarketId}
                   onSelectSettled={(marketId) => {
                     setSelectedSettledId(marketId);
@@ -790,7 +623,7 @@ function CockpitRun({ id }: { id: string }) {
             colonies={sorted}
             activeColonyId={mine?.colonyId}
             onOpenRanks={() => router.push(`/results/${id}`)}
-            onSelectColony={adminRoom && !actionBusyKey ? setWatchedColonyId : undefined}
+            onSelectColony={adminRoom ? setWatchedColonyId : undefined}
           />
           <EventStreamCard feedRows={aggregatedFeed.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
         </aside>
@@ -810,36 +643,6 @@ function CockpitRun({ id }: { id: string }) {
       </footer>
     </div>
 
-    {desktopCommandOpen && mine && (ownColony || adminRoom) && (
-      <div className="fixed inset-0 z-[90] hidden place-items-center p-6 xl:grid" role="presentation">
-        <button
-          type="button"
-          className="absolute inset-0 bg-[rgba(35,31,23,0.62)] backdrop-blur-[2px]"
-          aria-label="Close colony command"
-          onClick={() => setDesktopCommandOpen(false)}
-        />
-        <section
-          ref={desktopDialogRef}
-          className="relative z-10 grid max-h-[calc(100dvh-48px)] w-[min(1040px,calc(100vw-64px))] overflow-hidden rounded-lg border-2 border-[color:var(--brd-strong)] bg-[rgba(238,229,204,0.98)] p-4 shadow-[8px_8px_0_rgba(35,31,23,0.38)]"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Manage ${mine.name}`}
-        >
-          <div className="overflow-y-auto pr-1">
-            <ColonyCommandPanel
-              gameId={id}
-              status={status}
-              colony={mine}
-              anonymousId={anonId}
-              onGameChange={setGame}
-              initialScope="ants"
-              expandedByDefault
-              onRequestClose={() => setDesktopCommandOpen(false)}
-            />
-          </div>
-        </section>
-      </div>
-    )}
     </>
   );
 }
@@ -967,13 +770,8 @@ function LiveTab({
   settledMarkets,
   colony,
   colonyLabel,
-  runStatus,
   waitingForKickoff,
   matchStateLabel,
-  actionBusyKey,
-  onRally,
-  onRecall,
-  onSwitch,
   onSelectMarket,
   onSelectSettled,
 }: {
@@ -984,13 +782,8 @@ function LiveTab({
   settledMarkets: MarketModel[];
   colony?: Colony;
   colonyLabel: string;
-  runStatus: string;
   waitingForKickoff: boolean;
   matchStateLabel: string;
-  actionBusyKey: string | null;
-  onRally: (market: MarketModel) => Promise<boolean>;
-  onRecall: (market: MarketModel) => Promise<boolean>;
-  onSwitch: (market: MarketModel, optionId: string) => Promise<boolean>;
   onSelectMarket: (marketId: string) => void;
   onSelectSettled: (marketId: string) => void;
 }) {
@@ -1010,11 +803,6 @@ function LiveTab({
               market={selectedMarket}
               colony={colony}
               colonyLabel={colonyLabel}
-              runStatus={runStatus}
-              actionBusyKey={actionBusyKey}
-              onRally={onRally}
-              onRecall={onRecall}
-              onSwitch={onSwitch}
             />
           )}
         </>
@@ -1213,7 +1001,7 @@ function SettledRail({
             {!compact && (
               <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
                 <b className={`rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 ${summary.resourceDelta < 0 ? "text-rust" : "text-green"}`}>
-                  {signedValue(summary.resourceDelta)}
+                  {signedValue(summary.resourceDelta)} 🍬
                 </b>
                 <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-rust">{summary.losses}</b>
                 <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-ink">{summary.voided}</b>
@@ -1230,20 +1018,10 @@ function FocusedMarketPanel({
   market,
   colony,
   colonyLabel,
-  runStatus,
-  actionBusyKey,
-  onRally,
-  onRecall,
-  onSwitch,
 }: {
   market: MarketModel;
   colony?: Colony;
   colonyLabel: string;
-  runStatus: string;
-  actionBusyKey: string | null;
-  onRally: (market: MarketModel) => Promise<boolean>;
-  onRecall: (market: MarketModel) => Promise<boolean>;
-  onSwitch: (market: MarketModel, optionId: string) => Promise<boolean>;
 }) {
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
@@ -1259,17 +1037,6 @@ function FocusedMarketPanel({
         </div>
         <span className="rounded-full border-2 border-[color:var(--color-green)] px-2 py-1 font-mono text-[10px] uppercase text-green">open</span>
       </div>
-
-      <ActionBar
-        key={`${market.id}:${colony?.colonyId ?? "none"}`}
-        market={market}
-        colony={colony}
-        runStatus={runStatus}
-        actionBusyKey={actionBusyKey}
-        onRally={onRally}
-        onRecall={onRecall}
-        onSwitch={onSwitch}
-      />
 
       <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="open" />
 
@@ -1290,344 +1057,19 @@ function FocusedMarketPanel({
   );
 }
 
-// Job 1: the market action bar. Three mid-match verbs on top of an existing
-// call — Rally piles on 5 more ants (one per market), Recall pulls up to 5
-// back at any time (never below 1), Switch pivots the whole stake to a
-// different option once per market. All three need a prediction to act on.
-function ActionBar({
-  market,
-  colony,
-  runStatus,
-  actionBusyKey,
-  onRally,
-  onRecall,
-  onSwitch,
-}: {
-  market: MarketModel;
-  colony?: Colony;
-  runStatus: string;
-  actionBusyKey: string | null;
-  onRally: (market: MarketModel) => Promise<boolean>;
-  onRecall: (market: MarketModel) => Promise<boolean>;
-  onSwitch: (market: MarketModel, optionId: string) => Promise<boolean>;
-}) {
-  const [switchOpen, setSwitchOpen] = useState(false);
-  const [recallOpen, setRecallOpen] = useState(false);
-  const [activeAntIds, setActiveAntIds] = useState<Set<string> | null>(null);
-  const instanceId = useId().replace(/:/g, "");
-  const { id: gameId } = useParams<{ id: string }>();
-  const anonymousId = useMemo(() => getAnonId(), []);
-  const colonyId = colony?.colonyId;
-  const colonyActiveCount = colony?.antsActive ?? colony?.antsAlive;
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!colonyId) return () => { cancelled = true; };
-    void api.getColonyAnts(gameId, colonyId, anonymousId)
-      .then((roster) => {
-        if (cancelled) return;
-        setActiveAntIds(new Set(roster.ants.filter((ant) => ant.active).map((ant) => ant.antId)));
-      })
-      .catch(() => {
-        if (!cancelled) setActiveAntIds(null);
-      });
-    return () => { cancelled = true; };
-  }, [anonymousId, colonyActiveCount, colonyId, gameId]);
-
-  if (!colony) return null;
-
-  const controlsId = `${instanceId}-field-orders-${market.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const isRunning = RUNNING.has(runStatus);
-  const isOpen = market.status === "open" && isRunning;
-  const stake = colonyStake(market, colony.colonyId);
-  const hasPrediction = Boolean(stake);
-  const busy = (verb: "rally" | "recall" | "switch") => actionBusyKey === `${market.id}:${verb}`;
-  const anyBusy = actionBusyKey !== null;
-
-  const rallyEvent = latestColonyEvent(market.rallies, colony.colonyId);
-  const alreadyRallied = Boolean(rallyEvent);
-  const availableFood = colony.economy?.available ?? colony.food ?? 0;
-  const currentOption = market.opportunity?.options?.find(
-    (option) => String(option.optionId ?? option.value ?? "") === String(stake?.optionId ?? ""),
-  );
-  const currentLossMultiplier = Number(currentOption?.lossMultiplier ?? 1);
-  const affordableRallyAnts = Math.max(0, Math.floor((availableFood - 3) / Math.max(1, currentLossMultiplier)));
-  const stakeAntIds = new Set(stake?.antIds ?? []);
-  const eligibleActiveAnts = activeAntIds
-    ? [...activeAntIds].filter((antId) => !stakeAntIds.has(antId)).length
-    : null;
-  const rallyAnts = Math.min(5, affordableRallyAnts, eligibleActiveAnts ?? 5);
-  const rallyReserve = rallyAnts * currentLossMultiplier;
-  const canAffordRally = rallyAnts > 0;
-  const rallyDisabled = !isOpen || !canAffordRally || eligibleActiveAnts === 0 || alreadyRallied || anyBusy || !hasPrediction;
-
-  const recallAnts = stake ? Math.min(5, Math.max(0, stake.ants - 1)) : 0;
-  const recallRelease = recallAnts * currentLossMultiplier;
-  const recallDisabled = !isOpen || !stake || recallAnts <= 0 || anyBusy;
-
-  const switchEvent = latestColonyEvent(market.switches, colony.colonyId);
-  const alreadySwitched = Boolean(switchEvent);
-  const switchedAntCount = Array.isArray(switchEvent?.data?.antIds)
-    ? switchEvent.data.antIds.length
-    : stake?.ants ?? 0;
-  const switchOptions = (market.opportunity?.options ?? []).filter(
-    (option) => String(option.optionId ?? option.value ?? option.label ?? "") !== String(stake?.optionId ?? ""),
-  );
-  const canAffordSwitchOption = (lossMultiplier: number | undefined) => {
-    if (!stake || colony.food < 2) return false;
-    const reservedDelta = stake.ants * (Number(lossMultiplier ?? 1) - currentLossMultiplier);
-    return availableFood >= Math.max(0, 2 + reservedDelta);
-  };
-  const hasAffordableSwitch = switchOptions.some((option) => canAffordSwitchOption(option.lossMultiplier));
-  const switchDisabled = !isOpen || !stake || alreadySwitched || !hasAffordableSwitch || anyBusy;
-  const positionReservedFood = Math.max(0, Math.round((stake?.ants ?? 0) * currentLossMultiplier));
-
-  const sharedReason = !isRunning
-    ? "The match is not running. Field orders are paused."
-    : market.status !== "open"
-      ? "This market is already closed."
-      : !hasPrediction
-        ? "Your ants have no position on this market yet."
-        : anyBusy
-          ? "Another field order is being sent."
-          : "";
-  const rallyReason = sharedReason
-    || (alreadyRallied ? "Reinforce was already used on this market." : "")
-    || (eligibleActiveAnts === 0 ? "No active ants are available outside this call." : "")
-    || (!canAffordRally ? `Need at least ${3 + currentLossMultiplier} available food for the first extra ant.` : "");
-  const recallReason = sharedReason || (stake && stake.ants <= 1 ? "The final ant must stay on the call." : "");
-  const switchReason = sharedReason
-    || (alreadySwitched ? "Change call was already used on this market." : "")
-    || (!switchOptions.length ? "This market has no other outcome." : "")
-    || (!hasAffordableSwitch ? "No alternative is affordable with the available food." : "");
-
-  return (
-    <section className="mt-3 overflow-hidden rounded-md border-2 border-[color:var(--brd-strong)] bg-[rgba(235,225,196,0.76)] shadow-[3px_3px_0_rgba(74,58,30,0.2)]" aria-labelledby={`${controlsId}-title`}>
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] px-3 py-3">
-        <div className="min-w-0">
-          <p className="eyebrow">Live field orders</p>
-          <h3 id={`${controlsId}-title`} className="font-bold text-ink">Command your current position</h3>
-          <p className="mt-1 truncate text-xs text-ink-faint">
-            {stake ? `${antLabel(stake.ants)} · ${cleanOutcomeLabel(stake.optionLabel)}` : "Waiting for your ants to take a position"}
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-right">
-          <CommandResource label="Available" value={`${availableFood} 🍖`} />
-          <CommandResource label="This call locked" value={`${positionReservedFood} 🍖`} />
-        </div>
-      </div>
-
-      <div className="grid gap-2 p-3 xl:grid-cols-3">
-        <FieldOrder
-          icon="📣"
-          title="Reinforce"
-          badge={alreadyRallied ? "Used" : "Once"}
-          headline={alreadyRallied ? `Added ${antLabel(Number(rallyEvent?.data?.ants ?? 0))}` : eligibleActiveAnts === 0 ? "No idle ants" : rallyAnts > 0 ? `Add up to ${antLabel(rallyAnts)}` : "Add up to 5 ants"}
-          detail={alreadyRallied ? `${Number(rallyEvent?.data?.cost ?? 3)} food spent · ${Number(rallyEvent?.data?.foodReservedAdded ?? 0)} locked` : `Costs 3 food${rallyReserve ? ` · up to ${rallyReserve} more locked` : ""}`}
-          help={alreadyRallied ? "This one-time order has already been used by this colony." : "Adds active ants that are not already on this call. The exact number is checked live."}
-          disabled={rallyDisabled}
-          busy={busy("rally")}
-          reason={rallyReason}
-          onClick={() => void onRally(market)}
-          tone="gold"
-        />
-        <FieldOrder
-          icon="🛡️"
-          title="Pull back"
-          badge="Repeatable"
-          headline={recallAnts > 0 ? `Recall ${recallAnts} ant${recallAnts === 1 ? "" : "s"}` : "Keep the final ant"}
-          detail={`Free${recallRelease ? ` · unlocks up to ${recallRelease} food` : ""}`}
-          help="Removes up to five ants but always leaves one ant on the call."
-          disabled={recallDisabled}
-          busy={busy("recall")}
-          reason={recallReason}
-          expanded={recallOpen}
-          controls={`${controlsId}-recall`}
-          onClick={() => setRecallOpen((open) => !open)}
-          tone="cyan"
-        />
-        <FieldOrder
-          icon="🔀"
-          title="Change call"
-          badge={alreadySwitched ? "Used" : "Once"}
-          headline={alreadySwitched ? `Moved ${antLabel(switchedAntCount)}` : stake ? `Move all ${antLabel(stake.ants)}` : "Choose another outcome"}
-          detail={alreadySwitched ? `Now on ${cleanOutcomeLabel(stake?.optionLabel ?? "the new call")} · 2 food spent` : "Costs 2 food · collateral recalculated"}
-          help={alreadySwitched ? "This one-time order has already been used by this colony." : "Moves the whole position to one other outcome. Individual switching is not available."}
-          disabled={switchDisabled}
-          busy={busy("switch")}
-          reason={switchReason}
-          expanded={switchOpen}
-          controls={`${controlsId}-switch`}
-          onClick={() => setSwitchOpen((open) => !open)}
-          tone="rust"
-        />
-      </div>
-
-      {recallOpen && !recallDisabled && (
-        <div id={`${controlsId}-recall`} className="grid gap-3 border-t-2 border-cyan/25 bg-cyan/5 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
-          <div>
-            <p className="text-sm font-bold text-ink">Pull back {antLabel(recallAnts)} now?</p>
-            <p className="mt-1 text-xs leading-relaxed text-ink-faint">One ant stays on {cleanOutcomeLabel(stake?.optionLabel ?? "this call")}; released collateral becomes available immediately.</p>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button" className="btn btn-ghost !min-h-10 px-3 py-2 text-xs" disabled={anyBusy} onClick={() => setRecallOpen(false)}>Cancel</button>
-            <button
-              type="button"
-              className="btn !min-h-10 px-3 py-2 text-xs"
-              disabled={anyBusy}
-              onClick={() => void onRecall(market).then((ok) => { if (ok) setRecallOpen(false); })}
-            >
-              {busy("recall") ? "Recalling..." : `Recall ${recallAnts}`}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {switchOpen && !switchDisabled && (
-        <div id={`${controlsId}-switch`} className="border-t-2 border-rust/25 bg-rust/5 p-3">
-          <p className="text-sm font-bold text-ink">Choose the new call for all {antLabel(stake?.ants ?? 0)}</p>
-          <p className="mt-1 text-xs text-ink-faint">The fixed 2 food is spent only after a successful change.</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {switchOptions.map((option) => {
-              const nextLossMultiplier = Number(option.lossMultiplier ?? 1);
-              const reservedDelta = (stake?.ants ?? 0) * (nextLossMultiplier - currentLossMultiplier);
-              const affordable = canAffordSwitchOption(option.lossMultiplier);
-              return (
-                <button
-                  key={option.optionId || option.value || option.label}
-                  type="button"
-                  className="well grid min-h-20 gap-1 p-3 text-left transition hover:border-rust/55 disabled:opacity-55"
-                  disabled={!affordable || anyBusy}
-                  aria-describedby={`${controlsId}-switch-${String(option.optionId ?? option.value ?? "option")}`}
-                  onClick={() => void onSwitch(market, String(option.optionId ?? option.value ?? "")).then((ok) => { if (ok) setSwitchOpen(false); })}
-                >
-                  <span className="font-bold text-ink">{option.label || option.value}</span>
-                  <span className="font-mono text-[10px] uppercase text-rust">{String(option.risk ?? "safe")} risk · loss ×{nextLossMultiplier}</span>
-                  <span id={`${controlsId}-switch-${String(option.optionId ?? option.value ?? "option")}`} className="text-[11px] text-ink-faint">
-                    {affordable ? `${signedValue(-2 - reservedDelta)} available food change` : "Not enough available food for this risk"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function CommandResource({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="rounded-md border border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.72)] px-2 py-1">
-      <span className="block font-mono text-[8px] uppercase tracking-wide text-ink-faint">{label}</span>
-      <strong className="block font-mono text-xs text-ink">{value}</strong>
-    </span>
-  );
-}
-
-function FieldOrder({
-  icon,
-  title,
-  badge,
-  headline,
-  detail,
-  help,
-  disabled,
-  busy,
-  reason,
-  onClick,
-  tone,
-  expanded,
-  controls,
-}: {
-  icon: string;
-  title: string;
-  badge: string;
-  headline: string;
-  detail: string;
-  help: string;
-  disabled: boolean;
-  busy: boolean;
-  reason: string;
-  onClick: () => void;
-  tone: "gold" | "cyan" | "rust";
-  expanded?: boolean;
-  controls?: string;
-}) {
-  const reasonId = useId();
-  const toneClasses = tone === "cyan"
-    ? "border-cyan/35 bg-cyan/5"
-    : tone === "rust"
-      ? "border-rust/35 bg-rust/5"
-      : "border-gold/40 bg-gold/5";
-  return (
-    <article className={`grid min-w-0 content-start gap-2 rounded-md border-2 p-3 ${toneClasses}`}>
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-xl" aria-hidden="true">{icon}</span>
-        <span className="status-pill !px-2 !py-0.5">{badge}</span>
-      </div>
-      <div>
-        <h4 className="text-sm font-bold text-ink">{title}</h4>
-        <p className="mt-1 font-mono text-xs font-bold text-gold-deep">{headline}</p>
-        <p className="mt-1 text-[11px] font-bold text-ink-soft">{detail}</p>
-      </div>
-      <p className="text-[11px] leading-relaxed text-ink-faint">{help}</p>
-      <button
-        type="button"
-        className={`btn mt-auto !min-h-10 px-3 py-2 text-xs ${tone === "gold" ? "btn-primary" : ""}`}
-        disabled={disabled}
-        aria-expanded={controls ? Boolean(expanded) : undefined}
-        aria-controls={controls}
-        aria-describedby={disabled && reason ? reasonId : undefined}
-        onClick={onClick}
-      >
-        {busy ? "Sending order..." : expanded ? "Close" : title}
-      </button>
-      {disabled && reason && <p id={reasonId} className="text-[10px] leading-relaxed text-rust">{reason}</p>}
-    </article>
-  );
-}
-
-// Derives the colony's live position on a market from its raw event history:
-// the initial prediction's ant count, plus every rally, minus every recall —
-// and the current option, which is whatever the latest switch (if any) moved
-// it to.
+// Derives the fixed position created when colony consensus clears its gate.
 function colonyStake(market: MarketModel, colonyId?: string): { ants: number; antIds: string[]; optionId?: string; optionLabel: string } | null {
   if (!colonyId) return null;
   const predictionEvent = latestColonyEvent(market.predictions, colonyId);
   if (!predictionEvent) return null;
   const predictionData = eventData(predictionEvent);
-  let fallbackAnts = Number(predictionData?.ants ?? 0);
+  const fallbackAnts = Number(predictionData?.ants ?? 0);
   const initialAntIds = predictionEvent.data?.antIds;
-  let hasAntIds = Array.isArray(initialAntIds);
-  let antIds = Array.isArray(initialAntIds) ? initialAntIds.map(String) : [];
-  const tactics = [...market.rallies, ...market.recalls]
-    .filter((event) => String(event.data?.colonyId ?? "") === String(colonyId))
-    .sort((a, b) => a.index - b.index);
-  for (const event of tactics) {
-    const count = Number(event.data?.ants ?? 0);
-    fallbackAnts = Math.max(0, fallbackAnts + (event.kind === "rally" ? count : -count));
-    if (Array.isArray(event.data?.antIds)) {
-      hasAntIds = true;
-      antIds = event.data.antIds.map(String);
-    }
-  }
-  const ants = hasAntIds ? antIds.length : fallbackAnts;
-
-  const switchEvent = latestColonyEvent(market.switches, colonyId);
+  const antIds = Array.isArray(initialAntIds) ? initialAntIds.map(String) : [];
+  const ants = antIds.length || fallbackAnts;
   const predictionOption = eventData(predictionEvent)?.option;
-  if (switchEvent) {
-    const optionId = typeof switchEvent.data?.optionId === "string" ? switchEvent.data.optionId : undefined;
-    return { ants, antIds, optionId, optionLabel: optionLabelById(market.opportunity, optionId) ?? optionId ?? "unknown" };
-  }
   const predictionOptionId = (predictionOption?.optionId ?? (predictionOption as { option_id?: string } | undefined)?.option_id) as string | undefined;
   return { ants, antIds, optionId: predictionOptionId, optionLabel: predictionOption?.label || predictionOptionId || "unknown" };
-}
-
-function optionLabelById(opportunity: Opportunity | undefined, optionId?: string) {
-  if (!opportunity || !optionId) return undefined;
-  const match = opportunity.options?.find((option) => option.optionId === optionId);
-  return match?.label || match?.value;
 }
 
 function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketModel; colony?: Colony; colonyLabel: string }) {
@@ -1655,7 +1097,7 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
 
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <PulseMetric
-          label="All colonies food"
+          label="All colonies Sugar"
           value={signedValue(summary.resourceDelta)}
           tone={summary.resourceDelta >= 0 ? "green" : undefined}
         />
@@ -1666,7 +1108,7 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
       {distribution.rows.length > 0 && <Distribution distribution={distribution} title="All colonies vote split" />}
 
       <div className="mt-3 flex flex-col gap-1">
-        {[...personalResultEvents(activity), ...market.settlements, ...market.voids]
+        {[...personalResultEvents(activity), ...market.settlements, ...market.voids, ...market.closures]
           .filter(uniqueEventByIndex)
           .slice(0, 4)
           .map((event) => (
@@ -1730,9 +1172,9 @@ function ColonyDecisionPanel({
       </div>
 
       <div className="mt-3 grid gap-2 md:grid-cols-3">
-        <DecisionCell label="Decision" value={decision.value} detail={decision.detail} tone={decision.tone} />
-        <DecisionCell label="Backed" value={commit.value} detail={commit.detail} tone={commit.tone} />
-        <DecisionCell label="Result" value={result.value} detail={result.detail} tone={result.cellTone} />
+        <DecisionCell label="Ant consensus" value={decision.value} detail={decision.detail} tone={decision.tone} />
+        <DecisionCell label="Colony action" value={commit.value} detail={commit.detail} tone={commit.tone} />
+        <DecisionCell label="Sugar result" value={result.value} detail={result.detail} tone={result.cellTone} />
       </div>
 
       {activity.distribution.rows.length > 0 && (
@@ -1785,39 +1227,6 @@ function DecisionCell({
   );
 }
 
-function ColonyControlLauncher({ colony, status, onOpen }: { colony: Colony; status: string; onOpen: () => void }) {
-  const customCount = Object.keys(colony.antStrategies ?? {}).length;
-  const editable = isStrategyEditableStatus(status);
-  return (
-    <section className="colony-command-panel glass relative grid gap-3 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="eyebrow">Your colony</p>
-          <h2 className="truncate text-base font-bold">Manage ants & strategy</h2>
-          <p className="mt-1 truncate text-xs text-ink-faint">{strategySummary(colony)}</p>
-        </div>
-        <span className={`status-pill ${editable ? "!border-green/50 !text-green" : ""}`}>
-          {editable ? "Live" : "Read-only"}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="well px-3 py-2">
-          <p className="font-mono text-[9px] uppercase text-ink-faint">My ants</p>
-          <p className="mt-1 font-mono text-lg font-bold text-ink">{colony.antsAlive}</p>
-        </div>
-        <div className="well px-3 py-2">
-          <p className="font-mono text-[9px] uppercase text-ink-faint">Custom</p>
-          <p className="mt-1 font-mono text-lg font-bold text-gold-deep">{customCount}</p>
-        </div>
-      </div>
-      <button type="button" className="btn btn-primary !min-h-11 py-2 text-sm" onClick={onOpen}>
-        🐜 Choose an ant or change colony
-      </button>
-      <p className="text-center text-[11px] text-ink-faint">Changes apply to the next market</p>
-    </section>
-  );
-}
-
 function CockpitLoadState({
   loading,
   error,
@@ -1847,16 +1256,6 @@ function CockpitLoadState({
       </section>
     </main>
   );
-}
-
-function findOwnColony(game: GameState | null | undefined, anonId: string): Colony | undefined {
-  if (!game || !anonId) return undefined;
-  const player = (game.players ?? []).find((candidate) => candidate.anonymousId === anonId);
-  return (game.colonies ?? []).find((colony) => (
-    Boolean(player?.colonyId && colony.colonyId === player.colonyId)
-    || colony.playerAnonymousId === anonId
-    || Boolean(player?.playerId && colony.playerId === player.playerId)
-  ));
 }
 
 function PulseMetric({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
@@ -1903,17 +1302,26 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
     return <p className="well mt-3 p-3 text-sm text-ink-faint">Waiting for ant decisions...</p>;
   }
   return (
-    <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, options.length)}, minmax(0, 1fr))` }}>
-      {options.slice(0, 3).map((option) => (
-        <div key={option.optionId || option.label} className="well p-2 text-center text-xs font-bold text-ink-soft">
-          <span className="block">{option.label || option.value}</span>
-          {(option.multiplier || option.lossMultiplier) && (
-            <span className="mt-1 block font-mono text-[10px] text-ink-faint">
-              Win ×{option.multiplier ?? "–"} · Lose ×{option.lossMultiplier ?? 1}
-            </span>
-          )}
-        </div>
-      ))}
+    <div className="mt-3 grid gap-2">
+      <p className="text-xs leading-relaxed text-ink-faint">
+        Ant support decides whether the colony enters. It never changes the fixed Sugar stake.
+      </p>
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, options.length)}, minmax(0, 1fr))` }}>
+      {options.slice(0, 3).map((option) => {
+        const reward = optionRewardSugar(option);
+        const risk = optionRiskSugar(option);
+        return (
+          <div key={option.optionId || option.label} className="well p-2 text-center text-xs font-bold text-ink-soft">
+            <span className="block">{option.label || option.value}</span>
+            {(reward != null || risk != null) && (
+              <span className="mt-1 block font-mono text-[10px] text-ink-faint">
+                Colony position: correct +{reward ?? 0} Sugar · miss −{risk ?? 0} Sugar
+              </span>
+            )}
+          </div>
+        );
+      })}
+      </div>
     </div>
   );
 }
@@ -1969,17 +1377,15 @@ function ColonyRoster({
                     <span className="font-mono text-sm font-bold text-gold">#{index + 1}</span>
                     <h3 className="truncate text-sm font-bold text-ink">{colony.name}</h3>
                   </div>
-                  <p className="mt-1 truncate text-xs text-ink-faint">
-                    {labelize(colony.style)} · {labelize(colony.favoriteContext)} · info {labelize(colony.infoNeed)}
-                  </p>
+                  <p className="mt-1 truncate text-xs text-ink-faint">{labelize(colony.style)} temperament · fixed voters</p>
                 </div>
                 {active && <span className="status-pill">{onSelectColony ? "selected" : "active"}</span>}
               </div>
 
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <MiniStat label="Score" value={Math.round(colony.score ?? 0)} tone="gold" />
-                <MiniStat label="Ants" value={colony.antsAlive ?? 0} />
-                <MiniStat label="Food" value={colony.food ?? 0} tone="green" />
+                <MiniStat label="Rank" value={`#${index + 1}`} tone="gold" />
+                <MiniStat label="Voters" value={colony.size || 20} />
+                <MiniStat label="Sugar" value={colonySugar(colony)} tone="green" />
               </div>
             </button>
           );
@@ -2000,7 +1406,10 @@ function MiniStat({ label, value, tone }: { label: string; value: number | strin
 }
 
 function labelize(value: string | null | undefined): string {
-  return String(value || "balanced").replace(/_/g, " ");
+  if (value === "cautious") return "Careful";
+  if (value === "aggressive") return "Bold";
+  if (value === "balanced") return "Steady";
+  return String(value || "steady").replace(/_/g, " ");
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -2027,11 +1436,10 @@ function buildMarkets(activeOpportunities: Opportunity[], events: GameEvent[]): 
       starts: [],
       votes: [],
       predictions: [],
+      observations: [],
       settlements: [],
       voids: [],
-      rallies: [],
-      recalls: [],
-      switches: [],
+      closures: [],
       lastIndex: -1,
     };
     map.set(id, market);
@@ -2062,22 +1470,23 @@ function buildMarkets(activeOpportunities: Opportunity[], events: GameEvent[]): 
     if (event.kind === "ant_agent_start") market.starts.push(event);
     if (event.kind === "ant_agent_vote" || event.kind === "vote") upsertVote(market.votes, event);
     if (event.kind === "prediction") market.predictions.push(event);
+    if (event.kind === "observe") market.observations.push(event);
     if (event.kind === "settlement") market.settlements.push(event);
     if (event.kind === "void") market.voids.push(event);
-    if (event.kind === "rally") market.rallies.push(event);
-    if (event.kind === "recall") market.recalls.push(event);
-    if (event.kind === "switch") market.switches.push(event);
+    if (event.kind === "market_closed") market.closures.push(event);
   }
 
   return [...map.values()]
     .map((market) => {
-      const marketStatus: MarketModel["status"] = activeIds.has(market.id)
-        ? "open"
-        : market.settlements.length
-          ? "settled"
-          : market.voids.length
-            ? "void"
-            : "closed";
+      const marketStatus: MarketModel["status"] = market.settlements.length
+        ? "settled"
+        : market.voids.length
+          ? "void"
+          : market.closures.length
+            ? "closed"
+            : activeIds.has(market.id)
+              ? "open"
+              : "closed";
       return { ...market, status: marketStatus };
     })
     .sort((a, b) => b.lastIndex - a.lastIndex);
@@ -2152,9 +1561,9 @@ function settlementSummary(market: MarketModel) {
   for (const event of market.settlements) {
     if (event.data?.win) wins += 1;
     else losses += 1;
-    resourceDelta += Number(event.data?.resourceDelta ?? event.data?.food ?? 0);
+    resourceDelta += Number(event.data?.sugar ?? event.data?.resourceDelta ?? event.data?.food ?? 0);
   }
-  for (const event of market.voids) voided += Number(event.data?.ants ?? 0) || 1;
+  voided = market.voids.length;
 
   const label = wins && !losses && !voided ? "won" : voided && !wins && !losses ? "void" : wins || losses ? "mixed" : "closed";
   const tone = label === "won"
@@ -2208,6 +1617,15 @@ function marketOutcomeSummary(market: MarketModel): MarketOutcome {
 
   const inferred = inferOutcomeFromSettlements(market);
   if (inferred) return inferred;
+
+  if (market.closures.length && !market.settlements.length && !market.voids.length) {
+    return {
+      label: "No colony entered",
+      detail: "The colonies observed this market, so no Sugar was put at risk.",
+      badge: "closed",
+      tone: "muted",
+    };
+  }
 
   const voidReason = firstReason(market.voids);
   if (market.voids.length && !market.settlements.length) {
@@ -2324,11 +1742,12 @@ function colonyMarketActivity(market: MarketModel, colony?: Colony): ColonyMarke
   const stake = colonyStake(market, colonyId);
   const voteEvent = latestColonyEvent(market.votes, colonyId);
   const predictionEvent = latestColonyEvent(market.predictions, colonyId);
+  const observeEvent = latestColonyEvent(market.observations, colonyId);
   const settlementEvent = latestColonyEvent(market.settlements, colonyId);
   const voidEvent = latestColonyEvent(market.voids, colonyId);
   const distribution = voteEvent ? aggregateVotes([voteEvent]) : { rows: [], total: 0, voters: 0 };
   const topVote = [...distribution.rows].sort((a, b) => b.count - a.count)[0];
-  return { colony, stake, voteEvent, predictionEvent, settlementEvent, voidEvent, distribution, topVote };
+  return { colony, stake, voteEvent, predictionEvent, observeEvent, settlementEvent, voidEvent, distribution, topVote };
 }
 
 function latestColonyEvent(events: GameEvent[], colonyId?: string): GameEvent | undefined {
@@ -2343,9 +1762,9 @@ function colonyDecisionSummary(activity: ColonyMarketActivity) {
     return { value: "Waiting", detail: "No answer yet", tone: "muted" as const };
   }
   if (!activity.topVote) {
-    return { value: "Observed", detail: "No ants voted", tone: "muted" as const };
+    return { value: "Waiting", detail: "No ant votes yet", tone: "muted" as const };
   }
-  const value = activity.topVote.key === "abstain" ? "Abstain" : activity.topVote.label;
+  const value = activity.topVote.key === "abstain" ? "Pass" : activity.topVote.label;
   return {
     value,
     detail: `${activity.topVote.count}/${Math.max(1, activity.distribution.total)} ants`,
@@ -2359,30 +1778,80 @@ function colonyCommitSummary(activity: ColonyMarketActivity) {
   const option = activity.stake?.optionLabel ?? eventOptionLabel(activity.predictionEvent);
   if (activity.predictionEvent && ants > 0) {
     return {
-      value: antLabel(ants),
-      detail: option ? `on ${option}` : "market support",
+      value: "Entered",
+      detail: option ? `${antLabel(ants)} back ${option}` : `${antLabel(ants)} backed the call`,
       tone: "gold" as const,
+    };
+  }
+  if (activity.observeEvent) {
+    const observation = observeReasonSummary(activity.observeEvent);
+    return {
+      value: observation.value,
+      detail: observation.detail,
+      tone: "muted" as const,
     };
   }
   if (activity.voteEvent) {
     return {
-      value: "No commit",
-      detail: activity.topVote?.key === "abstain" ? "the colony abstained" : "support stayed below threshold",
+      value: "Observed",
+      detail: activity.topVote?.key === "abstain" ? "ants chose to pass" : "no colony position was recorded",
       tone: "muted" as const,
     };
   }
   return { value: "Waiting", detail: "no colony vote yet", tone: "muted" as const };
 }
 
+function observeReasonSummary(event?: GameEvent): { value: string; detail: string } {
+  const data = eventData(event);
+  const reason = String(data?.reason ?? "").trim().toLowerCase();
+
+  if (["insufficient_sugar", "insufficient_food", "insufficient_balance", "not_enough_sugar"].includes(reason)) {
+    const required = finiteNumber(data?.requiredSugar ?? data?.requiredFood);
+    return {
+      value: "No entry",
+      detail: required != null ? `not enough available Sugar (needs ${required})` : "not enough available Sugar",
+    };
+  }
+
+  if (["reserve_limit", "exposure_limit", "reserve_cap", "max_reserved"].includes(reason)) {
+    const limit = finiteNumber(data?.maxReservedSugar);
+    return {
+      value: "No entry",
+      detail: limit != null ? `${limit} Sugar exposure cap reached` : "Sugar exposure cap reached",
+    };
+  }
+
+  if (["tied_vote", "tied", "tie", "vote_tied"].includes(reason)) {
+    return { value: "No entry", detail: "ant vote ended in a tie" };
+  }
+
+  if (["low_consensus", "no_commitment", "below_threshold", "insufficient_consensus"].includes(reason)) {
+    const support = finiteNumber(data?.supportFraction ?? data?.consensus);
+    const threshold = finiteNumber(data?.entryThreshold);
+    const supportLabel = support != null ? `${Math.round(support * 100)}% consensus` : "consensus";
+    const thresholdLabel = threshold != null ? ` · needs ${Math.round(threshold * 100)}%` : " stayed below temperament";
+    return { value: "No entry", detail: `${supportLabel}${thresholdLabel}` };
+  }
+
+  return {
+    value: "Observed",
+    detail: reason ? humanizeReason(reason) : "no colony entry",
+  };
+}
+
+function finiteNumber(value: unknown): number | null {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "settled") {
   const settlement = eventData(activity.settlementEvent);
-  const voided = eventData(activity.voidEvent);
   if (activity.settlementEvent) {
-    const resourceDelta = Number(settlement?.resourceDelta ?? settlement?.food ?? 0);
+    const resourceDelta = Number(settlement?.sugar ?? settlement?.resourceDelta ?? settlement?.food ?? 0);
     if (settlement?.win) {
       return {
         badge: "won",
-        value: resourceDelta > 0 ? `${signedValue(resourceDelta)} food` : "Won",
+        value: resourceDelta > 0 ? `${signedValue(resourceDelta)} Sugar` : "Correct",
         detail: eventOptionLabel(activity.settlementEvent) || "resolved",
         tone: "!border-green/50 !text-green",
         cellTone: "green" as const,
@@ -2390,35 +1859,35 @@ function colonyResultSummary(activity: ColonyMarketActivity, mode: "open" | "set
     }
     return {
       badge: "lost",
-      value: resourceDelta < 0 ? `${signedValue(resourceDelta)} food` : "Lost",
+      value: resourceDelta < 0 ? `${signedValue(resourceDelta)} Sugar` : "Missed",
       detail: eventOptionLabel(activity.settlementEvent) || "resolved",
       tone: "!border-rust/50 !text-rust",
       cellTone: "rust" as const,
     };
   }
   if (activity.voidEvent) {
-    const ants = Number(voided?.ants ?? 0);
     return {
       badge: "void",
-      value: "Voided",
-      detail: ants > 0 ? `${ants} ants released` : eventOptionLabel(activity.voidEvent) || "no result",
+      value: "No Sugar change",
+      detail: eventOptionLabel(activity.voidEvent) || "market voided",
       tone: "!border-ink-faint/50 !text-ink-faint",
       cellTone: "muted" as const,
     };
   }
   if (mode === "open") {
+    const entered = Boolean(activity.predictionEvent);
     return {
-      badge: "open",
-      value: activity.predictionEvent ? "Backed" : "Pending",
-      detail: activity.predictionEvent ? "waiting for result" : "no position yet",
+      badge: entered ? "entered" : "observed",
+      value: entered ? "Sugar at risk" : "No Sugar at risk",
+      detail: entered ? "waiting for the match result" : "colony passed this market",
       tone: "!border-gold/50 !text-gold",
-      cellTone: activity.predictionEvent ? "gold" as const : "muted" as const,
+      cellTone: entered ? "gold" as const : "muted" as const,
     };
   }
   return {
     badge: "none",
-    value: "No result",
-    detail: "colony did not play",
+    value: "No Sugar change",
+    detail: "colony observed this market",
     tone: "!border-ink-faint/50 !text-ink-faint",
     cellTone: "muted" as const,
   };
@@ -2436,16 +1905,20 @@ function eventData(event?: GameEvent) {
   return event?.data as
     | {
         ants?: number;
-        dead?: number;
         food?: number;
-        larvae?: number;
+        sugar?: number;
         option?: { label?: string; optionId?: string };
         reason?: string;
+        requiredSugar?: number;
+        requiredFood?: number;
+        maxReservedSugar?: number;
+        supportFraction?: number;
+        consensus?: number;
+        entryThreshold?: number;
         resourceDelta?: number;
         resourceLoss?: number;
         resolvedOutcome?: { label?: string; detail?: string };
         win?: boolean;
-        wounded?: number;
       }
     | undefined;
 }
@@ -2523,9 +1996,14 @@ function opportunityFromEvent(event: GameEvent): Opportunity | undefined {
 function eventOpportunityId(event: GameEvent): string | undefined {
   const direct = event.data?.opportunityId;
   if (typeof direct === "string") return direct;
+  const directMarketId = event.data?.marketId;
+  if (typeof directMarketId === "string") return directMarketId;
   const vote = event.data?.vote as PublicVote | undefined;
   const marketId = (vote as { market?: { marketId?: unknown } } | undefined)?.market?.marketId;
-  return typeof marketId === "string" ? marketId : undefined;
+  if (typeof marketId === "string") return marketId;
+  const market = event.data?.market as { marketId?: unknown; opportunityId?: unknown } | undefined;
+  if (typeof market?.opportunityId === "string") return market.opportunityId;
+  return typeof market?.marketId === "string" ? market.marketId : undefined;
 }
 
 function minuteFromLabel(label?: string) {
@@ -2575,7 +2053,7 @@ function voteColor(key: string, index: number) {
 }
 
 function compactEventMessage(event: GameEvent) {
-  const message = event.message || event.kind;
+  const message = (event.message || event.kind).replace(/\bfood\b/gi, "Sugar");
   if (event.kind === "ant_agent_vote" || event.kind === "vote") {
     return message.replace(/^DeepSeek vote from /, "").replace(/Will there be /, "Will ");
   }
@@ -2588,11 +2066,11 @@ function formatClock(ms: number) {
 }
 
 function isUsefulLiveEvent(e: GameEvent) {
-  return ["opportunity", "settlement", "void", "hatch", "starvation", "rally", "recall", "switch", "game_error", "game_started", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
+  return ["opportunity", "observe", "settlement", "void", "game_error", "game_started", "market_closed", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
 }
 
 // Job 2: turn the raw event log into a legible, game-feeling stream.
-// Folds consecutive same-kind-same-colony events (e.g. repeated starvation
+// Folds consecutive same-kind-same-colony events (e.g. repeated observations
 // ticks) into one row with a count, and extracts a structured delta
 // (+green / -rust) plus muted context instead of a dry sentence. Parses
 // event.data defensively — the engine event shapes are not touched here.
@@ -2639,33 +2117,17 @@ function parseFeedEvent(
   const option = data.option as { label?: string } | undefined;
 
   switch (event.kind) {
-    case "starvation": {
-      const deaths = Number(data.deaths ?? 0);
-      return { colonyId, colonyName, message, detail: "food shortage", delta: deaths ? { value: -deaths, unit: "ants" } : null };
+    case "observe": {
+      const observation = observeReasonSummary(event);
+      const detail = `passed · ${observation.detail}`;
+      return { colonyId, colonyName, message: `Market passed — ${observation.detail}`, detail, delta: null };
     }
     case "settlement": {
-      const food = Number(data.food ?? data.resourceDelta ?? 0);
-      return { colonyId, colonyName, message, detail: option?.label ? `on ${option.label}` : null, delta: food ? { value: food, unit: "food" } : null };
-    }
-    case "hatch": {
-      const hatched = Number(data.hatched ?? 0);
-      return { colonyId, colonyName, message, detail: "hatched", delta: hatched ? { value: hatched, unit: "ants" } : null };
+      const sugar = Number(data.sugar ?? data.resourceDelta ?? data.food ?? 0);
+      return { colonyId, colonyName, message, detail: option?.label ? `on ${option.label}` : null, delta: sugar ? { value: sugar, unit: "Sugar" } : null };
     }
     case "void": {
       return { colonyId, colonyName, message, detail: option?.label ? `voided · ${option.label}` : "voided", delta: null };
-    }
-    case "rally": {
-      const ants = Number(data.ants ?? 0);
-      const cost = Number(data.cost ?? 0);
-      return { colonyId, colonyName, message, detail: cost ? `−${cost} food` : "rally", delta: ants ? { value: ants, unit: "ants" } : null };
-    }
-    case "recall": {
-      const ants = Number(data.ants ?? 0);
-      return { colonyId, colonyName, message, detail: "recalled", delta: ants ? { value: -ants, unit: "ants" } : null };
-    }
-    case "switch": {
-      const pivotMatch = /pivots to (.+?) \(/.exec(message);
-      return { colonyId, colonyName, message, detail: pivotMatch ? `pivoted to ${pivotMatch[1]}` : "pivoted", delta: null };
     }
     default:
       return { colonyId, colonyName: null, message, detail: null, delta: null };
@@ -2677,8 +2139,6 @@ function parseFeedEvent(
 function extractColonyNameFromMessage(message: string): string | null {
   const result = message.match(/^Result\s+([^:]+):/);
   if (result) return result[1].trim();
-  const loses = message.match(/^(.+?)\s+loses\s+\d+\s+ants/);
-  if (loses) return loses[1].trim();
   const colon = message.match(/^([^:]{2,40}):\s/);
   if (colon) return colon[1].trim();
   return null;

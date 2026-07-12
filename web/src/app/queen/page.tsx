@@ -30,8 +30,8 @@ export default function QueenPage() {
     setMsg("");
   }
 
-  // ---- not connected: a queen must be bound to a wallet ----
-  if (!wallet.connected) {
+  // ---- not verified: a queen must be bound to a signed wallet session ----
+  if (!wallet.authenticated) {
     return (
       <div className="flex flex-col gap-3">
         <Header />
@@ -41,8 +41,9 @@ export default function QueenPage() {
             Every wallet may crown <b>one queen ant</b> — she carries your name into every room and match.
           </p>
           <button className="btn btn-primary" onClick={() => connect().catch((e) => setMsg(e.message))}>
-            🔗 Connect Phantom to crown her
+            🔗 Verify Phantom to crown her
           </button>
+          <p className="text-xs text-ink-faint">One identity signature only — no transaction and no SOL.</p>
           {msg && <p className="text-xs text-danger">{msg}</p>}
         </div>
       </div>

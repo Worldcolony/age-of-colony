@@ -14,6 +14,7 @@ from app.main import (
     app,
     _finish_live_game,
     _fetch_score_sources,
+    _ensure_room_log_hydrated,
     _live_auto_finish_reached,
     _live_timeline_active,
     _live_timeline_finished,
@@ -33,15 +34,19 @@ from app.game.harness import (
     BASELINE_MARKET_CONTEXTS,
     GameHarness,
     GameManager,
+    MARKET_RISK_SUGAR,
+    MAX_RESERVED_SUGAR,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
+    STARTING_COLONY_SUGAR,
+    STYLE_ENTRY_THRESHOLDS,
     ant_bet_history,
     build_info_packet,
     build_opportunity,
     build_opportunities,
     create_prediction,
-    food_drain_for_colony,
     info_cost_for_colony,
+    opportunity_options,
     run_vote,
     should_buy_info,
 )
@@ -68,6 +73,20 @@ def penalty_event(**overrides):
     }
     event.update(overrides)
     return event
+
+
+def vote_for_option(colony, opportunity, *, option_index=0, support_count=20, active_count=20, weight=1.0):
+    """Build a raw ant ballot for deterministic Sugar V0 entry tests."""
+    predictions = {option.option_id: [] for option in opportunity.options}
+    predictions[opportunity.options[option_index].option_id] = [
+        {"antId": ant.ant_id, "weight": weight}
+        for ant in colony.ants[:support_count]
+    ]
+    return {
+        "activeCount": active_count,
+        "predictions": predictions,
+        "infoRequests": [],
+    }
 
 
 class FakeDeepSeekAntAgent:
@@ -139,9 +158,13 @@ class GameHarnessTest(unittest.TestCase):
         self.assertIsNone(opportunity.deadline_clock)
         self.assertIsNone(opportunity.deadline_event_index)
         self.assertEqual(opportunity.info_cost, 3)
-        labels = {option.label: option.multiplier for option in opportunity.options}
-        self.assertEqual(labels["yes, penalty scored"], 1.35)
-        self.assertEqual(labels["no, missed or saved"], 5.5)
+        rewards = {option.label: option.reward_sugar for option in opportunity.options}
+        self.assertEqual(rewards["yes, penalty scored"], 1)
+        self.assertEqual(rewards["no, missed or saved"], 5)
+        self.assertTrue(all(option.risk_sugar == MARKET_RISK_SUGAR for option in opportunity.options))
+        public_options = opportunity.public_state()["options"]
+        self.assertTrue(all(option["riskSugar"] == MARKET_RISK_SUGAR for option in public_options))
+        self.assertEqual([option["rewardSugar"] for option in public_options], [1, 5])
 
     def test_unconfirmed_penalty_does_not_create_penalty_market(self):
         opportunity = build_opportunity(penalty_event(confirmed=False, description="Penalty - pending confirmation"), 1)
@@ -451,19 +474,26 @@ class GameHarnessTest(unittest.TestCase):
         )
 
         archetypes = {ant.archetype for ant in colony.ants}
+        public = colony.public_state(0)
 
         self.assertEqual(colony.size, STARTING_COLONY_ANTS)
-        self.assertEqual(colony.food, STARTING_COLONY_FOOD)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
         self.assertEqual(len(colony.ants), STARTING_COLONY_ANTS)
         self.assertEqual(colony.ants[0].ant_id, "ant_0000")
         self.assertEqual(colony.ants[-1].ant_id, "ant_0019")
         self.assertTrue(all(not ant.ant_id.startswith(colony.colony_id) for ant in colony.ants))
+        self.assertEqual(public["sugar"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["food"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["score"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["sugarReserved"], 0)
+        self.assertEqual(public["sugarAvailable"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["economy"]["currency"], "sugar")
         self.assertIn("cautious", archetypes)
         self.assertIn("data_first", archetypes)
         self.assertGreater(len(archetypes), 3)
         self.assertTrue(any(ant.risk_appetite > 0.55 for ant in colony.ants))
 
-    def test_open_bets_do_not_block_future_votes(self):
+    def test_sugar_v0_keeps_all_twenty_ants_active_without_wounds_or_deaths(self):
         _, harness = self.make_room()
         colony = harness.add_colony(
             name="Risk Nest",
@@ -473,19 +503,19 @@ class GameHarnessTest(unittest.TestCase):
             info_need="medium",
         )
         colony.ants[0].engaged_prediction_ids.add("pred_open")
-        colony.ants[1].wounded_until_event = 2
-        colony.ants[2].alive = False
 
         active_ids = [ant.ant_id for ant in colony.active_ants(1)]
         public = colony.public_state(1)
 
         self.assertIn("ant_0000", active_ids)
-        self.assertNotIn("ant_0001", active_ids)
-        self.assertNotIn("ant_0002", active_ids)
-        self.assertEqual(public["antsAlive"], STARTING_COLONY_ANTS - 1)
-        self.assertEqual(public["antsActive"], STARTING_COLONY_ANTS - 2)
+        self.assertEqual(len(active_ids), STARTING_COLONY_ANTS)
+        self.assertEqual(public["antsAlive"], STARTING_COLONY_ANTS)
+        self.assertEqual(public["antsActive"], STARTING_COLONY_ANTS)
         self.assertEqual(public["antsEngaged"], 0)
-        self.assertEqual(public["antsWounded"], 1)
+        self.assertEqual(public["antsWounded"], 0)
+        self.assertEqual(public["antsDead"], 0)
+        self.assertEqual(public["antsBorn"], 0)
+        self.assertEqual(public["larvae"], 0)
 
     def test_same_ant_can_vote_on_multiple_markets(self):
         def first_available_vote(_ant, context):
@@ -513,10 +543,260 @@ class GameHarnessTest(unittest.TestCase):
         )
 
         predictions = [prediction for prediction in room.predictions.values() if prediction.colony_id == colony.colony_id]
-        self.assertGreaterEqual(len(predictions), 2)
+        self.assertEqual(len(predictions), 5)
         ant_usage = Counter(ant_id for prediction in predictions for ant_id in prediction.ant_ids)
         self.assertTrue(any(count > 1 for count in ant_usage.values()))
+        self.assertTrue(all(prediction.reserved_food == MARKET_RISK_SUGAR for prediction in predictions))
+        self.assertEqual(colony.food_reserved, MAX_RESERVED_SUGAR)
+        prediction_logs = [event for event in room.log if event.kind == "prediction"]
+        self.assertEqual(len(prediction_logs), 5)
+        self.assertTrue(all(event.data["riskSugar"] == MARKET_RISK_SUGAR for event in prediction_logs))
+        self.assertTrue(all(event.data["entryThreshold"] == STYLE_ENTRY_THRESHOLDS["balanced"] for event in prediction_logs))
+        self.assertTrue(all(event.data["consensus"] == 1.0 for event in prediction_logs))
         self.assertEqual(colony.public_state(room.event_index)["antsEngaged"], 0)
+
+    def test_sugar_v0_has_no_upkeep_starvation_or_larvae_progression(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Stable Nest", 20, "balanced", "momentum", "medium")
+
+        for seq in range(1, 121):
+            harness.process_event(
+                {
+                    "fixtureId": 42,
+                    "seq": seq,
+                    "action": "clock_tick",
+                    "minute": seq // 2,
+                    "clockSeconds": seq * 30,
+                    "description": "Clock tick",
+                }
+            )
+
+        public = colony.public_state(room.event_index)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
+        self.assertEqual(public["sugar"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["score"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["antsAlive"], STARTING_COLONY_ANTS)
+        self.assertEqual(public["antsDead"], 0)
+        self.assertEqual(public["antsWounded"], 0)
+        self.assertEqual(public["antsBorn"], 0)
+        self.assertEqual(public["larvae"], 0)
+        self.assertFalse([event for event in room.log if event.kind in {"starvation", "hatch"}])
+
+    def test_style_entry_thresholds_use_raw_vote_counts_and_are_inclusive(self):
+        room, harness = self.make_room()
+        opportunity = build_opportunities(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            1,
+            room.match_state,
+        )[0]
+        minimum_support = {"cautious": 14, "balanced": 12, "aggressive": 11}
+
+        self.assertEqual(
+            STYLE_ENTRY_THRESHOLDS,
+            {"cautious": 0.70, "balanced": 0.60, "aggressive": 0.51},
+        )
+        for style, support_count in minimum_support.items():
+            with self.subTest(style=style):
+                colony = harness.add_colony(f"{style} threshold", 20, style, "momentum", "medium")
+                below = create_prediction(
+                    colony,
+                    opportunity,
+                    vote_for_option(colony, opportunity, support_count=support_count - 1),
+                    1,
+                    bought_info=False,
+                )
+                at_or_above = create_prediction(
+                    colony,
+                    opportunity,
+                    vote_for_option(colony, opportunity, support_count=support_count),
+                    1,
+                    bought_info=False,
+                )
+                self.assertIsNone(below)
+                self.assertIsNotNone(at_or_above)
+                self.assertEqual(len(at_or_above.ant_ids), support_count)
+                self.assertEqual(at_or_above.reserved_food, MARKET_RISK_SUGAR)
+                self.assertEqual(at_or_above.entry_threshold, STYLE_ENTRY_THRESHOLDS[style])
+                self.assertAlmostEqual(at_or_above.support_fraction, support_count / STARTING_COLONY_ANTS)
+
+        raw_count_colony = harness.add_colony("Raw Count", 20, "balanced", "momentum", "medium")
+        raw_vote = vote_for_option(raw_count_colony, opportunity, support_count=12, weight=0.01)
+        raw_vote["predictions"][opportunity.options[1].option_id] = [
+            {"antId": ant.ant_id, "weight": 100.0}
+            for ant in raw_count_colony.ants[12:20]
+        ]
+        raw_prediction = create_prediction(
+            raw_count_colony,
+            opportunity,
+            raw_vote,
+            1,
+            bought_info=False,
+        )
+        self.assertIsNotNone(raw_prediction)
+        self.assertEqual(raw_prediction.option.option_id, opportunity.options[0].option_id)
+        self.assertEqual(len(raw_prediction.ant_ids), 12)
+
+    def test_market_entry_reserves_two_sugar_caps_at_ten_and_void_releases(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Five Markets", 20, "balanced", "momentum", "medium")
+        opportunities = build_opportunities(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            1,
+            room.match_state,
+        )
+
+        opened = []
+        for opportunity in opportunities:
+            prediction = create_prediction(
+                colony,
+                opportunity,
+                vote_for_option(colony, opportunity, support_count=12),
+                1,
+                bought_info=False,
+            )
+            self.assertIsNotNone(prediction)
+            self.assertEqual(prediction.reserved_food, MARKET_RISK_SUGAR)
+            room.opportunities[opportunity.opportunity_id] = opportunity
+            room.predictions[prediction.prediction_id] = prediction
+            opened.append((prediction, opportunity))
+
+        self.assertEqual(MARKET_RISK_SUGAR, 2)
+        self.assertEqual(MAX_RESERVED_SUGAR, 10)
+        self.assertEqual(colony.food_reserved, MAX_RESERVED_SUGAR)
+        self.assertEqual(colony.public_state(1)["sugarAvailable"], 10)
+        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 5)
+
+        extra_opportunity = build_opportunity(penalty_event(seq=2), 2, room.match_state)
+        blocked = create_prediction(
+            colony,
+            extra_opportunity,
+            vote_for_option(colony, extra_opportunity, support_count=12),
+            2,
+            bought_info=False,
+        )
+        self.assertIsNone(blocked)
+
+        first_prediction, first_opportunity = opened[0]
+        harness._void_prediction(first_prediction, first_opportunity, reason="test")
+        self.assertEqual(colony.food_reserved, MAX_RESERVED_SUGAR - MARKET_RISK_SUGAR)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
+        self.assertEqual(colony.public_state(2)["score"], STARTING_COLONY_SUGAR)
+        self.assertEqual(room.log[-1].kind, "void")
+        self.assertEqual(room.log[-1].data["riskSugar"], MARKET_RISK_SUGAR)
+        self.assertEqual(room.log[-1].data["sugarReserved"], MARKET_RISK_SUGAR)
+
+        replacement = create_prediction(
+            colony,
+            extra_opportunity,
+            vote_for_option(colony, extra_opportunity, support_count=12),
+            2,
+            bought_info=False,
+        )
+        self.assertIsNotNone(replacement)
+        self.assertEqual(colony.food_reserved, MAX_RESERVED_SUGAR)
+
+    def test_supporting_ant_count_does_not_scale_sugar_reward_or_loss(self):
+        room, harness = self.make_room()
+        opportunity = build_opportunities(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 10,
+                "clockSeconds": 600,
+                "participant": 1,
+                "participantLabel": "France",
+                "possession": 1,
+                "possessionLabel": "France",
+                "description": "High danger possession - France",
+            },
+            1,
+            room.match_state,
+        )[0]
+
+        winners = [
+            harness.add_colony("Twelve Supporters", 20, "balanced", "momentum", "medium"),
+            harness.add_colony("Twenty Supporters", 20, "balanced", "momentum", "medium"),
+        ]
+        winner_predictions = [
+            create_prediction(
+                colony,
+                opportunity,
+                vote_for_option(colony, opportunity, support_count=support_count),
+                1,
+                bought_info=False,
+            )
+            for colony, support_count in zip(winners, (12, 20))
+        ]
+        self.assertEqual([len(prediction.ant_ids) for prediction in winner_predictions], [12, 20])
+        for prediction in winner_predictions:
+            harness._apply_settlement(prediction, opportunity, win=True, reason="test")
+        self.assertEqual([colony.food for colony in winners], [24, 24])
+        self.assertEqual([colony.public_state(1)["score"] for colony in winners], [24, 24])
+
+        losers = [
+            harness.add_colony("Twelve Losers", 20, "balanced", "momentum", "medium"),
+            harness.add_colony("Twenty Losers", 20, "balanced", "momentum", "medium"),
+        ]
+        loser_predictions = [
+            create_prediction(
+                colony,
+                opportunity,
+                vote_for_option(colony, opportunity, support_count=support_count),
+                1,
+                bought_info=False,
+            )
+            for colony, support_count in zip(losers, (12, 20))
+        ]
+        self.assertEqual([len(prediction.ant_ids) for prediction in loser_predictions], [12, 20])
+        for prediction in loser_predictions:
+            harness._apply_settlement(prediction, opportunity, win=False, reason="test")
+        self.assertEqual([colony.food for colony in losers], [18, 18])
+        self.assertEqual([colony.public_state(1)["score"] for colony in losers], [18, 18])
+
+    def test_market_reward_sugar_table_is_integer_and_risk_is_fixed(self):
+        expected = {
+            "penalties": {"penalty_goal": 1, "penalty_no_goal": 5},
+            "goal_next_10": {"goal_next_10_yes": 4, "goal_next_10_no": 1},
+            "next_goal_team": {"next_goal_p1": 4, "next_goal_p2": 4, "next_goal_none": 1},
+            "next_corner": {"next_corner_p1": 2, "next_corner_p2": 2, "next_corner_none": 1},
+            "next_free_kick": {"next_free_kick_p1": 2, "next_free_kick_p2": 2, "next_free_kick_none": 1},
+            "next_yellow_card": {
+                "next_yellow_card_p1": 3,
+                "next_yellow_card_p2": 3,
+                "next_yellow_card_none": 1,
+            },
+            "next_foul": {"next_foul_p1": 2, "next_foul_p2": 2},
+        }
+
+        for context, rewards in expected.items():
+            with self.subTest(context=context):
+                options = opportunity_options(context, "France", "Belgium")
+                self.assertEqual({option.option_id: option.reward_sugar for option in options}, rewards)
+                self.assertTrue(all(isinstance(option.reward_sugar, int) for option in options))
+                self.assertTrue(all(option.risk_sugar == MARKET_RISK_SUGAR for option in options))
 
     def test_legacy_french_config_values_are_normalized(self):
         _, harness = self.make_room()
@@ -638,18 +918,6 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(second_call["context"]["colony"]["strategyRevision"], 2)
         self.assertNotIn(ant.ant_id, colony.public_state(room.event_index)["antStrategies"])
 
-    def test_dead_ant_cannot_receive_new_strategy_orders(self):
-        room, harness = self.make_room()
-        colony = harness.add_colony("Silent Nest", 20, "balanced", "momentum", "medium")
-        room.status = "running_live"
-        ant = colony.ants[0]
-        ant.alive = False
-
-        with self.assertRaisesRegex(ValueError, "dead ants"):
-            harness.update_ant_strategy(colony.colony_id, ant.ant_id, style="aggressive")
-
-        self.assertEqual(colony.strategy_revision, 0)
-
     def test_restored_event_log_merges_supabase_events_once(self):
         room, _ = self.make_room()
         room.log.clear()
@@ -726,7 +994,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(history[0]["strategy"]["style"], "aggressive")
         self.assertEqual(history[0]["resolvedAt"], 110)
 
-    def test_anonymous_owner_and_player_identity_are_public(self):
+    def test_anonymous_owner_and_player_identity_are_not_public(self):
         manager = GameManager()
         room = manager.create_room(
             fixture_id=42,
@@ -742,11 +1010,16 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertEqual(len(public["roomCode"]), 6)
         self.assertTrue(public["roomCode"].isdigit())
-        self.assertEqual(public["owner"], {"anonymousId": "anon_browser_1", "name": "Tanguy"})
+        self.assertEqual(
+            public["owner"],
+            {"wallet": None, "name": "Tanguy"},
+        )
         self.assertEqual(
             public["players"],
-            [{"playerId": player.player_id, "name": "Tanguy", "anonymousId": "anon_browser_1", "isHost": True}],
+            [{"playerId": player.player_id, "name": "Tanguy", "isHost": True}],
         )
+        self.assertEqual(room.owner_anonymous_id, "anon_browser_1")
+        self.assertEqual(player.anonymous_id, "anon_browser_1")
 
     def test_rooms_get_private_six_digit_codes(self):
         manager = GameManager()
@@ -807,80 +1080,6 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(info_cost_for_colony(medium, opportunity), 3)
         self.assertEqual(info_cost_for_colony(large, opportunity), 3)
 
-    def test_colony_style_changes_default_stake_size(self):
-        room, harness = self.make_room()
-        opportunity = build_opportunity(
-            {
-                "fixtureId": 42,
-                "seq": 1,
-                "action": "high_danger_possession",
-                "minute": 10,
-                "clockSeconds": 600,
-                "participant": 1,
-                "participantLabel": "France",
-                "possession": 1,
-                "possessionLabel": "France",
-                "description": "High danger possession - France",
-            },
-            1,
-            room.match_state,
-        )
-        cautious = harness.add_colony("Careful", 50, "cautious", "momentum", "medium")
-        aggressive = harness.add_colony("Bold", 50, "aggressive", "momentum", "medium")
-
-        def vote_for(colony):
-            votes = [{"antId": ant.ant_id, "vote": "yes", "weight": 1.0} for ant in colony.active_ants(1)[:20]]
-            return {
-                "activeCount": STARTING_COLONY_ANTS,
-                "predictions": {
-                    "goal_next_10_yes": votes,
-                    "goal_next_10_no": [],
-                },
-                "infoRequests": [],
-            }
-
-        cautious_prediction = create_prediction(cautious, opportunity, vote_for(cautious), 1, bought_info=False)
-        aggressive_prediction = create_prediction(aggressive, opportunity, vote_for(aggressive), 1, bought_info=False)
-
-        self.assertIsNotNone(cautious_prediction)
-        self.assertIsNotNone(aggressive_prediction)
-        self.assertLess(len(cautious_prediction.ant_ids), len(aggressive_prediction.ant_ids))
-
-    def test_food_drain_uses_alive_ants_not_starting_size(self):
-        _, harness = self.make_room()
-        colony = harness.add_colony("Large", 50, "aggressive", "chaos", "low")
-        for ant in colony.ants[:10]:
-            ant.alive = False
-
-        self.assertEqual(len(colony.alive_ants), 10)
-        self.assertEqual(food_drain_for_colony(colony), 1)
-
-    def test_late_join_does_not_pay_retroactive_upkeep(self):
-        manager = GameManager()
-        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
-        room.status = "running_live"
-        room.event_index = 600
-        harness = manager.harness(room.game_id)
-
-        colony = harness.add_colony("Late Nest", 20, "balanced", "momentum", "medium")
-
-        self.assertEqual(colony.last_food_event_index, 600)
-        self.assertEqual(colony.food, STARTING_COLONY_FOOD)
-        harness.process_event(
-            {
-                "fixtureId": 42,
-                "seq": 601,
-                "action": "clock_tick",
-                "minute": 80,
-                "clockSeconds": 4800,
-                "description": "Clock tick",
-            }
-        )
-
-        self.assertEqual(colony.food, STARTING_COLONY_FOOD)
-        self.assertEqual(len(colony.alive_ants), STARTING_COLONY_ANTS)
-        self.assertEqual(colony.last_food_event_index, 600)
-
     def test_zero_food_colony_cannot_create_prediction(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Empty Nest", 20, "aggressive", "momentum", "low")
@@ -916,254 +1115,56 @@ class GameHarnessTest(unittest.TestCase):
         self.assertIsNone(prediction)
         self.assertEqual(colony.food, 0)
 
-    def test_open_prediction_reserves_food_and_blocks_duplicate_exposure(self):
-        room, harness = self.make_room()
-        colony = harness.add_colony("Collateral Nest", 20, "aggressive", "chaos", "low")
-        colony.food = 6
-        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
-        risky_option = opportunity.options[1]
-        risky_votes = [{"antId": ant.ant_id, "weight": 1.0} for ant in colony.active_ants(1)]
-        vote = {
-            "activeCount": len(risky_votes),
-            "predictions": {
-                opportunity.options[0].option_id: [],
-                risky_option.option_id: risky_votes,
-            },
-            "infoRequests": [],
-        }
-
-        first = create_prediction(colony, opportunity, vote, 1, bought_info=False)
-        second = create_prediction(colony, opportunity, vote, 1, bought_info=False)
-
-        self.assertIsNotNone(first)
-        self.assertEqual(first.reserved_food, 6)
-        self.assertEqual(colony.food_reserved, 6)
-        self.assertIsNone(second)
-        self.assertEqual(colony.public_state(1)["economy"]["available"], 0)
-
-        room.predictions[first.prediction_id] = first
-        room.opportunities[opportunity.opportunity_id] = opportunity
-        harness._void_prediction(first, opportunity, reason="test")
-        self.assertEqual(colony.food_reserved, 0)
-        self.assertEqual(colony.public_state(1)["economy"]["available"], 6)
-
-    def test_rally_and_recall_reconcile_collateral_and_ant_history(self):
+    def test_live_tactics_are_unavailable_and_cannot_change_sugar_v0_position(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Tactics Nest", 20, "balanced", "penalties", "medium")
         room.status = "running_live"
         opportunity = build_opportunity(penalty_event(), 1, room.match_state)
-        safe_option = opportunity.options[0]
-        lead_ant = colony.ants[0]
-        vote = {
-            "activeCount": 1,
-            "predictions": {
-                safe_option.option_id: [{"antId": lead_ant.ant_id, "weight": 1.0}],
-                opportunity.options[1].option_id: [],
-            },
-            "infoRequests": [],
-        }
-        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
-        self.assertIsNotNone(prediction)
-        room.predictions[prediction.prediction_id] = prediction
-        room.opportunities[opportunity.opportunity_id] = opportunity
-        room.add_log(
-            "prediction",
-            "Tactics Nest opens a position.",
-            {
-                "colonyId": colony.colony_id,
-                "predictionId": prediction.prediction_id,
-                "opportunityId": opportunity.opportunity_id,
-                "antIds": list(prediction.ant_ids),
-                "ants": len(prediction.ant_ids),
-                "option": prediction.option.__dict__,
-                "market": opportunity.public_state(),
-                "foodReserved": prediction.reserved_food,
-            },
+        prediction = create_prediction(
+            colony,
+            opportunity,
+            vote_for_option(colony, opportunity, support_count=12),
+            1,
+            bought_info=False,
         )
-
-        added = harness.rally(colony.colony_id, opportunity.opportunity_id)
-        rally_event = room.log[-1]
-        rallied_ant_id = rally_event.data["antIdsAdded"][0]
-
-        self.assertEqual(added, 5)
-        self.assertEqual(prediction.reserved_food, 6)
-        self.assertEqual(colony.food_reserved, 6)
-        self.assertEqual(colony.food, 17)
-        self.assertEqual(colony.memory.food_net, -3)
-        self.assertLessEqual(colony.food_reserved, colony.food)
-
-        removed = harness.recall(colony.colony_id, opportunity.opportunity_id)
-
-        self.assertEqual(removed, 5)
-        self.assertEqual(room.log[-1].data["antIdsRemoved"], rally_event.data["antIdsAdded"])
-        self.assertEqual(prediction.reserved_food, 1)
-        self.assertEqual(colony.food_reserved, 1)
-        self.assertEqual(colony.public_state(1)["economy"]["available"], 16)
-        recalled_history = ant_bet_history(room, colony.colony_id, rallied_ant_id)
-        self.assertEqual(len(recalled_history), 1)
-        self.assertEqual(recalled_history[0]["status"], "recalled")
-        self.assertEqual(recalled_history[0]["resolutionReason"], "recalled")
-        self.assertEqual(recalled_history[0]["decisionReason"], "Joined through a live rally.")
-        self.assertIsNotNone(recalled_history[0]["strategy"])
-
-    def test_rally_only_adds_active_ants(self):
-        room, harness = self.make_room()
-        colony = harness.add_colony("Active Rally Nest", 20, "balanced", "penalties", "medium")
-        room.status = "running_live"
-        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
-        safe_option = opportunity.options[0]
-        lead_ant = colony.ants[0]
-        vote = {
-            "activeCount": 1,
-            "predictions": {
-                safe_option.option_id: [{"antId": lead_ant.ant_id, "weight": 1.0}],
-                opportunity.options[1].option_id: [],
-            },
-            "infoRequests": [],
-        }
-        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
         self.assertIsNotNone(prediction)
         room.predictions[prediction.prediction_id] = prediction
         room.opportunities[opportunity.opportunity_id] = opportunity
-        for ant in colony.ants[2:]:
-            ant.wounded_until_event = room.event_index + 10
+        starting_ant_ids = list(prediction.ant_ids)
 
-        added = harness.rally(colony.colony_id, opportunity.opportunity_id)
+        for action in (
+            lambda: harness.rally(colony.colony_id, opportunity.opportunity_id),
+            lambda: harness.recall(colony.colony_id, opportunity.opportunity_id),
+            lambda: harness.switch_call(colony.colony_id, opportunity.opportunity_id, opportunity.options[1].option_id),
+        ):
+            with self.assertRaisesRegex(ValueError, "unavailable in Sugar V0"):
+                action()
 
-        self.assertEqual(added, 1)
-        self.assertEqual(room.log[-1].data["antIdsAdded"], [colony.ants[1].ant_id])
+        self.assertEqual(prediction.ant_ids, starting_ant_ids)
+        self.assertEqual(prediction.reserved_food, MARKET_RISK_SUGAR)
+        self.assertEqual(colony.food_reserved, MARKET_RISK_SUGAR)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
 
-    def test_rally_after_recall_restores_the_ant_to_open_history(self):
-        room, harness = self.make_room()
-        colony = harness.add_colony("Return Nest", 20, "balanced", "penalties", "medium")
-        room.status = "running_live"
-        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
-        safe_option, switched_option = opportunity.options
-        initial_ants = colony.ants[:6]
-        vote = {
-            "activeCount": len(initial_ants),
-            "predictions": {
-                safe_option.option_id: [{"antId": ant.ant_id, "weight": 1.0} for ant in initial_ants],
-                opportunity.options[1].option_id: [],
-            },
-            "infoRequests": [],
-        }
-        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
-        self.assertIsNotNone(prediction)
-        room.predictions[prediction.prediction_id] = prediction
-        room.opportunities[opportunity.opportunity_id] = opportunity
-        room.add_log(
-            "prediction",
-            "Return Nest opens a position.",
-            {
-                "colonyId": colony.colony_id,
-                "predictionId": prediction.prediction_id,
-                "opportunityId": opportunity.opportunity_id,
-                "antIds": list(prediction.ant_ids),
-                "ants": len(prediction.ant_ids),
-                "option": prediction.option.__dict__,
-                "market": opportunity.public_state(),
-                "foodReserved": prediction.reserved_food,
-            },
-        )
-
-        harness.recall(colony.colony_id, opportunity.opportunity_id)
-        recalled_ant_id = room.log[-1].data["antIdsRemoved"][0]
-        self.assertEqual(ant_bet_history(room, colony.colony_id, recalled_ant_id)[0]["status"], "recalled")
-
-        harness.switch_call(colony.colony_id, opportunity.opportunity_id, switched_option.option_id)
-        harness.rally(colony.colony_id, opportunity.opportunity_id)
-        self.assertIn(recalled_ant_id, room.log[-1].data["antIdsAdded"])
-        returned_history = ant_bet_history(room, colony.colony_id, recalled_ant_id)
-        self.assertEqual(returned_history[0]["status"], "open")
-        self.assertIsNone(returned_history[0]["resolutionReason"])
-        self.assertEqual(returned_history[0]["optionId"], switched_option.option_id)
-        self.assertEqual(returned_history[0]["risk"], switched_option.risk)
-        self.assertEqual(returned_history[0]["foodAtRisk"], 3.0)
-
-    def test_switch_reprices_collateral_and_settles_the_new_option(self):
-        room, harness = self.make_room()
-        colony = harness.add_colony("Pivot Nest", 20, "balanced", "penalties", "medium")
-        colony.food = 4
-        room.status = "running_live"
-        opportunity = build_opportunity(penalty_event(), 1, room.match_state)
-        safe_option, wild_option = opportunity.options
-        ant = colony.ants[0]
-        vote = {
-            "activeCount": 1,
-            "predictions": {
-                safe_option.option_id: [{"antId": ant.ant_id, "weight": 1.0}],
-                wild_option.option_id: [],
-            },
-            "infoRequests": [],
-        }
-        prediction = create_prediction(colony, opportunity, vote, 1, bought_info=False)
-        self.assertIsNotNone(prediction)
-        room.predictions[prediction.prediction_id] = prediction
-        room.opportunities[opportunity.opportunity_id] = opportunity
-        room.add_log(
-            "prediction",
-            "Pivot Nest opens a position.",
-            {
-                "colonyId": colony.colony_id,
-                "predictionId": prediction.prediction_id,
-                "opportunityId": opportunity.opportunity_id,
-                "antIds": list(prediction.ant_ids),
-                "ants": len(prediction.ant_ids),
-                "option": prediction.option.__dict__,
-                "market": opportunity.public_state(),
-                "foodReserved": prediction.reserved_food,
-            },
-        )
-
-        with self.assertRaisesRegex(ValueError, "cover the new risk"):
-            harness.switch_call(colony.colony_id, opportunity.opportunity_id, wild_option.option_id)
-        self.assertEqual(colony.food, 4)
-        self.assertEqual(colony.food_reserved, 1)
-
-        colony.food = 5
-        harness.switch_call(colony.colony_id, opportunity.opportunity_id, wild_option.option_id)
-
-        self.assertEqual(prediction.option.option_id, wild_option.option_id)
-        self.assertEqual(prediction.reserved_food, 3)
-        self.assertEqual(colony.food_reserved, 3)
-        self.assertEqual(colony.food, 3)
-        self.assertEqual(colony.memory.food_net, -2)
-        self.assertEqual(room.log[-1].data["foodReservedDelta"], 2)
-        self.assertLessEqual(colony.food_reserved, colony.food)
-
-        harness._apply_settlement(prediction, opportunity, win=False, reason="test")
-        history = ant_bet_history(room, colony.colony_id, ant.ant_id)
-
-        self.assertEqual(colony.food, 0)
-        self.assertEqual(colony.food_reserved, 0)
-        self.assertEqual(colony.memory.food_net, -5)
-        self.assertEqual(history[0]["status"], "lost")
-        self.assertEqual(history[0]["optionId"], wild_option.option_id)
-        self.assertEqual(history[0]["foodAtRisk"], 3.0)
-        self.assertEqual(history[0]["colonyFoodDelta"], -3.0)
-
-    def test_public_economy_matches_upkeep_state(self):
+    def test_public_economy_uses_sugar_aliases_and_score_is_current_balance(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Economy Nest", 20, "balanced", "momentum", "medium")
-        initial = colony.public_state(room.event_index)["economy"]
+        initial = colony.public_state(room.event_index)
 
-        self.assertEqual(
-            initial,
-            {
-                "currency": "food",
-                "balance": STARTING_COLONY_FOOD,
-                "reserved": 0,
-                "available": STARTING_COLONY_FOOD,
-                "net": 0,
-                "upkeepCost": 1,
-                "upkeepEveryEvents": 24,
-                "nextUpkeepInEvents": 24,
-                "lastUpkeepEventIndex": 0,
-                "runwayUpkeeps": STARTING_COLONY_FOOD,
-                "status": "stable",
-            },
-        )
+        self.assertEqual(initial["sugar"], STARTING_COLONY_SUGAR)
+        self.assertEqual(initial["food"], STARTING_COLONY_SUGAR)
+        self.assertEqual(initial["score"], STARTING_COLONY_SUGAR)
+        self.assertEqual(initial["sugarReserved"], 0)
+        self.assertEqual(initial["sugarAvailable"], STARTING_COLONY_SUGAR)
+        self.assertEqual(initial["sugarNet"], 0)
+        self.assertEqual(initial["economy"]["currency"], "sugar")
+        self.assertEqual(initial["economy"]["balance"], STARTING_COLONY_SUGAR)
+        self.assertEqual(initial["economy"]["reserved"], 0)
+        self.assertEqual(initial["economy"]["available"], STARTING_COLONY_SUGAR)
+        self.assertEqual(initial["economy"]["net"], 0)
+        self.assertFalse(initial["economy"]["upkeepEnabled"])
+        self.assertEqual(initial["economy"]["upkeepCost"], 0)
+        self.assertEqual(initial["economy"]["riskPerMarket"], MARKET_RISK_SUGAR)
+        self.assertEqual(initial["economy"]["maxReserved"], MAX_RESERVED_SUGAR)
 
         room.event_index = 23
         harness.process_event(
@@ -1178,17 +1179,15 @@ class GameHarnessTest(unittest.TestCase):
         )
         public = colony.public_state(room.event_index)
 
-        self.assertEqual(colony.food, STARTING_COLONY_FOOD - 1)
-        self.assertEqual(colony.memory.food_net, -1)
-        self.assertEqual(public["food"], colony.food)
-        self.assertEqual(public["foodNet"], colony.memory.food_net)
-        self.assertEqual(public["economy"]["balance"], colony.food)
-        self.assertEqual(public["economy"]["net"], colony.memory.food_net)
-        self.assertEqual(public["economy"]["lastUpkeepEventIndex"], 24)
-        self.assertEqual(public["economy"]["nextUpkeepInEvents"], 24)
-        self.assertEqual(public["economy"]["runwayUpkeeps"], colony.food)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
+        self.assertEqual(colony.memory.food_net, 0)
+        self.assertEqual(public["sugar"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["food"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["score"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["economy"]["balance"], STARTING_COLONY_SUGAR)
+        self.assertEqual(public["economy"]["net"], 0)
 
-    def test_restored_room_keeps_economy_population_and_ant_strategy(self):
+    def test_restored_room_keeps_sugar_and_strategy_but_resets_v0_population(self):
         game_id = "game_restore_economy_test"
         room_code = "991234"
         game_manager.rooms.pop(game_id, None)
@@ -1215,14 +1214,16 @@ class GameHarnessTest(unittest.TestCase):
                     "favoriteContext": "momentum",
                     "infoNeed": "medium",
                     "strategyRevision": 2,
+                    "sugar": 18,
+                    "sugarNet": -2,
                     "food": 18,
                     "foodNet": -2,
-                    "larvae": 3,
-                    "antsAlive": 12,
+                    "larvae": 0,
+                    "antsAlive": 20,
                     "wins": 2,
                     "losses": 1,
                     "infoPurchases": 1,
-                    "economy": {"net": -2, "lastUpkeepEventIndex": 48},
+                    "economy": {"currency": "sugar", "balance": 18, "net": -2},
                     "antStrategies": {
                         "ant_0000": {
                             "style": "aggressive",
@@ -1246,9 +1247,10 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(colony.food, 18)
         self.assertEqual(colony.seed, 98765)
         self.assertEqual(colony.memory.food_net, -2)
-        self.assertEqual(colony.last_food_event_index, 48)
-        self.assertEqual(len(colony.alive_ants), 12)
-        self.assertEqual(colony.public_state(room.event_index)["larvae"], 3)
+        self.assertEqual(len(colony.alive_ants), STARTING_COLONY_ANTS)
+        self.assertEqual(colony.public_state(room.event_index)["sugar"], 18)
+        self.assertEqual(colony.public_state(room.event_index)["score"], 18)
+        self.assertEqual(colony.public_state(room.event_index)["larvae"], 0)
         self.assertEqual(colony.memory.accuracy, 2 / 3)
         self.assertEqual(colony.memory.info_purchases, 1)
         self.assertEqual(colony.strategy_revision, 2)
@@ -1268,7 +1270,6 @@ class GameHarnessTest(unittest.TestCase):
         )
 
         self.assertEqual(colony.food, 18)
-        self.assertEqual(colony.last_food_event_index, 48)
 
     def test_terminal_restored_room_keeps_original_public_snapshot(self):
         game_id = "game_restore_terminal_snapshot"
@@ -1462,6 +1463,197 @@ class GameHarnessTest(unittest.TestCase):
         self.assertIsNone(free_kick_opportunity.deadline_event_index)
         self.assertIsNone(yellow_card_opportunity.deadline_clock)
         self.assertIsNone(yellow_card_opportunity.deadline_event_index)
+
+    def test_goal_next_ten_expires_before_boundary_goal_but_next_goal_still_resolves(self):
+        for goal_clock, expected_window_reason, expected_window_win in (
+            (1199, "resolved", True),
+            (1200, "expired", False),
+            (1201, "expired", False),
+        ):
+            with self.subTest(goal_clock=goal_clock):
+                room, harness = self.make_room()
+                colony = harness.add_colony("Boundary Nest", 20, "balanced", "momentum", "medium")
+                source_event = {
+                    "fixtureId": 42,
+                    "seq": 1,
+                    "action": "high_danger_possession",
+                    "highlights": [],
+                    "minute": 10,
+                    "clockSeconds": 600,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "possession": 1,
+                    "possessionLabel": "France",
+                    "description": "High danger possession - France",
+                }
+                opportunities = build_opportunities(source_event, 1, room.match_state)
+                goal_window = next(item for item in opportunities if item.context == "goal_next_10")
+                next_goal = next(item for item in opportunities if item.context == "next_goal_team")
+                room.event_index = 1
+
+                predictions = {}
+                for opportunity in (goal_window, next_goal):
+                    room.opportunities[opportunity.opportunity_id] = opportunity
+                    prediction = create_prediction(
+                        colony,
+                        opportunity,
+                        vote_for_option(colony, opportunity, option_index=0, support_count=12),
+                        1,
+                        bought_info=False,
+                    )
+                    self.assertIsNotNone(prediction)
+                    room.predictions[prediction.prediction_id] = prediction
+                    predictions[opportunity.context] = prediction
+
+                harness.process_event(
+                    {
+                        "fixtureId": 42,
+                        "seq": 2,
+                        "action": "goal",
+                        "highlights": ["goal"],
+                        "minute": goal_clock // 60,
+                        "clockSeconds": goal_clock,
+                        "participant": 1,
+                        "participantLabel": "France",
+                        "score": {"participant1": 1, "participant2": 0},
+                        "confirmed": True,
+                        "description": "Goal - France - confirmed",
+                    }
+                )
+
+                settlements = {
+                    event.data.get("predictionId"): event
+                    for event in room.log
+                    if event.kind == "settlement"
+                }
+                window_settlement = settlements[predictions["goal_next_10"].prediction_id]
+                next_goal_settlement = settlements[predictions["next_goal_team"].prediction_id]
+                self.assertEqual(window_settlement.data.get("reason"), expected_window_reason)
+                self.assertEqual(window_settlement.data.get("win"), expected_window_win)
+                self.assertEqual(next_goal_settlement.data.get("reason"), "resolved")
+                self.assertTrue(next_goal_settlement.data.get("win"))
+
+    def test_goal_next_ten_event_fallback_expires_before_exact_deadline_event(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Event Boundary Nest", 20, "balanced", "momentum", "medium")
+        source_event = {
+            "fixtureId": 42,
+            "seq": 1,
+            "action": "high_danger_possession",
+            "highlights": [],
+            "minute": 10,
+            "participant": 1,
+            "participantLabel": "France",
+            "possession": 1,
+            "possessionLabel": "France",
+            "description": "High danger possession - France",
+        }
+        goal_window = next(
+            item
+            for item in build_opportunities(source_event, 1, room.match_state)
+            if item.context == "goal_next_10"
+        )
+        room.opportunities[goal_window.opportunity_id] = goal_window
+        prediction = create_prediction(
+            colony,
+            goal_window,
+            vote_for_option(colony, goal_window, option_index=0, support_count=12),
+            1,
+            bought_info=False,
+        )
+        self.assertIsNotNone(prediction)
+        room.predictions[prediction.prediction_id] = prediction
+        room.event_index = prediction.deadline_event_index - 1
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 57,
+                "action": "goal",
+                "highlights": ["goal"],
+                "minute": 20,
+                "participant": 1,
+                "participantLabel": "France",
+                "score": {"participant1": 1, "participant2": 0},
+                "confirmed": True,
+                "description": "Goal - France - confirmed",
+            }
+        )
+
+        settlement = next(
+            event
+            for event in room.log
+            if event.kind == "settlement" and event.data.get("predictionId") == prediction.prediction_id
+        )
+        self.assertEqual(settlement.data.get("reason"), "expired")
+        self.assertFalse(settlement.data.get("win"))
+
+    def test_unentered_markets_log_closure_and_do_not_block_a_later_slot(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Multi Market Nest", 20, "balanced", "momentum", "medium")
+        source_event = {
+            "fixtureId": 42,
+            "seq": 1,
+            "action": "high_danger_possession",
+            "highlights": [],
+            "minute": 10,
+            "clockSeconds": 600,
+            "participant": 1,
+            "participantLabel": "France",
+            "possession": 1,
+            "possessionLabel": "France",
+            "description": "High danger possession - France",
+        }
+        opportunities = build_opportunities(source_event, 1, room.match_state)
+        selected = {
+            opportunity.context: opportunity
+            for opportunity in opportunities
+            if opportunity.context in {"goal_next_10", "next_goal_team", "next_corner"}
+        }
+        room.event_index = 1
+        for opportunity in selected.values():
+            self.assertTrue(harness._claim_opportunity_slot(opportunity))
+            room.opportunities[opportunity.opportunity_id] = opportunity
+            room.add_log("opportunity", opportunity.label, {"opportunity": opportunity.public_state()})
+
+        backed_market = selected["next_goal_team"]
+        backed_prediction = create_prediction(
+            colony,
+            backed_market,
+            vote_for_option(colony, backed_market, option_index=0, support_count=12),
+            1,
+            bought_info=False,
+        )
+        self.assertIsNotNone(backed_prediction)
+        room.predictions[backed_prediction.prediction_id] = backed_prediction
+        self.assertEqual(len(room.public_state()["activeOpportunities"]), 3)
+
+        room.event_index = 2
+        harness._clear_old_opportunities()
+
+        self.assertEqual(
+            {item["opportunityId"] for item in room.public_state()["activeOpportunities"]},
+            {backed_market.opportunity_id},
+        )
+        closures = [event for event in room.log if event.kind == "market_closed"]
+        self.assertEqual(
+            {event.data.get("opportunityId") for event in closures},
+            {
+                selected["goal_next_10"].opportunity_id,
+                selected["next_corner"].opportunity_id,
+            },
+        )
+        self.assertTrue(all(event.data.get("reason") == "no_entries" for event in closures))
+        self.assertTrue(all(event.data.get("positionCount") == 0 for event in closures))
+        self.assertTrue(all(event.data.get("market", {}).get("opportunityId") for event in closures))
+
+        room.event_index = 25
+        replacement = next(
+            item
+            for item in build_opportunities({**source_event, "seq": 25, "clockSeconds": 1200}, 25, room.match_state)
+            if item.context == "goal_next_10"
+        )
+        self.assertTrue(harness._claim_opportunity_slot(replacement))
 
     def test_precision_market_resolves_on_next_goal_team(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_b"))
@@ -1956,7 +2148,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual([opportunity.opportunity_id for opportunity in free_kick_opportunities], [first_free_kick_id])
         self.assertTrue(open_free_kick_predictions)
 
-    def test_successful_prediction_adds_resources_only(self):
+    def test_successful_prediction_adds_fixed_sugar_reward_only(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
@@ -1983,7 +2175,7 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - France",
             }
         )
-        starting_food = colony.food
+        starting_sugar = colony.food
         harness.process_event(
             {
                 "fixtureId": 42,
@@ -2001,15 +2193,21 @@ class GameHarnessTest(unittest.TestCase):
         )
 
         self.assertGreaterEqual(colony.memory.attempts, 1)
-        self.assertGreater(colony.food, starting_food)
+        self.assertEqual(starting_sugar, STARTING_COLONY_SUGAR)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR + 4)
+        self.assertEqual(colony.public_state(room.event_index)["sugar"], STARTING_COLONY_SUGAR + 4)
+        self.assertEqual(colony.public_state(room.event_index)["score"], STARTING_COLONY_SUGAR + 4)
         self.assertEqual(colony.larvae, 0)
         settlement = next(event for event in room.log if event.kind == "settlement")
         self.assertTrue(settlement.data.get("win"))
-        self.assertGreater(settlement.data.get("resourceDelta"), 0)
+        self.assertEqual(settlement.data.get("resourceDelta"), 4)
+        self.assertEqual(settlement.data.get("sugarDelta"), 4)
+        self.assertEqual(settlement.data.get("rewardSugar"), 4)
+        self.assertEqual(settlement.data.get("riskSugar"), MARKET_RISK_SUGAR)
         self.assertNotIn("dead", settlement.data)
         self.assertNotIn("wounded", settlement.data)
 
-    def test_losing_prediction_removes_resources_only(self):
+    def test_losing_prediction_removes_fixed_market_risk_only(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
@@ -2036,7 +2234,7 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - France",
             }
         )
-        starting_food = colony.food
+        starting_sugar = colony.food
         harness.process_event(
             {
                 "fixtureId": 42,
@@ -2056,8 +2254,13 @@ class GameHarnessTest(unittest.TestCase):
         public_state = colony.public_state(room.event_index)
         settlement = next(event for event in room.log if event.kind == "settlement")
         self.assertFalse(settlement.data.get("win"))
-        self.assertLess(colony.food, starting_food)
-        self.assertLess(settlement.data.get("resourceDelta"), 0)
+        self.assertEqual(starting_sugar, STARTING_COLONY_SUGAR)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR - MARKET_RISK_SUGAR)
+        self.assertEqual(public_state["sugar"], STARTING_COLONY_SUGAR - MARKET_RISK_SUGAR)
+        self.assertEqual(public_state["score"], STARTING_COLONY_SUGAR - MARKET_RISK_SUGAR)
+        self.assertEqual(settlement.data.get("resourceDelta"), -MARKET_RISK_SUGAR)
+        self.assertEqual(settlement.data.get("sugarDelta"), -MARKET_RISK_SUGAR)
+        self.assertEqual(settlement.data.get("riskSugar"), MARKET_RISK_SUGAR)
         self.assertEqual(public_state["antsAlive"], STARTING_COLONY_ANTS)
         self.assertEqual(public_state["antsDead"], 0)
         self.assertEqual(public_state["antsWounded"], 0)
@@ -3102,7 +3305,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(allowed.status_code, 200)
         self.assertEqual(allowed.json()["colonies"][0]["style"], "aggressive")
 
-    def test_market_action_endpoints_return_exact_event_and_enforce_owner(self):
+    def test_market_action_endpoints_enforce_owner_and_disable_v0_tactics(self):
         room = game_manager.create_room(fixture_id=4244, participant1="Portugal", participant2="Brazil", seed=19)
         harness = game_manager.harness(room.game_id)
         harness.join_player("Alice", anonymous_id="anon_market_owner")
@@ -3189,20 +3392,17 @@ class DemoRunApiTest(unittest.TestCase):
             )
 
         self.assertEqual(blocked_rally.status_code, 403)
-        self.assertEqual(rally_response.status_code, 200)
-        self.assertEqual(rally_response.json()["event"]["kind"], "rally")
-        self.assertGreaterEqual(rally_response.json()["event"]["data"]["ants"], 1)
-        self.assertEqual(rally_response.json()["gameId"], room.game_id)
-        self.assertEqual(rally_response.json()["logCount"], rally_response.json()["event"]["index"] + 1)
+        self.assertEqual(rally_response.status_code, 422)
+        self.assertIn("unavailable in Sugar V0", rally_response.json()["detail"])
         self.assertEqual(blocked_recall.status_code, 403)
-        self.assertEqual(recall_response.status_code, 200)
-        self.assertEqual(recall_response.json()["event"]["kind"], "recall")
-        self.assertEqual(recall_response.json()["logCount"], recall_response.json()["event"]["index"] + 1)
+        self.assertEqual(recall_response.status_code, 422)
+        self.assertIn("unavailable in Sugar V0", recall_response.json()["detail"])
         self.assertEqual(blocked_switch.status_code, 403)
-        self.assertEqual(switch_response.status_code, 200)
-        self.assertEqual(switch_response.json()["event"]["kind"], "switch")
-        self.assertEqual(switch_response.json()["event"]["data"]["optionId"], risky_option.option_id)
-        self.assertEqual(switch_response.json()["logCount"], switch_response.json()["event"]["index"] + 1)
+        self.assertEqual(switch_response.status_code, 422)
+        self.assertIn("unavailable in Sugar V0", switch_response.json()["detail"])
+        self.assertEqual(prediction.reserved_food, MARKET_RISK_SUGAR)
+        self.assertEqual(colony.food_reserved, MARKET_RISK_SUGAR)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
 
     def test_live_ant_strategy_api_lists_updates_and_resets_owned_ant(self):
         client = TestClient(app)
@@ -3340,8 +3540,8 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(bet["context"], "penalties")
         self.assertEqual(bet["strategy"]["style"], "balanced")
         self.assertIn("test vote", bet["decisionReason"])
-        self.assertGreater(bet["foodAtRisk"], 0)
-        self.assertGreater(bet["colonyFoodDelta"], 0)
+        self.assertEqual(bet["foodAtRisk"], MARKET_RISK_SUGAR)
+        self.assertEqual(bet["colonyFoodDelta"], 1)
 
     def test_private_room_code_endpoint_supports_join(self):
         client = TestClient(app)
@@ -3410,7 +3610,7 @@ class DemoRunApiTest(unittest.TestCase):
         game = colony_response.json()
         self.assertTrue(game["players"][0]["ready"])
         self.assertEqual(game["players"][0]["colonyName"], "Host Alice")
-        self.assertEqual(game["colonies"][0]["playerAnonymousId"], "anon_host_alice")
+        self.assertNotIn("playerAnonymousId", game["colonies"][0])
 
         duplicate = client.post(
             f"/api/games/{created['gameId']}/colonies",
@@ -3542,7 +3742,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(colony_after_lock.status_code, 200)
         self.assertEqual(len(colony_after_lock.json()["colonies"]), 2)
 
-    def test_live_room_auto_starts_for_match_in_progress(self):
+    def test_live_room_auto_starts_for_match_in_progress_and_rejects_late_join(self):
         client = TestClient(app)
         kickoff = datetime.now(timezone.utc) - timedelta(minutes=25)
         created = client.post(
@@ -3577,7 +3777,7 @@ class DemoRunApiTest(unittest.TestCase):
             f"/api/rooms/{created['roomCode']}/players",
             json={"name": "Late Live", "anonymousId": "anon_late_live"},
         )
-        self.assertEqual(late_join.status_code, 200)
+        self.assertEqual(late_join.status_code, 409)
 
         with patch("app.main._ensure_live_task") as resumed_live_task:
             late_colony = client.post(
@@ -3591,10 +3791,8 @@ class DemoRunApiTest(unittest.TestCase):
                     "anonymousId": "anon_late_live",
                 },
             )
-        self.assertEqual(late_colony.status_code, 200)
-        self.assertEqual(late_colony.json()["status"], "running_live")
-        self.assertEqual(len(late_colony.json()["colonies"]), 2)
-        resumed_live_task.assert_called_once()
+        self.assertEqual(late_colony.status_code, 422)
+        resumed_live_task.assert_not_called()
 
     def test_error_live_room_recovers_when_state_is_loaded(self):
         client = TestClient(app)
@@ -3895,7 +4093,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(room.event_index, 2)
         self.assertTrue(any(event.kind == "game_error" and "Live update skipped" in event.message for event in room.log))
 
-    def test_live_host_can_manually_finish_stuck_room(self):
+    def test_live_host_cannot_finish_before_verified_full_time(self):
         client = TestClient(app)
         created = client.post(
             "/api/games",
@@ -3927,9 +4125,9 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(blocked.status_code, 403)
 
         finished = client.post(f"/api/games/{created['gameId']}/finish", json={"anonymousId": "anon_finish_host"})
-        self.assertEqual(finished.status_code, 200)
-        self.assertEqual(finished.json()["status"], "finished")
-        self.assertTrue(any(event.kind == "game_finished" for event in room.log))
+        self.assertEqual(finished.status_code, 409)
+        self.assertEqual(room.status, "running_live")
+        self.assertFalse(any(event.kind == "game_finished" for event in room.log))
 
     def test_replay_endpoint_resumes_running_live_room(self):
         client = TestClient(app)
@@ -5057,6 +5255,220 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(len(game["colonies"]), 1)
         self.assertEqual(game["agentCallMode"], "batch")
         self.assertIn(game["status"], {"running_replay", "finished"})
+
+
+class LivePositionRestoreTest(unittest.TestCase):
+    def _snapshot_and_events(self, game_id: str, room_code: str):
+        opportunity_id = "opp_42_7_next_goal_team"
+        colony_id = f"col_{room_code}"
+        market = {
+            "opportunityId": opportunity_id,
+            "fixtureId": 42,
+            "context": "next_goal_team",
+            "label": "Who scores the next goal?",
+            "teamLabel": "France",
+            "minute": 20,
+            "riskSugar": MARKET_RISK_SUGAR,
+            "options": [
+                {
+                    "optionId": "next_goal_p1",
+                    "label": "France scores the next goal",
+                    "risk": "wild",
+                    "multiplier": 4.4,
+                    "rewardSugar": 4,
+                    "riskSugar": MARKET_RISK_SUGAR,
+                },
+                {
+                    "optionId": "next_goal_p2",
+                    "label": "Belgium scores the next goal",
+                    "risk": "wild",
+                    "multiplier": 4.4,
+                    "rewardSugar": 4,
+                    "riskSugar": MARKET_RISK_SUGAR,
+                },
+                {
+                    "optionId": "next_goal_none",
+                    "label": "No goal before full time",
+                    "risk": "safe",
+                    "multiplier": 1.35,
+                    "rewardSugar": 1,
+                    "riskSugar": MARKET_RISK_SUGAR,
+                },
+            ],
+        }
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "fixtureId": 42,
+            "participant1": "France",
+            "participant2": "Belgium",
+            "status": "running_live",
+            "mode": "live",
+            "eventIndex": 7,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": colony_id,
+                    "name": "Restart Nest",
+                    "simulationSeed": 7123,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                    "sugar": STARTING_COLONY_SUGAR,
+                    "sugarReserved": MARKET_RISK_SUGAR,
+                    "sugarNet": 0,
+                }
+            ],
+            "activeOpportunities": [market],
+            "match": {"score": {"participant1": 0, "participant2": 0}, "gameState": "inplay"},
+        }
+        prediction_id = f"pred_{room_code}"
+        events = [
+            {
+                "index": 0,
+                "kind": "opportunity",
+                "message": market["label"],
+                "data": {"opportunity": market},
+            },
+            {
+                "index": 1,
+                "kind": "prediction",
+                "message": "Restart Nest enters France next goal.",
+                "data": {
+                    "colonyId": colony_id,
+                    "opportunityId": opportunity_id,
+                    "predictionId": prediction_id,
+                    "option": {
+                        "option_id": "next_goal_p1",
+                        "optionId": "next_goal_p1",
+                        "label": "France scores the next goal",
+                        "risk": "wild",
+                        "multiplier": 4.4,
+                        "target": "goal",
+                        "team_scope": "participant1",
+                        "reward_sugar": 4,
+                        "rewardSugar": 4,
+                    },
+                    "antIds": [f"ant_{index:04d}" for index in range(12)],
+                    "market": market,
+                    "sugarReserved": MARKET_RISK_SUGAR,
+                    "supportFraction": 0.6,
+                    "entryThreshold": STYLE_ENTRY_THRESHOLDS["balanced"],
+                },
+            },
+        ]
+        return public_state, events, colony_id, opportunity_id, prediction_id
+
+    def _cleanup_room(self, game_id: str, room_code: str) -> None:
+        game_manager.rooms.pop(game_id, None)
+        game_manager.room_codes.pop(room_code, None)
+
+    def test_open_position_and_reserved_sugar_survive_restore_then_settle(self):
+        game_id = "game_restore_open_position"
+        room_code = "881101"
+        public_state, events, colony_id, opportunity_id, prediction_id = self._snapshot_and_events(game_id, room_code)
+        self.addCleanup(self._cleanup_room, game_id, room_code)
+
+        room = _restore_room_from_stored_row(
+            {"game_id": game_id, "seed": 91, "public_state": public_state},
+            events=events,
+        )
+
+        self.assertIn(opportunity_id, room.opportunities)
+        self.assertIn(prediction_id, room.predictions)
+        self.assertFalse(room.predictions[prediction_id].resolved)
+        self.assertEqual(room.colonies[colony_id].food_reserved, MARKET_RISK_SUGAR)
+        self.assertEqual(room.public_state()["colonies"][0]["sugarAvailable"], STARTING_COLONY_SUGAR - MARKET_RISK_SUGAR)
+
+        game_manager.harness(game_id).process_event(
+            {
+                "fixtureId": 42,
+                "seq": 8,
+                "action": "goal",
+                "highlights": ["goal"],
+                "minute": 21,
+                "clockSeconds": 1260,
+                "participant": 1,
+                "participantLabel": "France",
+                "description": "Goal - France",
+            }
+        )
+
+        self.assertTrue(room.predictions[prediction_id].resolved)
+        self.assertEqual(room.colonies[colony_id].food_reserved, 0)
+        self.assertEqual(room.colonies[colony_id].food, STARTING_COLONY_SUGAR + 4)
+        settlement = next(event for event in room.log if event.kind == "settlement")
+        self.assertEqual(settlement.data["predictionId"], prediction_id)
+        self.assertEqual(settlement.data["sugarDelta"], 4)
+
+    def test_delayed_log_hydration_rebuilds_snapshot_position(self):
+        game_id = "game_hydrate_open_position"
+        room_code = "881102"
+        public_state, events, colony_id, opportunity_id, prediction_id = self._snapshot_and_events(game_id, room_code)
+        self.addCleanup(self._cleanup_room, game_id, room_code)
+        room = _restore_room_from_stored_row(
+            {"game_id": game_id, "seed": 92, "public_state": public_state},
+        )
+
+        self.assertIn(opportunity_id, room.opportunities)
+        self.assertNotIn(prediction_id, room.predictions)
+        self.assertEqual(room.colonies[colony_id].food_reserved, MARKET_RISK_SUGAR)
+
+        async def stored_replay(_game_id):
+            return {"game": public_state, "events": events}
+
+        class ConfiguredStore:
+            configured = True
+
+        with (
+            patch("app.main.supabase_store", ConfiguredStore()),
+            patch("app.main._stored_replay_or_none", stored_replay),
+        ):
+            asyncio.run(_ensure_room_log_hydrated(room))
+
+        self.assertIn(prediction_id, room.predictions)
+        self.assertIn(opportunity_id, room.opportunities)
+        self.assertEqual(room.colonies[colony_id].food_reserved, MARKET_RISK_SUGAR)
+        self.assertTrue(getattr(room, "_aoc_log_hydrated", False))
+
+    def test_later_void_hydration_releases_restored_collateral_and_prunes_market(self):
+        game_id = "game_hydrate_voided_position"
+        room_code = "881103"
+        public_state, events, colony_id, opportunity_id, prediction_id = self._snapshot_and_events(game_id, room_code)
+        self.addCleanup(self._cleanup_room, game_id, room_code)
+        room = _restore_room_from_stored_row(
+            {"game_id": game_id, "seed": 93, "public_state": public_state},
+            events=events,
+        )
+        self.assertFalse(room.predictions[prediction_id].resolved)
+        self.assertEqual(room.colonies[colony_id].food_reserved, MARKET_RISK_SUGAR)
+
+        closed_state = {
+            **public_state,
+            "activeOpportunities": [],
+            "colonies": [{**public_state["colonies"][0], "sugarReserved": 0}],
+        }
+        void_event = {
+            "index": 2,
+            "kind": "void",
+            "message": "Position voided after restart.",
+            "data": {
+                "colonyId": colony_id,
+                "opportunityId": opportunity_id,
+                "predictionId": prediction_id,
+                "reason": "full_time",
+                "sugarReserved": MARKET_RISK_SUGAR,
+            },
+        }
+        same_room = _restore_room_from_stored_row(
+            {"game_id": game_id, "seed": 93, "public_state": closed_state},
+            events=[*events, void_event],
+        )
+
+        self.assertIs(same_room, room)
+        self.assertTrue(room.predictions[prediction_id].resolved)
+        self.assertEqual(room.colonies[colony_id].food_reserved, 0)
+        self.assertNotIn(opportunity_id, room.opportunities)
 
 
 if __name__ == "__main__":

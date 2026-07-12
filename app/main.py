@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import secrets
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import RLock
@@ -9,7 +10,7 @@ from typing import Any, AsyncIterator, Literal
 import os
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,22 +20,26 @@ from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
-    FOOD_DRAIN_INTERVAL_EVENTS,
+    MARKET_RISK_SUGAR,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     ColonyState,
     GameLogEvent,
     GameRoom,
+    Opportunity,
+    OpportunityOption,
     PlayerState,
+    Prediction,
     ant_bet_history,
     ant_public_state,
     ant_strategy_history,
     find_ant,
     generate_ants,
     normalize_room_code,
+    opportunity_options,
+    redact_public_identity,
 )
 from .persistence import SupabaseGameStore, SupabasePersistenceError
-from .queen_auth import require_wallet_owner
 from .txline import (
     TxLineClient,
     TxLineConfigError,
@@ -58,6 +63,7 @@ from .txline_validation import (
     validate_txline_proof_onchain,
     winner_from_score,
 )
+from .wallet_auth import WALLET_SESSION_COOKIE, WalletAuthError, WalletAuthManager
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -76,7 +82,7 @@ _allow_origins = ["*"] if _web_origins.strip() == "*" else [o.strip() for o in _
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,
-    allow_credentials=False,
+    allow_credentials=_allow_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -158,11 +164,30 @@ def _env_float(name: str, default: float) -> float:
 
 
 LIVE_AUTO_FINISH_AFTER_SECONDS = max(0.0, _env_float("LIVE_AUTO_FINISH_AFTER_SECONDS", 9000.0))
+_wallet_session_secret_from_env = (os.getenv("WALLET_SESSION_SECRET") or "").strip()
+wallet_auth_manager = WalletAuthManager(
+    _wallet_session_secret_from_env or secrets.token_urlsafe(48),
+    domain=(os.getenv("WALLET_AUTH_DOMAIN") or "Age of Colony").strip(),
+    uri=(os.getenv("WALLET_AUTH_URI") or "https://age-of-colony.app").strip(),
+    challenge_ttl_seconds=max(30, int(_env_float("WALLET_CHALLENGE_TTL_SECONDS", 300))),
+    session_ttl_seconds=max(60, int(_env_float("WALLET_SESSION_TTL_SECONDS", 3600))),
+    max_pending_challenges=max(128, int(_env_float("WALLET_MAX_PENDING_CHALLENGES", 4096))),
+)
 
 
 def require_admin_tool(_: Request) -> None:
     """Admin/debug tools are intentionally open during the current build phase."""
     return
+
+
+class WalletChallengeRequest(BaseModel):
+    wallet: str
+
+
+class WalletVerifyRequest(BaseModel):
+    wallet: str
+    nonce: str
+    signature: str
 
 
 class CreateGameRequest(BaseModel):
@@ -321,6 +346,107 @@ async def supabase_persistence_error_handler(_: Request, exc: SupabasePersistenc
     )
 
 
+@app.exception_handler(WalletAuthError)
+async def wallet_auth_error_handler(_: Request, exc: WalletAuthError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "code": exc.code},
+    )
+
+
+def _wallet_cookie_secure(request: Request) -> bool:
+    configured = (os.getenv("WALLET_COOKIE_SECURE") or "").strip().casefold()
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().casefold()
+    return request.url.scheme == "https" or forwarded_proto == "https"
+
+
+def _wallet_from_request(request: Request) -> str | None:
+    token = request.cookies.get(WALLET_SESSION_COOKIE)
+    if not token:
+        return None
+    return wallet_auth_manager.wallet_for_token(token)
+
+
+def _request_player_identity(request: Request, anonymous_id: str | None = None) -> tuple[str | None, str | None]:
+    wallet = _wallet_from_request(request)
+    clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
+    return wallet, clean_anonymous_id
+
+
+def _require_wallet_for_wallet_room(room: GameRoom, wallet: str | None) -> None:
+    if room.owner_wallet and not wallet:
+        raise HTTPException(
+            status_code=401,
+            detail="Connect and sign with Phantom to join this wallet room.",
+        )
+
+
+@app.post("/api/auth/wallet/challenge")
+async def wallet_challenge(payload: WalletChallengeRequest, response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    return wallet_auth_manager.create_challenge(payload.wallet).public_state()
+
+
+@app.post("/api/auth/wallet/verify")
+async def wallet_verify(payload: WalletVerifyRequest, request: Request) -> Response:
+    session = wallet_auth_manager.verify_challenge(payload.wallet, payload.nonce, payload.signature)
+    response = JSONResponse(session.public_state(), headers={"Cache-Control": "no-store"})
+    response.set_cookie(
+        **wallet_auth_manager.session_cookie_kwargs(
+            session,
+            secure=_wallet_cookie_secure(request),
+        )
+    )
+    return response
+
+
+@app.get("/api/auth/wallet/session")
+async def wallet_session(request: Request) -> Response:
+    token = request.cookies.get(WALLET_SESSION_COOKIE)
+    if not token:
+        return JSONResponse(
+            {"authenticated": False, "wallet": None},
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        claims = wallet_auth_manager.verify_session(token)
+    except WalletAuthError as exc:
+        response = JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail, "code": exc.code, "authenticated": False, "wallet": None},
+            headers={"Cache-Control": "no-store"},
+        )
+        response.delete_cookie(
+            **wallet_auth_manager.clear_cookie_kwargs(secure=_wallet_cookie_secure(request))
+        )
+        return response
+    return JSONResponse(
+        {
+            "authenticated": True,
+            "wallet": claims.wallet,
+            "issuedAt": claims.issued_at,
+            "expiresAt": claims.expires_at,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.delete("/api/auth/wallet/session")
+async def wallet_logout(request: Request) -> Response:
+    response = JSONResponse(
+        {"authenticated": False, "wallet": None},
+        headers={"Cache-Control": "no-store"},
+    )
+    response.delete_cookie(
+        **wallet_auth_manager.clear_cookie_kwargs(secure=_wallet_cookie_secure(request))
+    )
+    return response
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -350,15 +476,33 @@ async def health(request: Request) -> dict[str, Any]:
         },
         "adminToolsProtected": False,
         "adminAuthenticated": True,
+        "walletAuth": {
+            "enabled": True,
+            "persistentSecretConfigured": bool(_wallet_session_secret_from_env),
+            "sessionTtlSeconds": wallet_auth_manager.session_ttl_seconds,
+            "challengeTtlSeconds": wallet_auth_manager.challenge_ttl_seconds,
+            "maxPendingChallenges": wallet_auth_manager.max_pending_challenges,
+            "transactionRequired": False,
+        },
         "supabase": supabase_store.public_status(),
     }
 
 
 @app.post("/api/games")
-async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
-    room = await _get_or_create_public_match_room(payload)
+async def create_game(payload: CreateGameRequest, request: Request) -> dict[str, Any]:
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    room = await _get_or_create_public_match_room(
+        payload,
+        owner_wallet=wallet,
+        owner_anonymous_id=None if wallet else anonymous_id,
+    )
+    _require_wallet_for_wallet_room(room, wallet)
     if payload.creatorName:
-        game_manager.harness(room.game_id).join_player(payload.creatorName or "Host", anonymous_id=payload.anonymousId)
+        game_manager.harness(room.game_id).join_player(
+            payload.creatorName or "Host",
+            anonymous_id=None if wallet else anonymous_id,
+            wallet=wallet,
+        )
     await _ensure_public_match_room_armed(room)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
@@ -367,7 +511,9 @@ async def create_game(payload: CreateGameRequest) -> dict[str, Any]:
 @app.post("/api/games/{game_id}/colonies")
 async def create_colony(game_id: str, payload: CreateColonyRequest, request: Request) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    if not (payload.anonymousId or "").strip():
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _require_wallet_for_wallet_room(room, wallet)
+    if not wallet and not anonymous_id:
         require_admin_tool(request)
     try:
         game_manager.harness(game_id).add_colony(
@@ -376,7 +522,8 @@ async def create_colony(game_id: str, payload: CreateColonyRequest, request: Req
             style=payload.style,
             favorite_context=payload.favoriteContext,
             info_need=payload.infoNeed,
-            anonymous_id=payload.anonymousId,
+            anonymous_id=None if wallet else anonymous_id,
+            wallet=wallet,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -386,10 +533,16 @@ async def create_colony(game_id: str, payload: CreateColonyRequest, request: Req
 
 
 @app.post("/api/games/{game_id}/players")
-async def join_game_room(game_id: str, payload: JoinRoomRequest) -> dict[str, Any]:
+async def join_game_room(game_id: str, payload: JoinRoomRequest, request: Request) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _require_wallet_for_wallet_room(room, wallet)
     try:
-        game_manager.harness(game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+        game_manager.harness(game_id).join_player(
+            payload.name,
+            anonymous_id=None if wallet else anonymous_id,
+            wallet=wallet,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
@@ -404,17 +557,28 @@ async def room_state_by_code(room_code: str) -> dict[str, Any]:
 
 
 @app.post("/api/rooms/{room_code}/players")
-async def join_room_by_code(room_code: str, payload: JoinRoomRequest) -> dict[str, Any]:
+async def join_room_by_code(room_code: str, payload: JoinRoomRequest, request: Request) -> dict[str, Any]:
     room = await _get_room_by_code_or_restore_404(room_code)
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _require_wallet_for_wallet_room(room, wallet)
     try:
-        game_manager.harness(room.game_id).join_player(payload.name, anonymous_id=payload.anonymousId)
+        game_manager.harness(room.game_id).join_player(
+            payload.name,
+            anonymous_id=None if wallet else anonymous_id,
+            wallet=wallet,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
-async def _get_or_create_public_match_room(payload: CreateGameRequest) -> GameRoom:
+async def _get_or_create_public_match_room(
+    payload: CreateGameRequest,
+    *,
+    owner_wallet: str | None = None,
+    owner_anonymous_id: str | None = None,
+) -> GameRoom:
     room = _active_public_room_for_fixture(payload.fixtureId)
     if not room:
         stored = await _stored_public_room_for_fixture_or_none(payload.fixtureId)
@@ -438,7 +602,8 @@ async def _get_or_create_public_match_room(payload: CreateGameRequest) -> GameRo
         start_time=payload.startTime,
         start_time_iso=payload.startTimeIso,
         seed=payload.seed,
-        owner_anonymous_id=payload.anonymousId,
+        owner_anonymous_id=owner_anonymous_id,
+        owner_wallet=owner_wallet,
         owner_name=payload.creatorName,
     )
     room.mode = "live"
@@ -456,7 +621,7 @@ def _active_public_room_for_fixture(fixture_id: int | str) -> GameRoom | None:
             return room
         if room.mode is not None:
             continue
-        if not (room.owner_anonymous_id or room.owner_name):
+        if not (room.owner_anonymous_id or room.owner_wallet or room.owner_name):
             continue
         return room
     return None
@@ -531,6 +696,16 @@ def _queen_store_or_503() -> None:
         )
 
 
+def _require_session_wallet_owner(request: Request, wallet: str) -> str:
+    clean_wallet = _clean_wallet_or_422(wallet)
+    session_wallet = _wallet_from_request(request)
+    if not session_wallet:
+        raise HTTPException(status_code=401, detail="Connect and sign with Phantom first.")
+    if session_wallet != clean_wallet:
+        raise HTTPException(status_code=403, detail="This wallet session cannot change another wallet's queen.")
+    return clean_wallet
+
+
 @app.get("/api/queens/{wallet}")
 async def get_queen(wallet: str) -> dict[str, Any]:
     _queen_store_or_503()
@@ -544,9 +719,10 @@ async def get_queen(wallet: str) -> dict[str, Any]:
 async def upsert_queen(
     wallet: str,
     payload: QueenUpsertRequest,
-    _owner: str = Depends(require_wallet_owner),
+    request: Request,
 ) -> dict[str, Any]:
     _queen_store_or_503()
+    clean_wallet = _require_session_wallet_owner(request, wallet)
     name = (payload.name or "").strip()[:24]
     if not name:
         raise HTTPException(status_code=422, detail="Your queen needs a name.")
@@ -554,7 +730,7 @@ async def upsert_queen(
     emblem = (payload.emblem or "👑").strip()[:8] or "👑"
     return await asyncio.to_thread(
         supabase_store.upsert_queen,
-        _clean_wallet_or_422(wallet),
+        clean_wallet,
         name=name,
         motto=motto,
         emblem=emblem,
@@ -564,17 +740,24 @@ async def upsert_queen(
 @app.delete("/api/queens/{wallet}")
 async def delete_queen(
     wallet: str,
-    _owner: str = Depends(require_wallet_owner),
+    request: Request,
 ) -> dict[str, Any]:
     _queen_store_or_503()
-    await asyncio.to_thread(supabase_store.delete_queen, _clean_wallet_or_422(wallet))
-    return {"deleted": True, "wallet": _clean_wallet_or_422(wallet)}
+    clean_wallet = _require_session_wallet_owner(request, wallet)
+    await asyncio.to_thread(supabase_store.delete_queen, clean_wallet)
+    return {"deleted": True, "wallet": clean_wallet}
 
 
 @app.patch("/api/games/{game_id}/colonies/{colony_id}/strategy")
-async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateColonyStrategyRequest) -> dict[str, Any]:
+async def update_colony_strategy(
+    game_id: str,
+    colony_id: str,
+    payload: UpdateColonyStrategyRequest,
+    request: Request,
+) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    _ensure_colony_owner(room, colony_id, payload.anonymousId, action="update this colony")
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_colony_owner(room, colony_id, anonymous_id, wallet=wallet, action="update this colony")
     try:
         game_manager.harness(room.game_id).update_colony_strategy(
             colony_id,
@@ -589,9 +772,10 @@ async def update_colony_strategy(game_id: str, colony_id: str, payload: UpdateCo
 
 
 @app.post("/api/games/{game_id}/rally")
-async def rally(game_id: str, payload: RallyRequest) -> dict[str, Any]:
+async def rally(game_id: str, payload: RallyRequest, request: Request) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
-    _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="rally this colony")
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_colony_owner(room, payload.colonyId, anonymous_id, wallet=wallet, action="rally this colony")
     try:
         game_manager.harness(game_id).rally(payload.colonyId, payload.opportunityId)
     except ValueError as exc:
@@ -602,9 +786,16 @@ async def rally(game_id: str, payload: RallyRequest) -> dict[str, Any]:
 
 
 @app.post("/api/games/{game_id}/recall")
-async def recall(game_id: str, payload: RecallRequest) -> dict[str, Any]:
+async def recall(game_id: str, payload: RecallRequest, request: Request) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
-    _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="recall this colony's ants")
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_colony_owner(
+        room,
+        payload.colonyId,
+        anonymous_id,
+        wallet=wallet,
+        action="recall this colony's ants",
+    )
     try:
         game_manager.harness(game_id).recall(payload.colonyId, payload.opportunityId)
     except ValueError as exc:
@@ -615,9 +806,16 @@ async def recall(game_id: str, payload: RecallRequest) -> dict[str, Any]:
 
 
 @app.post("/api/games/{game_id}/switch-call")
-async def switch_call(game_id: str, payload: SwitchCallRequest) -> dict[str, Any]:
+async def switch_call(game_id: str, payload: SwitchCallRequest, request: Request) -> dict[str, Any]:
     room = _get_game_or_404(game_id)
-    _ensure_colony_owner(room, payload.colonyId, payload.anonymousId, action="switch this colony's call")
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_colony_owner(
+        room,
+        payload.colonyId,
+        anonymous_id,
+        wallet=wallet,
+        action="switch this colony's call",
+    )
     try:
         game_manager.harness(game_id).switch_call(payload.colonyId, payload.opportunityId, payload.optionId)
     except ValueError as exc:
@@ -631,10 +829,12 @@ async def switch_call(game_id: str, payload: SwitchCallRequest) -> dict[str, Any
 async def list_colony_ants(
     game_id: str,
     colony_id: str,
+    request: Request,
     anonymousId: str | None = Query(default=None),
 ) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    _ensure_colony_owner(room, colony_id, anonymousId, action="view these ants")
+    wallet, anonymous_id = _request_player_identity(request, anonymousId)
+    _ensure_colony_owner(room, colony_id, anonymous_id, wallet=wallet, action="view these ants")
     colony = room.colonies.get(colony_id)
     if not colony:
         raise HTTPException(status_code=404, detail="Colony not found.")
@@ -655,10 +855,12 @@ async def get_ant_detail(
     game_id: str,
     colony_id: str,
     ant_id: str,
+    request: Request,
     anonymousId: str | None = Query(default=None),
 ) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    _ensure_colony_owner(room, colony_id, anonymousId, action="view this ant")
+    wallet, anonymous_id = _request_player_identity(request, anonymousId)
+    _ensure_colony_owner(room, colony_id, anonymous_id, wallet=wallet, action="view this ant")
     await _ensure_room_log_hydrated(room)
     colony = room.colonies.get(colony_id)
     if not colony:
@@ -690,9 +892,11 @@ async def update_ant_strategy(
     colony_id: str,
     ant_id: str,
     payload: UpdateAntStrategyRequest,
+    request: Request,
 ) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    _ensure_colony_owner(room, colony_id, payload.anonymousId, action="update this ant")
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_colony_owner(room, colony_id, anonymous_id, wallet=wallet, action="update this ant")
     try:
         ant = game_manager.harness(room.game_id).update_ant_strategy(
             colony_id,
@@ -722,6 +926,9 @@ async def start_game(game_id: str, payload: StartGameRequest, request: Request) 
         raise HTTPException(status_code=422, detail="mode must be replay or live")
     if mode == "replay":
         require_admin_tool(request)
+        if room.owner_wallet or room.owner_anonymous_id:
+            wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+            _ensure_live_host(room, anonymous_id, wallet=wallet, action="start this replay")
     if not room.colonies:
         raise HTTPException(status_code=422, detail="Add at least one colony before starting the match.")
     if room.status in {"running_replay", "running_live"}:
@@ -733,7 +940,8 @@ async def start_game(game_id: str, payload: StartGameRequest, request: Request) 
     if mode == "replay":
         return await _start_replay_room(room, payload)
 
-    _ensure_live_host(room, payload.anonymousId)
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_live_host(room, anonymous_id, wallet=wallet)
     _ensure_live_room_ready(room)
     kickoff_at = _room_kickoff_datetime(room)
     if kickoff_at and kickoff_at > datetime.now(timezone.utc):
@@ -757,28 +965,63 @@ async def start_game(game_id: str, payload: StartGameRequest, request: Request) 
 
 
 @app.post("/api/games/{game_id}/finish")
-async def finish_game(game_id: str, payload: FinishGameRequest) -> dict[str, Any]:
+async def finish_game(game_id: str, payload: FinishGameRequest, request: Request) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
-    _ensure_live_host(room, payload.anonymousId, action="finish the game")
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_live_host(room, anonymous_id, wallet=wallet, action="finish the game")
     if room.status == "finished":
         return room.public_state()
-    if room.status not in {"waiting_kickoff", "running_live"}:
+    if room.status != "running_live":
         raise HTTPException(status_code=409, detail="Only a live room can be manually finished.")
+    status = {
+        "gameState": room.match_state.game_state if room.match_state else None,
+        "statusId": room.match_state.status_id if room.match_state else None,
+    }
+    if not _live_status_finished(status) and not _live_auto_finish_reached(room):
+        raise HTTPException(
+            status_code=409,
+            detail="The match is still live. Sugar markets close automatically after TXLine confirms full time.",
+        )
     game_manager.harness(room.game_id).finish_game(mode="live")
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
 
-def _ensure_live_host(room: GameRoom, anonymous_id: str | None, *, action: str = "start the game") -> None:
+def _ensure_live_host(
+    room: GameRoom,
+    anonymous_id: str | None,
+    *,
+    wallet: str | None = None,
+    action: str = "start the game",
+) -> None:
+    if room.owner_wallet:
+        if wallet != room.owner_wallet:
+            raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
+        return
     if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
         raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
 
 
-def _ensure_colony_owner(room: GameRoom, colony_id: str, anonymous_id: str | None, *, action: str) -> None:
+def _ensure_colony_owner(
+    room: GameRoom,
+    colony_id: str,
+    anonymous_id: str | None,
+    *,
+    wallet: str | None = None,
+    action: str,
+) -> None:
     colony = room.colonies.get(colony_id)
     if not colony:
         return
+    if colony.player_wallet:
+        if wallet == colony.player_wallet:
+            return
+        raise HTTPException(status_code=403, detail=f"Only the colony owner can {action}.")
     if not colony.player_id and not colony.player_anonymous_id:
+        if room.owner_wallet and wallet != room.owner_wallet:
+            raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
+        if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
+            raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
         return
     clean_anonymous_id = (anonymous_id or "").strip()
     if clean_anonymous_id and clean_anonymous_id == colony.player_anonymous_id:
@@ -791,10 +1034,13 @@ def _ensure_live_room_ready(room: GameRoom) -> None:
         return
     ready_player_ids = {colony.player_id for colony in room.colonies.values() if colony.player_id}
     ready_anonymous_ids = {colony.player_anonymous_id for colony in room.colonies.values() if colony.player_anonymous_id}
+    ready_wallets = {colony.player_wallet for colony in room.colonies.values() if colony.player_wallet}
     missing = [
         player.name
         for player in room.players
-        if player.player_id not in ready_player_ids and (not player.anonymous_id or player.anonymous_id not in ready_anonymous_ids)
+        if player.player_id not in ready_player_ids
+        and (not player.anonymous_id or player.anonymous_id not in ready_anonymous_ids)
+        and (not player.wallet or player.wallet not in ready_wallets)
     ]
     if missing:
         names = ", ".join(missing[:3])
@@ -915,12 +1161,13 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
         participant2=old_room.participant2,
         seed=old_room.seed,
         owner_anonymous_id=old_room.owner_anonymous_id,
+        owner_wallet=old_room.owner_wallet,
         owner_name=old_room.owner_name,
         txline_validation=old_room.txline_validation,
     )
     harness = game_manager.harness(room.game_id)
     for player in old_room.players:
-        harness.join_player(player.name, anonymous_id=player.anonymous_id)
+        harness.join_player(player.name, anonymous_id=player.anonymous_id, wallet=player.wallet)
     for colony in old_room.colonies.values():
         harness.add_colony(
             colony.name,
@@ -928,6 +1175,9 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
             colony.style,
             colony.favorite_context,
             colony.info_need,
+            anonymous_id=colony.player_anonymous_id,
+            wallet=colony.player_wallet,
+            player_id=colony.player_id,
         )
     room.mode = "replay"
     room.agent_call_mode = payload.agentCallMode
@@ -1429,7 +1679,7 @@ def _admin_game_public_state(row: Any) -> dict[str, Any] | None:
             state[collection_key] = []
     if not isinstance(state.get("match"), dict):
         state["match"] = {"score": None}
-    return state
+    return redact_public_identity(state)
 
 
 def _stored_game_can_resume_live(stored_game: dict[str, Any]) -> bool:
@@ -1447,7 +1697,8 @@ async def _mark_orphaned_stored_game(stored_game: dict[str, Any]) -> dict[str, A
         persisted = await asyncio.to_thread(supabase_store.mark_game_stopped, stored_game)
     except (AttributeError, SupabasePersistenceError):
         persisted = None
-    return persisted if isinstance(persisted, dict) else stopped_state
+    state = persisted if isinstance(persisted, dict) else stopped_state
+    return redact_public_identity(state)
 
 
 @app.get("/api/games/{game_id}")
@@ -1470,7 +1721,7 @@ async def game_state(game_id: str) -> dict[str, Any]:
             )
             await _ensure_room_progress(room)
             return room.public_state()
-        return stored_game
+        return redact_public_identity(stored_game)
     raise HTTPException(status_code=404, detail="Game not found.")
 
 
@@ -1483,14 +1734,14 @@ async def game_replay(game_id: str) -> dict[str, Any]:
             stored_game = replay["game"]
             if _stored_game_has_orphaned_worker(stored_game):
                 replay["game"] = await _mark_orphaned_stored_game(stored_game)
-                return replay
+                return _public_stored_replay(replay)
             if _stored_game_can_resume_live(stored_game):
                 room = _restore_room_from_stored_row(
                     {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
                     events=replay.get("events") or [],
                 )
             else:
-                return replay
+                return _public_stored_replay(replay)
         else:
             raise HTTPException(status_code=404, detail="Game not found.")
     await _ensure_room_log_hydrated(room)
@@ -1498,6 +1749,15 @@ async def game_replay(game_id: str) -> dict[str, Any]:
     return {
         "game": room.public_state(),
         "events": [event.public_state() for event in room.log],
+    }
+
+
+def _public_stored_replay(replay: dict[str, Any]) -> dict[str, Any]:
+    """Expose replay content without Supabase rows or legacy bearer IDs."""
+
+    return {
+        "game": redact_public_identity(replay.get("game") or {}),
+        "events": redact_public_identity(replay.get("events") or []),
     }
 
 
@@ -1999,6 +2259,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
     existing = game_manager.get_room(str(game_id))
     if existing:
         _merge_restored_events(existing, events or [])
+        _restore_live_market_positions(existing, public_state)
         if events is not None:
             setattr(existing, "_aoc_log_hydrated", True)
         return existing
@@ -2023,7 +2284,8 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
         start_time=public_state.get("startTime") or row.get("start_time"),
         start_time_iso=public_state.get("startTimeIso") or row.get("start_time_iso"),
         txline_validation=public_state.get("txlineValidation") if isinstance(public_state.get("txlineValidation"), dict) else None,
-        owner_anonymous_id=owner.get("anonymousId") if isinstance(owner, dict) else None,
+        owner_anonymous_id=(owner.get("anonymousId") if isinstance(owner, dict) else None) or row.get("owner_anonymous_id"),
+        owner_wallet=(owner.get("wallet") if isinstance(owner, dict) else None) or row.get("owner_wallet"),
         owner_name=owner.get("name") if isinstance(owner, dict) else None,
         seed=clean_seed,
     )
@@ -2051,6 +2313,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
                 player_id=str(player.get("playerId") or f"player_{len(room.players) + 1}"),
                 name=str(player.get("name") or f"Player {len(room.players) + 1}")[:32],
                 anonymous_id=str(player.get("anonymousId"))[:80] if player.get("anonymousId") else None,
+                wallet=str(player.get("wallet"))[:80] if player.get("wallet") else None,
             )
         )
     for colony_state in public_state.get("colonies") or []:
@@ -2058,15 +2321,20 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             continue
         colony_id = str(colony_state.get("colonyId") or f"col_{len(room.colonies) + 1}")
         try:
-            food = int(colony_state["food"]) if colony_state.get("food") is not None else STARTING_COLONY_FOOD
+            stored_sugar = colony_state.get("sugar", colony_state.get("food"))
+            food = int(stored_sugar) if stored_sugar is not None else STARTING_COLONY_FOOD
         except (TypeError, ValueError):
             food = STARTING_COLONY_FOOD
         economy = colony_state.get("economy") if isinstance(colony_state.get("economy"), dict) else {}
-        fallback_upkeep_index = room.event_index - (room.event_index % FOOD_DRAIN_INTERVAL_EVENTS)
+        stored_reserved = colony_state.get("sugarReserved")
+        if stored_reserved is None:
+            stored_reserved = colony_state.get("foodReserved")
+        if stored_reserved is None:
+            stored_reserved = economy.get("reserved", economy.get("sugarReserved", economy.get("foodReserved")))
         try:
-            last_food_event_index = int(economy.get("lastUpkeepEventIndex", fallback_upkeep_index))
+            food_reserved = max(0, min(food, int(stored_reserved))) if stored_reserved is not None else 0
         except (TypeError, ValueError):
-            last_food_event_index = fallback_upkeep_index
+            food_reserved = 0
         colony = ColonyState(
             colony_id=colony_id,
             name=str(colony_state.get("name") or f"Colony {len(room.colonies) + 1}")[:40],
@@ -2077,19 +2345,20 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             seed=_safe_int(colony_state.get("simulationSeed")) or clean_seed,
             player_id=str(colony_state.get("playerId"))[:80] if colony_state.get("playerId") else None,
             player_anonymous_id=str(colony_state.get("playerAnonymousId"))[:80] if colony_state.get("playerAnonymousId") else None,
+            player_wallet=str(colony_state.get("playerWallet"))[:80] if colony_state.get("playerWallet") else None,
             food=food,
-            larvae=max(0, _safe_int(colony_state.get("larvae")) or 0),
-            last_food_event_index=max(0, last_food_event_index),
+            food_reserved=food_reserved,
+            larvae=0,
+            last_food_event_index=room.event_index,
             strategy_revision=max(0, _safe_int(colony_state.get("strategyRevision")) or 0),
         )
         colony.ants = generate_ants(colony)
-        try:
-            alive_count = max(0, int(colony_state.get("antsAlive", len(colony.ants))))
-        except (TypeError, ValueError):
-            alive_count = len(colony.ants)
-        for ant in colony.ants[alive_count:]:
-            ant.alive = False
-        colony.memory.food_net = _safe_int(colony_state.get("foodNet")) or _safe_int(economy.get("net")) or 0
+        colony.memory.food_net = (
+            _safe_int(colony_state.get("sugarNet"))
+            or _safe_int(colony_state.get("foodNet"))
+            or _safe_int(economy.get("net"))
+            or 0
+        )
         colony.memory.wins = max(0, _safe_int(colony_state.get("wins")) or 0)
         colony.memory.losses = max(0, _safe_int(colony_state.get("losses")) or 0)
         colony.memory.attempts = colony.memory.wins + colony.memory.losses
@@ -2106,9 +2375,331 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
                 ant.info_need_override = strategy.get("infoNeed") or None
         room.colonies[colony.colony_id] = colony
     _merge_restored_events(room, events or [])
+    _restore_live_market_positions(room, public_state)
     if events is not None:
         setattr(room, "_aoc_log_hydrated", True)
     return game_manager.register_room(room)
+
+
+_RESTORABLE_MARKET_CONTEXTS = (
+    "penalties",
+    "goal_next_10",
+    "next_goal_team",
+    "next_corner",
+    "next_free_kick",
+    "next_yellow_card",
+    "next_foul",
+)
+
+
+def _restore_live_market_positions(room: GameRoom, public_state: dict[str, Any] | None = None) -> int:
+    """Rebuild open live positions from the durable snapshot and game journal.
+
+    Public game snapshots deliberately contain no prediction ledger. The journal is
+    therefore the source of truth for entries and resolutions, while
+    ``activeOpportunities`` limits reconstruction to markets that were still open at
+    the snapshot boundary. The function is safe to call again after delayed log
+    hydration: already-restored objects are replaced by the same durable ids and
+    colony reserves are recomputed rather than incremented.
+    """
+    snapshot = public_state if isinstance(public_state, dict) else {}
+    nested_snapshot = snapshot.get("public_state")
+    if isinstance(nested_snapshot, dict):
+        snapshot = nested_snapshot
+
+    active_value = snapshot.get("activeOpportunities")
+    has_active_snapshot = isinstance(active_value, list)
+    active_markets = {
+        str(item.get("opportunityId")): item
+        for item in (active_value or [])
+        if isinstance(item, dict) and item.get("opportunityId")
+    }
+    active_ids = set(active_markets)
+
+    journal_markets: dict[str, dict[str, Any]] = {}
+    prediction_states: dict[str, dict[str, Any]] = {}
+    resolved_prediction_ids: set[str] = set()
+    for event in sorted(room.log, key=lambda item: item.index):
+        data = event.data if isinstance(event.data, dict) else {}
+        if event.kind == "opportunity":
+            market = data.get("opportunity")
+            if isinstance(market, dict) and market.get("opportunityId"):
+                journal_markets[str(market["opportunityId"])] = market
+            continue
+        prediction_id = str(data.get("predictionId") or "")
+        if event.kind == "prediction" and prediction_id:
+            prediction_states[prediction_id] = dict(data)
+        elif event.kind in {"rally", "recall", "switch"} and prediction_id in prediction_states:
+            state = prediction_states[prediction_id]
+            for key in ("antIds", "option", "sugarReserved", "foodReserved"):
+                if data.get(key) is not None:
+                    state[key] = data[key]
+        elif event.kind in {"settlement", "void"} and prediction_id:
+            resolved_prediction_ids.add(prediction_id)
+
+    restored_prediction_ids = set(getattr(room, "_aoc_restored_prediction_ids", set()))
+    restored_opportunity_ids = set(getattr(room, "_aoc_restored_opportunity_ids", set()))
+    for prediction_id in resolved_prediction_ids:
+        existing_prediction = room.predictions.get(prediction_id)
+        if existing_prediction:
+            existing_prediction.resolved = True
+    if has_active_snapshot:
+        # The snapshot is the authoritative open-market boundary. This also
+        # handles a journal that is hydrated incrementally: positions restored
+        # from an earlier page must not keep collateral locked after their
+        # market disappears from the newer snapshot.
+        for prediction_id in restored_prediction_ids:
+            prediction = room.predictions.get(prediction_id)
+            if prediction and prediction.opportunity_id not in active_ids:
+                prediction.resolved = True
+        for opportunity_id in restored_opportunity_ids - active_ids:
+            room.opportunities.pop(opportunity_id, None)
+        restored_opportunity_ids.intersection_update(active_ids)
+
+    # Restore every market explicitly active in the snapshot, including observed
+    # markets with no funded colony position.
+    for opportunity_id, market in active_markets.items():
+        opportunity = _restored_opportunity(room, opportunity_id, market)
+        if opportunity:
+            room.opportunities[opportunity_id] = opportunity
+            restored_opportunity_ids.add(opportunity_id)
+            _remember_restored_opportunity_slot(room, opportunity)
+
+    restored_count = 0
+    for prediction_id, data in prediction_states.items():
+        if prediction_id in resolved_prediction_ids or prediction_id in room.predictions:
+            continue
+        opportunity_id = str(data.get("opportunityId") or "")
+        colony_id = str(data.get("colonyId") or "")
+        if not opportunity_id or colony_id not in room.colonies:
+            continue
+        if has_active_snapshot and opportunity_id not in active_ids:
+            continue
+
+        market = data.get("market") if isinstance(data.get("market"), dict) else None
+        market = market or active_markets.get(opportunity_id) or journal_markets.get(opportunity_id) or {}
+        opportunity = room.opportunities.get(opportunity_id) or _restored_opportunity(
+            room,
+            opportunity_id,
+            market,
+            prediction_data=data,
+        )
+        if not opportunity:
+            continue
+        room.opportunities[opportunity_id] = opportunity
+        restored_opportunity_ids.add(opportunity_id)
+        _remember_restored_opportunity_slot(room, opportunity)
+
+        option_data = data.get("option") if isinstance(data.get("option"), dict) else {}
+        canonical_option = next(
+            (
+                option
+                for option in opportunity.options
+                if option.option_id == str(option_data.get("optionId") or option_data.get("option_id") or "")
+            ),
+            None,
+        )
+        option = _restored_market_option(option_data, canonical_option, context=opportunity.context)
+        if not option:
+            continue
+        for index, candidate in enumerate(opportunity.options):
+            if candidate.option_id == option.option_id:
+                opportunity.options[index] = option
+                break
+        else:
+            opportunity.options.append(option)
+
+        reserved = _first_restored_int(
+            data.get("sugarReserved"),
+            data.get("foodReserved"),
+            data.get("riskSugar"),
+        )
+        reserved = reserved if reserved is not None and reserved > 0 else MARKET_RISK_SUGAR
+        created_event_index = _first_restored_int(data.get("createdEventIndex"), opportunity.created_event_index)
+        ant_ids = [str(value) for value in data.get("antIds", [])] if isinstance(data.get("antIds"), list) else []
+        prediction = Prediction(
+            prediction_id=prediction_id,
+            colony_id=colony_id,
+            opportunity_id=opportunity_id,
+            option=option,
+            ant_ids=ant_ids,
+            created_event_index=min(room.event_index, created_event_index or room.event_index),
+            deadline_clock=opportunity.deadline_clock,
+            deadline_event_index=opportunity.deadline_event_index,
+            info_bought=bool(data.get("infoBought")),
+            reserved_food=reserved,
+            support_fraction=_restored_float(data.get("supportFraction", data.get("consensus")), 0.0),
+            entry_threshold=_restored_float(data.get("entryThreshold"), 0.0),
+            rallied=bool(data.get("rallied")),
+            switched=bool(data.get("switched")),
+        )
+        room.predictions[prediction_id] = prediction
+        restored_prediction_ids.add(prediction_id)
+        restored_count += 1
+
+    # Once at least one prediction journal entry is available, its open/resolved
+    # ledger supersedes the aggregate reserve stored in the colony snapshot.
+    if prediction_states:
+        for colony in room.colonies.values():
+            colony.food_reserved = sum(
+                prediction.reserved_food
+                for prediction in room.predictions.values()
+                if prediction.colony_id == colony.colony_id and not prediction.resolved
+            )
+    setattr(room, "_aoc_restored_prediction_ids", restored_prediction_ids)
+    setattr(room, "_aoc_restored_opportunity_ids", restored_opportunity_ids)
+    return restored_count
+
+
+def _restored_opportunity(
+    room: GameRoom,
+    opportunity_id: str,
+    market: dict[str, Any],
+    *,
+    prediction_data: dict[str, Any] | None = None,
+) -> Opportunity | None:
+    context = str(market.get("context") or _market_context_from_id(opportunity_id) or "")
+    if context not in _RESTORABLE_MARKET_CONTEXTS:
+        return None
+    team_label = market.get("teamLabel")
+    source_event = market.get("sourceEvent") if isinstance(market.get("sourceEvent"), dict) else {}
+    source_event = dict(source_event)
+    source_event.setdefault("_participant1Label", room.participant1 or "A")
+    source_event.setdefault("_participant2Label", room.participant2 or "B")
+    if team_label:
+        source_event.setdefault("participantLabel", team_label)
+        source_event.setdefault("possessionLabel", team_label)
+    minute = _first_restored_int(market.get("minute"), source_event.get("minute"))
+    if minute is not None:
+        source_event.setdefault("minute", minute)
+
+    canonical = opportunity_options(context, room.participant1 or "A", room.participant2 or "B", team_label)
+    canonical_by_id = {option.option_id: option for option in canonical}
+    options: list[OpportunityOption] = []
+    raw_options = market.get("options") if isinstance(market.get("options"), list) else []
+    for raw_option in raw_options:
+        if not isinstance(raw_option, dict):
+            continue
+        option_id = str(raw_option.get("optionId") or raw_option.get("option_id") or "")
+        option = _restored_market_option(raw_option, canonical_by_id.get(option_id), context=context)
+        if option:
+            options.append(option)
+    seen_option_ids = {option.option_id for option in options}
+    options.extend(option for option in canonical if option.option_id not in seen_option_ids)
+
+    prediction_data = prediction_data or {}
+    created_event_index = _first_restored_int(
+        market.get("createdEventIndex"),
+        prediction_data.get("createdEventIndex"),
+        _opportunity_event_index_from_id(opportunity_id, context),
+        room.event_index,
+    )
+    deadline_clock = _first_restored_int(market.get("deadlineClock"), prediction_data.get("deadlineClock"))
+    deadline_event_index = _first_restored_int(
+        market.get("deadlineEventIndex"),
+        prediction_data.get("deadlineEventIndex"),
+    )
+    if context == "goal_next_10":
+        if deadline_clock is None and minute is not None:
+            deadline_clock = minute * 60 + 10 * 60
+        if deadline_clock is None and deadline_event_index is None:
+            deadline_event_index = max((created_event_index or room.event_index) + 56, room.event_index + 1)
+
+    return Opportunity(
+        opportunity_id=opportunity_id,
+        fixture_id=market.get("fixtureId", room.fixture_id),
+        context=context,
+        label=str(market.get("label") or "Market"),
+        team=market.get("team"),
+        team_label=str(team_label) if team_label is not None else None,
+        minute=minute,
+        created_event_index=created_event_index or room.event_index,
+        deadline_clock=deadline_clock,
+        deadline_event_index=deadline_event_index,
+        options=options,
+        source_event=source_event,
+    )
+
+
+def _restored_market_option(
+    raw: dict[str, Any],
+    fallback: OpportunityOption | None,
+    *,
+    context: str,
+) -> OpportunityOption | None:
+    option_id = str(raw.get("optionId") or raw.get("option_id") or (fallback.option_id if fallback else ""))
+    if not option_id:
+        return None
+    reward = _first_restored_int(raw.get("rewardSugar"), raw.get("reward_sugar"))
+    target = str(raw.get("target") or (fallback.target if fallback else _restored_option_target(context, option_id)))
+    team_scope = str(raw.get("teamScope") or raw.get("team_scope") or (fallback.team_scope if fallback else "any"))
+    return OpportunityOption(
+        option_id=option_id,
+        label=str(raw.get("label") or (fallback.label if fallback else option_id)),
+        risk=str(raw.get("risk") or (fallback.risk if fallback else "safe")),
+        multiplier=_restored_float(raw.get("multiplier"), fallback.multiplier if fallback else 1.0),
+        target=target,
+        team_scope=team_scope,
+        reward_sugar=reward if reward is not None else (fallback.reward_sugar if fallback else 1),
+    )
+
+
+def _restored_option_target(context: str, option_id: str) -> str:
+    lowered = option_id.casefold()
+    if "none" in lowered or "no_goal" in lowered:
+        return {
+            "next_corner": "no_corner",
+            "next_free_kick": "no_free_kick",
+            "next_yellow_card": "no_yellow_card",
+        }.get(context, "no_goal")
+    return {
+        "penalties": "goal",
+        "goal_next_10": "goal",
+        "next_goal_team": "goal",
+        "next_corner": "corner",
+        "next_free_kick": "free_kick",
+        "next_yellow_card": "yellow_card",
+        "next_foul": "foul",
+    }.get(context, "")
+
+
+def _market_context_from_id(opportunity_id: str) -> str | None:
+    return next(
+        (context for context in _RESTORABLE_MARKET_CONTEXTS if opportunity_id.endswith(f"_{context}")),
+        None,
+    )
+
+
+def _opportunity_event_index_from_id(opportunity_id: str, context: str) -> int | None:
+    prefix = opportunity_id[: -len(context)].rstrip("_")
+    return _first_restored_int(prefix.rsplit("_", 1)[-1])
+
+
+def _remember_restored_opportunity_slot(room: GameRoom, opportunity: Opportunity) -> None:
+    team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
+    key = f"{opportunity.context}:{team_key}" if opportunity.context == "penalties" else opportunity.context
+    room.last_opportunity_event_index_by_key[key] = max(
+        room.last_opportunity_event_index_by_key.get(key, -10_000),
+        opportunity.created_event_index,
+    )
+
+
+def _first_restored_int(*values: Any) -> int | None:
+    for value in values:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _restored_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 async def _ensure_room_log_hydrated(room: GameRoom) -> None:
@@ -2120,6 +2711,7 @@ async def _ensure_room_log_hydrated(room: GameRoom) -> None:
     replay = await _stored_replay_or_none(room.game_id)
     if replay:
         _merge_restored_events(room, replay.get("events") or [])
+        _restore_live_market_positions(room, replay.get("game"))
     setattr(room, "_aoc_log_hydrated", True)
 
 

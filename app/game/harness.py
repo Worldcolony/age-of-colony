@@ -19,10 +19,19 @@ VALID_SIZES = {10, 20, 50}
 VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
-JOINABLE_STATUSES = {"created", "waiting_kickoff", "running_live"}
+JOINABLE_STATUSES = {"created", "waiting_kickoff"}
 STRATEGY_EDITABLE_STATUSES = {"created", "waiting_kickoff", "running_replay", "running_live"}
 STARTING_COLONY_ANTS = 20
-STARTING_COLONY_FOOD = 20
+STARTING_COLONY_SUGAR = 20
+# Backward-compatible internal/API alias. Sugar is the only player-facing resource.
+STARTING_COLONY_FOOD = STARTING_COLONY_SUGAR
+MARKET_RISK_SUGAR = 2
+MAX_RESERVED_SUGAR = 10
+STYLE_ENTRY_THRESHOLDS = {
+    "cautious": 0.70,
+    "balanced": 0.60,
+    "aggressive": 0.51,
+}
 STYLE_ALIASES = {
     "prudent": "cautious",
     "cautious": "cautious",
@@ -31,6 +40,31 @@ STYLE_ALIASES = {
     "agressif": "aggressive",
     "aggressive": "aggressive",
 }
+
+_PRIVATE_IDENTITY_KEYS = {
+    "anonymousId",
+    "ownerAnonymousId",
+    "playerAnonymousId",
+    "anonymous_id",
+    "owner_anonymous_id",
+    "player_anonymous_id",
+}
+
+
+def redact_public_identity(value: Any) -> Any:
+    """Remove legacy bearer identifiers before state or events leave the server."""
+
+    if isinstance(value, dict):
+        return {
+            key: redact_public_identity(item)
+            for key, item in value.items()
+            if key not in _PRIVATE_IDENTITY_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [redact_public_identity(item) for item in value]
+    return value
+
+
 CONTEXT_ALIASES = {
     "equilibre": "balanced",
     "balanced": "balanced",
@@ -95,10 +129,9 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def food_drain_for_colony(colony: "ColonyState") -> int:
-    alive = len(colony.alive_ants)
-    if alive <= 0:
-        return 0
-    return max(1, math.ceil(alive / 50))
+    # V0 has no upkeep or starvation. Kept as a compatibility helper for callers
+    # that still import the historical food-drain function.
+    return 0
 
 
 def info_cost_for_colony(colony: "ColonyState", opportunity: "Opportunity") -> int:
@@ -168,20 +201,29 @@ class ColonyMemory:
             return 0.5
         return self.context_wins.get(context, 0) / attempts
 
+    @property
+    def sugar_net(self) -> int:
+        return self.food_net
+
+    @sugar_net.setter
+    def sugar_net(self, value: int) -> None:
+        self.food_net = value
+
 
 @dataclass
 class PlayerState:
     player_id: str
     name: str
     anonymous_id: str | None = None
+    wallet: str | None = None
 
     def public_state(self) -> dict[str, Any]:
         state = {
             "playerId": self.player_id,
             "name": self.name,
         }
-        if self.anonymous_id:
-            state["anonymousId"] = self.anonymous_id
+        if self.wallet:
+            state["wallet"] = self.wallet
         return state
 
 
@@ -196,6 +238,7 @@ class ColonyState:
     seed: int
     player_id: str | None = None
     player_anonymous_id: str | None = None
+    player_wallet: str | None = None
     ants: list[AntState] = field(default_factory=list)
     food: int = 0
     food_reserved: int = 0
@@ -213,6 +256,22 @@ class ColonyState:
     def active_ants(self, event_index: int) -> list[AntState]:
         return [ant for ant in self.ants if ant.is_active(event_index)]
 
+    @property
+    def sugar(self) -> int:
+        return self.food
+
+    @sugar.setter
+    def sugar(self, value: int) -> None:
+        self.food = value
+
+    @property
+    def sugar_reserved(self) -> int:
+        return self.food_reserved
+
+    @sugar_reserved.setter
+    def sugar_reserved(self, value: int) -> None:
+        self.food_reserved = value
+
     def public_state(self, event_index: int) -> dict[str, Any]:
         ant_counts = colony_ant_counts(self, event_index)
         alive = ant_counts["aliveCount"]
@@ -223,31 +282,10 @@ class ColonyState:
         base_size = max(1, self.size)
         growth_rate = born / base_size
         mortality_rate = dead / base_size
-        score_breakdown = {
-            "base": 100,
-            "survival": round((alive / base_size) * 30, 2),
-            "growth": round(growth_rate * 60 + (larvae / base_size) * 20, 2),
-            "foodNet": round((self.memory.food_net / base_size) * 40, 2),
-            "foodReserve": round((self.food / base_size) * 10, 2),
-            "accuracy": round(self.memory.accuracy * 80, 2),
-            "lossPenalty": round(-mortality_rate * 70, 2),
-        }
-        score = round(sum(score_breakdown.values()), 2)
-        upkeep_cost = food_drain_for_colony(self)
-        next_upkeep_in_events = max(
-            1,
-            FOOD_DRAIN_INTERVAL_EVENTS - ((event_index - self.last_food_event_index) % FOOD_DRAIN_INTERVAL_EVENTS),
-        )
-        available_food = max(0, self.food - self.food_reserved)
-        runway_upkeeps = available_food // upkeep_cost if upkeep_cost else None
-        if upkeep_cost == 0:
-            food_status = "stable"
-        elif available_food <= upkeep_cost:
-            food_status = "critical"
-        elif available_food <= upkeep_cost * 3:
-            food_status = "watch"
-        else:
-            food_status = "stable"
+        score_breakdown = {"sugar": self.food}
+        score = self.food
+        available_sugar = max(0, self.food - self.food_reserved)
+        entry_threshold = STYLE_ENTRY_THRESHOLDS[self.style]
         state = {
             "colonyId": self.colony_id,
             "name": self.name,
@@ -263,26 +301,45 @@ class ColonyState:
             "antsWounded": wounded,
             "antsDead": dead,
             "antsBorn": born,
+            "sugar": self.food,
+            "sugarReserved": self.food_reserved,
+            "sugarAvailable": available_sugar,
             "food": self.food,
-            "larvae": larvae,
+            "foodReserved": self.food_reserved,
+            "foodAvailable": available_sugar,
+            "larvae": 0,
             "score": score,
             "scoreBreakdown": score_breakdown,
             "accuracy": round(self.memory.accuracy, 3),
             "growthRate": round(growth_rate, 3),
             "mortalityRate": round(mortality_rate, 3),
+            "sugarNet": self.memory.food_net,
             "foodNet": self.memory.food_net,
+            "entryThreshold": entry_threshold,
             "economy": {
-                "currency": "food",
+                "currency": "sugar",
                 "balance": self.food,
                 "reserved": self.food_reserved,
-                "available": available_food,
+                "available": available_sugar,
                 "net": self.memory.food_net,
-                "upkeepCost": upkeep_cost,
-                "upkeepEveryEvents": FOOD_DRAIN_INTERVAL_EVENTS,
-                "nextUpkeepInEvents": next_upkeep_in_events,
+                "sugar": self.food,
+                "sugarReserved": self.food_reserved,
+                "sugarAvailable": available_sugar,
+                "sugarNet": self.memory.food_net,
+                "food": self.food,
+                "foodReserved": self.food_reserved,
+                "foodAvailable": available_sugar,
+                "foodNet": self.memory.food_net,
+                "riskPerMarket": MARKET_RISK_SUGAR,
+                "maxReserved": MAX_RESERVED_SUGAR,
+                "maxFundedMarkets": MAX_RESERVED_SUGAR // MARKET_RISK_SUGAR,
+                "upkeepEnabled": False,
+                "upkeepCost": 0,
+                "upkeepEveryEvents": None,
+                "nextUpkeepInEvents": None,
                 "lastUpkeepEventIndex": self.last_food_event_index,
-                "runwayUpkeeps": runway_upkeeps,
-                "status": food_status,
+                "runwayUpkeeps": None,
+                "status": "stable",
             },
             "wins": self.memory.wins,
             "losses": self.memory.losses,
@@ -300,8 +357,8 @@ class ColonyState:
         }
         if self.player_id:
             state["playerId"] = self.player_id
-        if self.player_anonymous_id:
-            state["playerAnonymousId"] = self.player_anonymous_id
+        if self.player_wallet:
+            state["playerWallet"] = self.player_wallet
         return state
 
 
@@ -313,6 +370,30 @@ class OpportunityOption:
     multiplier: float
     target: str
     team_scope: str = "same_team"
+    reward_sugar: int = 1
+
+    @property
+    def risk_sugar(self) -> int:
+        return MARKET_RISK_SUGAR
+
+    def public_state(self) -> dict[str, Any]:
+        return {
+            "optionId": self.option_id,
+            "label": self.label,
+            "risk": self.risk,
+            "multiplier": self.multiplier,
+            "lossMultiplier": MARKET_RISK_SUGAR,
+            "rewardSugar": self.reward_sugar,
+            "riskSugar": MARKET_RISK_SUGAR,
+        }
+
+    def log_state(self) -> dict[str, Any]:
+        return {
+            **self.__dict__,
+            "optionId": self.option_id,
+            "rewardSugar": self.reward_sugar,
+            "riskSugar": MARKET_RISK_SUGAR,
+        }
 
 
 @dataclass
@@ -356,16 +437,8 @@ class Opportunity:
             "teamLabel": self.team_label,
             "minute": self.minute,
             "infoCost": self.info_cost,
-            "options": [
-                {
-                    "optionId": option.option_id,
-                    "label": option.label,
-                    "risk": option.risk,
-                    "multiplier": option.multiplier,
-                    "lossMultiplier": RESOURCE_LOSS_MULTIPLIER[option.risk],
-                }
-                for option in self.options
-            ],
+            "riskSugar": MARKET_RISK_SUGAR,
+            "options": [option.public_state() for option in self.options],
         }
 
 
@@ -381,9 +454,31 @@ class Prediction:
     deadline_event_index: int | None
     info_bought: bool = False
     reserved_food: int = 0
+    support_fraction: float = 0.0
+    entry_threshold: float = 0.0
     resolved: bool = False
     rallied: bool = False
     switched: bool = False
+
+    @property
+    def reserved_sugar(self) -> int:
+        return self.reserved_food
+
+    @reserved_sugar.setter
+    def reserved_sugar(self, value: int) -> None:
+        self.reserved_food = value
+
+    @property
+    def risk_sugar(self) -> int:
+        return self.reserved_food
+
+    @property
+    def reward_sugar(self) -> int:
+        return self.option.reward_sugar
+
+    @property
+    def consensus(self) -> float:
+        return self.support_fraction
 
 
 @dataclass
@@ -435,7 +530,7 @@ class GameLogEvent:
             "index": self.index,
             "kind": self.kind,
             "message": self.message,
-            "data": self.data,
+            "data": redact_public_identity(self.data),
             "createdAt": self.created_at,
         }
 
@@ -452,6 +547,7 @@ class GameRoom:
     start_time_iso: str | None = None
     txline_validation: dict[str, Any] | None = None
     owner_anonymous_id: str | None = None
+    owner_wallet: str | None = None
     owner_name: str | None = None
     seed: int = 7
     status: str = "created"
@@ -490,10 +586,10 @@ class GameRoom:
             "startTimeIso": self.start_time_iso,
             "txlineValidation": self.txline_validation,
             "owner": {
-                "anonymousId": self.owner_anonymous_id,
+                "wallet": self.owner_wallet,
                 "name": self.owner_name,
             }
-            if self.owner_anonymous_id or self.owner_name
+            if self.owner_anonymous_id or self.owner_wallet or self.owner_name
             else None,
             "status": self.status,
             "mode": self.mode,
@@ -521,7 +617,7 @@ class GameRoom:
                 snapshot["logCount"] = max(int(snapshot.get("logCount") or 0), len(self.log))
             except (TypeError, ValueError):
                 snapshot["logCount"] = len(self.log)
-            return snapshot
+            return redact_public_identity(snapshot)
         return state
 
     def _player_colonies(self) -> dict[str, ColonyState]:
@@ -531,17 +627,23 @@ class GameRoom:
                 linked[f"player:{colony.player_id}"] = colony
             if colony.player_anonymous_id:
                 linked[f"anonymous:{colony.player_anonymous_id}"] = colony
+            if colony.player_wallet:
+                linked[f"wallet:{colony.player_wallet}"] = colony
         return linked
 
     def _public_player_state(self, player: PlayerState, player_colonies: dict[str, ColonyState]) -> dict[str, Any]:
         state = player.public_state()
-        if player.anonymous_id and player.anonymous_id == self.owner_anonymous_id:
+        if player.wallet and player.wallet == self.owner_wallet:
             state["isHost"] = True
-        elif not self.owner_anonymous_id and player.name == self.owner_name:
+        elif player.anonymous_id and player.anonymous_id == self.owner_anonymous_id:
+            state["isHost"] = True
+        elif not self.owner_anonymous_id and not self.owner_wallet and player.name == self.owner_name:
             state["isHost"] = True
         colony = player_colonies.get(f"player:{player.player_id}")
         if not colony and player.anonymous_id:
             colony = player_colonies.get(f"anonymous:{player.anonymous_id}")
+        if not colony and player.wallet:
+            colony = player_colonies.get(f"wallet:{player.wallet}")
         if colony:
             state["ready"] = True
             state["colonyId"] = colony.colony_id
@@ -563,6 +665,7 @@ class GameHarness:
         info_need: str,
         *,
         anonymous_id: str | None = None,
+        wallet: str | None = None,
         player_id: str | None = None,
     ) -> ColonyState:
         if self.room.status not in JOINABLE_STATUSES:
@@ -580,18 +683,22 @@ class GameHarness:
             raise ValueError("info_need must be low, medium or high")
 
         clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
+        clean_wallet = (wallet or "").strip()[:80] or None
         clean_player_id = (player_id or "").strip()[:80] or None
-        player = self._find_player(clean_player_id, clean_anonymous_id)
-        if clean_anonymous_id and not player:
+        player = self._find_player(clean_player_id, clean_anonymous_id, clean_wallet)
+        if (clean_anonymous_id or clean_wallet) and not player:
             raise ValueError("join the room before creating a colony")
         if player:
             for existing in self.room.colonies.values():
+                if player.wallet and existing.player_wallet == player.wallet:
+                    raise ValueError("this wallet already has a colony")
                 if existing.player_id and existing.player_id == player.player_id:
                     raise ValueError("this player already has a colony")
                 if player.anonymous_id and existing.player_anonymous_id == player.anonymous_id:
                     raise ValueError("this player already has a colony")
             clean_player_id = player.player_id
             clean_anonymous_id = player.anonymous_id
+            clean_wallet = player.wallet
 
         clean_colony_name = (player.name if player else name).strip() or f"Colony {len(self.room.colonies) + 1}"
         colony_id = f"col_{uuid.uuid4().hex[:10]}"
@@ -606,6 +713,7 @@ class GameHarness:
             seed=seed,
             player_id=clean_player_id,
             player_anonymous_id=clean_anonymous_id,
+            player_wallet=clean_wallet,
             food=STARTING_COLONY_FOOD,
             last_food_event_index=self.room.event_index,
         )
@@ -613,54 +721,83 @@ class GameHarness:
         self.room.colonies[colony_id] = colony
         self.room.add_log(
             "colony_created",
-            f"{colony.name} enters the game with {STARTING_COLONY_ANTS} ants and {STARTING_COLONY_FOOD} food.",
+            f"{colony.name} enters the game with {STARTING_COLONY_ANTS} ants and {STARTING_COLONY_SUGAR} Sugar.",
             {
                 "colonyId": colony_id,
                 "size": STARTING_COLONY_ANTS,
                 "requestedSize": size,
+                "startingSugar": STARTING_COLONY_SUGAR,
                 "startingFood": STARTING_COLONY_FOOD,
                 "style": style,
                 "favoriteContext": favorite_context,
                 "infoNeed": info_need,
+                "wallet": clean_wallet,
             },
         )
         return colony
 
-    def join_player(self, name: str, anonymous_id: str | None = None) -> PlayerState:
+    def join_player(self, name: str, anonymous_id: str | None = None, wallet: str | None = None) -> PlayerState:
         if self.room.status not in JOINABLE_STATUSES:
             raise ValueError("room is closed; new players can no longer join")
         clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
         clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
-        if clean_anonymous_id:
+        clean_wallet = (wallet or "").strip()[:80] or None
+        if clean_wallet or clean_anonymous_id:
             for player in self.room.players:
-                if player.anonymous_id == clean_anonymous_id:
+                same_wallet = bool(clean_wallet and player.wallet == clean_wallet)
+                same_anonymous = bool(clean_anonymous_id and player.anonymous_id == clean_anonymous_id)
+                if same_wallet or same_anonymous:
                     if player.name != clean_name:
                         player.name = clean_name
                         for colony in self.room.colonies.values():
                             if colony.player_id == player.player_id or (
+                                player.wallet and colony.player_wallet == player.wallet
+                            ) or (
                                 player.anonymous_id and colony.player_anonymous_id == player.anonymous_id
                             ):
                                 colony.name = clean_name
                         self.room.add_log(
                             "player_updated",
                             f"{player.name} updated their player name.",
-                            {"playerId": player.player_id, "name": player.name, "anonymousId": player.anonymous_id},
+                            {
+                                "playerId": player.player_id,
+                                "name": player.name,
+                                "anonymousId": player.anonymous_id,
+                                "wallet": player.wallet,
+                            },
                         )
                     return player
-        player = PlayerState(player_id=f"player_{uuid.uuid4().hex[:8]}", name=clean_name, anonymous_id=clean_anonymous_id)
+        player = PlayerState(
+            player_id=f"player_{uuid.uuid4().hex[:8]}",
+            name=clean_name,
+            anonymous_id=clean_anonymous_id,
+            wallet=clean_wallet,
+        )
         self.room.players.append(player)
         self.room.add_log(
             "player_joined",
             f"{player.name} joined the room.",
-            {"playerId": player.player_id, "name": player.name, "anonymousId": player.anonymous_id},
+            {
+                "playerId": player.player_id,
+                "name": player.name,
+                "anonymousId": player.anonymous_id,
+                "wallet": player.wallet,
+            },
         )
         return player
 
-    def _find_player(self, player_id: str | None = None, anonymous_id: str | None = None) -> PlayerState | None:
+    def _find_player(
+        self,
+        player_id: str | None = None,
+        anonymous_id: str | None = None,
+        wallet: str | None = None,
+    ) -> PlayerState | None:
         for player in self.room.players:
             if player_id and player.player_id == player_id:
                 return player
             if anonymous_id and player.anonymous_id == anonymous_id:
+                return player
+            if wallet and player.wallet == wallet:
                 return player
         return None
 
@@ -723,6 +860,8 @@ class GameHarness:
         return colony
 
     def rally(self, colony_id: str, opportunity_id: str) -> int:
+        raise ValueError("Rally is unavailable in Sugar V0: every market has a fixed 2 Sugar stake.")
+
         if self.room.status not in {"running_replay", "running_live"}:
             raise ValueError("The match is not live.")
         colony = self.room.colonies.get(colony_id)
@@ -758,7 +897,7 @@ class GameHarness:
         collateral_budget = available_food - RALLY_COST
         max_affordable_ants = int(collateral_budget // loss_per_ant)
         if max_affordable_ants <= 0:
-            raise ValueError("Not enough available food to rally and cover the added risk.")
+            raise ValueError("Not enough available Sugar to rally and cover the added risk.")
 
         chosen = idle_ants[: min(RALLY_ANTS, max_affordable_ants)]
         added = len(chosen)
@@ -772,7 +911,7 @@ class GameHarness:
         prediction.rallied = True
         self.room.add_log(
             "rally",
-            f"{colony.name} rallies — {added} ants join {prediction.option.label} (-3 food).",
+            f"{colony.name} rallies — {added} ants join {prediction.option.label} (-3 Sugar).",
             {
                 "colonyId": colony.colony_id,
                 "opportunityId": opportunity_id,
@@ -784,7 +923,7 @@ class GameHarness:
                     ant.ant_id: dict(ant_strategy_state(ant, colony))
                     for ant in chosen
                 },
-                "option": prediction.option.__dict__,
+                "option": prediction.option.log_state(),
                 "cost": RALLY_COST,
                 "foodReservedAdded": added_reserved_food,
                 "foodReserved": prediction.reserved_food,
@@ -794,6 +933,8 @@ class GameHarness:
         return added
 
     def recall(self, colony_id: str, opportunity_id: str) -> int:
+        raise ValueError("Recall is unavailable in Sugar V0: funded positions stay fixed until settlement.")
+
         if self.room.status not in {"running_replay", "running_live"}:
             raise ValueError("The match is not live.")
         colony = self.room.colonies.get(colony_id)
@@ -835,7 +976,7 @@ class GameHarness:
                 "ants": removable,
                 "antIds": list(prediction.ant_ids),
                 "antIdsRemoved": removed_ant_ids,
-                "option": prediction.option.__dict__,
+                "option": prediction.option.log_state(),
                 "foodReservedReleased": released_reserved_food,
                 "foodReserved": prediction.reserved_food,
             },
@@ -843,6 +984,8 @@ class GameHarness:
         return removable
 
     def switch_call(self, colony_id: str, opportunity_id: str, option_id: str) -> None:
+        raise ValueError("Switching is unavailable in Sugar V0: the colony follows its ant majority.")
+
         if self.room.status not in {"running_replay", "running_live"}:
             raise ValueError("The match is not live.")
         colony = self.room.colonies.get(colony_id)
@@ -874,7 +1017,7 @@ class GameHarness:
         if new_option.option_id == prediction.option.option_id:
             raise ValueError("Your ants are already on that call.")
         if colony.food < SWITCH_COST:
-            raise ValueError("Not enough food to pivot (needs 2).")
+            raise ValueError("Not enough Sugar to pivot (needs 2).")
 
         previous_option = prediction.option
         next_reserved_food = int(round(len(prediction.ant_ids) * RESOURCE_LOSS_MULTIPLIER[new_option.risk]))
@@ -882,7 +1025,7 @@ class GameHarness:
         available_food = max(0, colony.food - colony.food_reserved)
         required_available_food = max(0, SWITCH_COST + reserved_food_delta)
         if available_food < required_available_food:
-            raise ValueError("Not enough available food to pivot and cover the new risk.")
+            raise ValueError("Not enough available Sugar to pivot and cover the new risk.")
 
         colony.food -= SWITCH_COST
         colony.memory.food_net -= SWITCH_COST
@@ -892,15 +1035,15 @@ class GameHarness:
         prediction.switched = True
         self.room.add_log(
             "switch",
-            f"{colony.name} pivots to {new_option.label} (-2 food).",
+            f"{colony.name} pivots to {new_option.label} (-2 Sugar).",
             {
                 "colonyId": colony.colony_id,
                 "opportunityId": opportunity_id,
                 "predictionId": prediction.prediction_id,
                 "optionId": option_id,
                 "antIds": list(prediction.ant_ids),
-                "option": new_option.__dict__,
-                "previousOption": previous_option.__dict__,
+                "option": new_option.log_state(),
+                "previousOption": previous_option.log_state(),
                 "cost": SWITCH_COST,
                 "foodReservedDelta": reserved_food_delta,
                 "foodReserved": prediction.reserved_food,
@@ -1004,8 +1147,12 @@ class GameHarness:
 
     def process_event(self, event: dict[str, Any]) -> None:
         self.room.event_index += 1
-        self._settle_predictions(event)
+        # A timed window is half-open: an event at its deadline belongs to the
+        # next window, not the one that just ended. Expire those positions
+        # before evaluating the incoming event so a late goal cannot win a
+        # goal-next-10 market. Markets without deadlines still evaluate it.
         self._expire_predictions(event)
+        self._settle_predictions(event)
         if self.room.match_state:
             self.room.match_state.update(event)
         for colony in self.room.colonies.values():
@@ -1076,7 +1223,7 @@ class GameHarness:
             bought_info = True
             self.room.add_log(
                 "info",
-                f"{colony.name} spends {info_packet.cost} food on an info packet.",
+                f"{colony.name} spends {info_packet.cost} Sugar on an info packet.",
                 {"colonyId": colony.colony_id, "opportunityId": opportunity.opportunity_id, "info": info_packet.__dict__},
             )
             self.room.add_log(
@@ -1115,24 +1262,51 @@ class GameHarness:
             food_budget=food_budget,
         )
         if not prediction:
-            preferred_option, _ = top_voted_option(opportunity, final_vote)
-            required_food = RESOURCE_LOSS_MULTIPLIER[preferred_option.risk] if preferred_option else 1
-            available_food = max(0, colony.food - colony.food_reserved)
-            insufficient_food = available_food < required_food
+            entry = entry_vote_state(
+                opportunity,
+                final_vote,
+                str(strategy_snapshot["style"]),
+            )
+            available_sugar = max(0, colony.food - colony.food_reserved)
+            reserve_capacity = max(0, MAX_RESERVED_SUGAR - colony.food_reserved)
+            if available_sugar < MARKET_RISK_SUGAR:
+                reason = "insufficient_sugar"
+                message = f"{colony.name} cannot enter this market: fewer than 2 Sugar are available."
+            elif reserve_capacity < MARKET_RISK_SUGAR:
+                reason = "reserve_limit"
+                message = f"{colony.name} observes this market: its 10 Sugar exposure limit is reached."
+            elif entry["tie"]:
+                reason = "tied_vote"
+                message = f"{colony.name} observes this market: the ant vote is tied."
+            else:
+                reason = "low_consensus"
+                message = (
+                    f"{colony.name} observes this market: {entry['supportFraction']:.0%} consensus "
+                    f"is below its {entry['entryThreshold']:.0%} threshold."
+                )
             self.room.add_log(
                 "observe",
-                (
-                    f"{colony.name} cannot back this market: not enough food for one vote."
-                    if insufficient_food
-                    else f"{colony.name} watches this window without backing a market."
-                ),
+                message,
                 {
                     "colonyId": colony.colony_id,
                     "opportunityId": opportunity.opportunity_id,
-                    "reason": "insufficient_food" if insufficient_food else "no_commitment",
+                    "reason": reason,
+                    "sugar": colony.food,
+                    "sugarAvailable": available_sugar,
+                    "requiredSugar": MARKET_RISK_SUGAR,
+                    "sugarReserved": colony.food_reserved,
+                    "maxReservedSugar": MAX_RESERVED_SUGAR,
+                    "consensus": entry["supportFraction"],
+                    "supportFraction": entry["supportFraction"],
+                    "entryThreshold": entry["entryThreshold"],
+                    "topVoteCount": entry["topVoteCount"],
+                    "activeAnts": entry["activeCount"],
+                    "topOptionId": entry["option"].option_id if entry["option"] else None,
+                    "tie": entry["tie"],
+                    # Backward-compatible aliases.
                     "food": colony.food,
-                    "foodAvailable": available_food,
-                    "requiredFood": required_food,
+                    "foodAvailable": available_sugar,
+                    "requiredFood": MARKET_RISK_SUGAR,
                 },
             )
             return
@@ -1153,18 +1327,29 @@ class GameHarness:
         }
         self.room.add_log(
             "prediction",
-            f"{colony.name} backs {prediction.option.label} with {len(prediction.ant_ids)} ant votes.",
+            (
+                f"{colony.name} enters {prediction.option.label}: {len(prediction.ant_ids)}/"
+                f"{max(1, int(final_vote.get('activeCount') or 0))} ant votes "
+                f"({prediction.support_fraction:.0%}), 2 Sugar locked."
+            ),
             {
                 "colonyId": colony.colony_id,
                 "opportunityId": opportunity.opportunity_id,
                 "predictionId": prediction.prediction_id,
-                "option": prediction.option.__dict__,
+                "option": prediction.option.log_state(),
                 "ants": len(prediction.ant_ids),
                 "antIds": list(prediction.ant_ids),
                 "antDecisions": chosen_decisions,
                 "antStrategies": ant_strategies,
                 "market": opportunity.public_state(),
+                "sugarReserved": prediction.reserved_food,
+                "riskSugar": MARKET_RISK_SUGAR,
+                "rewardSugar": prediction.option.reward_sugar,
+                "consensus": prediction.support_fraction,
+                "supportFraction": prediction.support_fraction,
+                "entryThreshold": prediction.entry_threshold,
                 "foodReserved": prediction.reserved_food,
+                "sugarBudget": food_budget,
                 "foodBudget": food_budget,
                 "infoBought": bought_info,
                 "strategyRevision": strategy_snapshot["revision"],
@@ -1249,6 +1434,13 @@ class GameHarness:
                 "favoriteContext": orders["favoriteContext"],
                 "infoNeed": orders["infoNeed"],
                 "strategyRevision": orders["revision"],
+                "sugar": colony.food,
+                "sugarReserved": colony.food_reserved,
+                "sugarAvailable": max(0, colony.food - colony.food_reserved),
+                "entryThreshold": STYLE_ENTRY_THRESHOLDS[str(orders["style"])],
+                "riskPerMarket": MARKET_RISK_SUGAR,
+                "maxReservedSugar": MAX_RESERVED_SUGAR,
+                # Backward-compatible aliases for older agent adapters.
                 "food": colony.food,
                 "foodReserved": colony.food_reserved,
                 "foodAvailable": max(0, colony.food - colony.food_reserved),
@@ -1267,6 +1459,8 @@ class GameHarness:
                 "infoFeatureEnabled": False,
                 "infoFeatureReason": "Paid info is disabled for now and will return later with concrete info types.",
                 "oneDecisionPerAnt": True,
+                "economy": "Each entered market risks exactly 2 Sugar; rewards are the option's rewardSugar.",
+                "entryRule": "The raw top-vote count divided by active ants must meet the colony entryThreshold; a tie means observe with no entry.",
             },
             "opportunity": opportunity.public_state(),
             "market": agent_market_context(opportunity),
@@ -1298,63 +1492,15 @@ class GameHarness:
             return
 
     def _apply_colony_upkeep(self, colony: ColonyState) -> None:
-        self._consume_food(colony)
-        self._hatch_larvae(colony)
+        # Sugar V0 keeps exactly the starting ant roster. There is no upkeep,
+        # starvation, death, larva incubation, or hatching.
+        return
 
     def _consume_food(self, colony: ColonyState) -> None:
-        ticks = (self.room.event_index - colony.last_food_event_index) // FOOD_DRAIN_INTERVAL_EVENTS
-        if ticks <= 0:
-            return
-        colony.last_food_event_index += ticks * FOOD_DRAIN_INTERVAL_EVENTS
-        drain = food_drain_for_colony(colony) * ticks
-        available_food = max(0, colony.food - colony.food_reserved)
-        paid = min(available_food, drain)
-        colony.food -= paid
-        colony.memory.food_net -= paid
-        deficit = drain - paid
-        if deficit <= 0:
-            return
-
-        deaths = min(deficit, len(colony.alive_ants))
-        for ant in colony.alive_ants[:deaths]:
-            ant.alive = False
-            ant.engaged_prediction_ids.clear()
-        if deaths:
-            self.room.add_log(
-                "starvation",
-                f"{colony.name} loses {deaths} ants due to food shortage.",
-                {"colonyId": colony.colony_id, "deaths": deaths},
-            )
+        return
 
     def _hatch_larvae(self, colony: ColonyState) -> None:
-        if not colony.larvae_ready_events:
-            return
-        ready = [event_index for event_index in colony.larvae_ready_events if event_index <= self.room.event_index]
-        available_food = max(0, colony.food - colony.food_reserved)
-        if not ready or available_food <= 0:
-            return
-
-        hatch_count = min(len(ready), available_food)
-        remaining_ready = hatch_count
-        next_queue: list[int] = []
-        for ready_event_index in colony.larvae_ready_events:
-            if ready_event_index <= self.room.event_index and remaining_ready > 0:
-                remaining_ready -= 1
-                continue
-            next_queue.append(ready_event_index)
-        colony.larvae_ready_events = next_queue
-        colony.larvae = max(0, colony.larvae - hatch_count)
-        colony.food -= hatch_count
-        colony.memory.food_net -= hatch_count
-
-        rng = random.Random(stable_seed(colony.seed, self.room.event_index, "hatch", len(colony.ants)))
-        for _ in range(hatch_count):
-            colony.ants.append(spawn_ant(colony, len(colony.ants), rng))
-        self.room.add_log(
-            "hatch",
-            f"{colony.name}: {hatch_count} larvae hatch into new ants.",
-            {"colonyId": colony.colony_id, "hatched": hatch_count, "foodCost": hatch_count},
-        )
+        return
 
     def _agent_decision(
         self,
@@ -1381,6 +1527,7 @@ class GameHarness:
                 "attempts": colony.memory.attempts,
                 "wins": colony.memory.wins,
                 "losses": colony.memory.losses,
+                "sugarNet": colony.memory.food_net,
                 "foodNet": colony.memory.food_net,
                 "contextAttempts": colony.memory.context_attempts,
                 "contextWins": colony.memory.context_wins,
@@ -1496,12 +1643,11 @@ class GameHarness:
             if ant:
                 ant.memory.attempts_by_context[opportunity.context] = ant.memory.attempts_by_context.get(opportunity.context, 0) + 1
 
-        stake = len(prediction.ant_ids)
         if win:
-            food_gain = int(round(stake * prediction.option.multiplier))
-            colony.food += food_gain
+            sugar_gain = prediction.option.reward_sugar
+            colony.food += sugar_gain
             colony.memory.wins += 1
-            colony.memory.food_net += food_gain
+            colony.memory.food_net += sugar_gain
             colony.memory.context_wins[opportunity.context] = colony.memory.context_wins.get(opportunity.context, 0) + 1
             for ant_id in prediction.ant_ids:
                 ant = find_ant(colony, ant_id)
@@ -1511,11 +1657,20 @@ class GameHarness:
                     ant.memory.recent_losses = 0
                     if prediction.info_bought:
                         ant.memory.info_successes += 1
-            message = f"Result {colony.name}: +{food_gain} food on {prediction.option.label}."
-            data = {"win": True, "food": food_gain, "resourceDelta": food_gain, "reason": reason}
+            message = f"Result {colony.name}: +{sugar_gain} Sugar on {prediction.option.label}."
+            data = {
+                "win": True,
+                "sugar": sugar_gain,
+                "sugarDelta": sugar_gain,
+                "rewardSugar": sugar_gain,
+                "riskSugar": MARKET_RISK_SUGAR,
+                # Backward-compatible aliases.
+                "food": sugar_gain,
+                "resourceDelta": sugar_gain,
+                "reason": reason,
+            }
         else:
-            food_loss = prediction.reserved_food or max(1, int(round(stake * RESOURCE_LOSS_MULTIPLIER[prediction.option.risk])))
-            actual_loss = min(colony.food, food_loss)
+            actual_loss = min(colony.food, MARKET_RISK_SUGAR)
             colony.food -= actual_loss
             colony.memory.food_net -= actual_loss
             selected = [find_ant(colony, ant_id) for ant_id in prediction.ant_ids]
@@ -1525,8 +1680,19 @@ class GameHarness:
                 ant.memory.losses_by_context[opportunity.context] = ant.memory.losses_by_context.get(opportunity.context, 0) + 1
                 ant.memory.recent_losses += 1
             colony.memory.losses += 1
-            message = f"Result {colony.name}: -{actual_loss} food on {prediction.option.label}."
-            data = {"win": False, "food": -actual_loss, "resourceDelta": -actual_loss, "resourceLoss": actual_loss, "reason": reason}
+            message = f"Result {colony.name}: -{actual_loss} Sugar on {prediction.option.label}."
+            data = {
+                "win": False,
+                "sugar": -actual_loss,
+                "sugarDelta": -actual_loss,
+                "rewardSugar": prediction.option.reward_sugar,
+                "riskSugar": MARKET_RISK_SUGAR,
+                # Backward-compatible aliases.
+                "food": -actual_loss,
+                "resourceDelta": -actual_loss,
+                "resourceLoss": actual_loss,
+                "reason": reason,
+            }
 
         self.room.add_log(
             "settlement",
@@ -1535,10 +1701,14 @@ class GameHarness:
                 "colonyId": colony.colony_id,
                 "predictionId": prediction.prediction_id,
                 "opportunityId": opportunity.opportunity_id,
-                "option": prediction.option.__dict__,
+                "option": prediction.option.log_state(),
                 "ants": len(prediction.ant_ids),
                 "antIds": list(prediction.ant_ids),
+                "sugarReserved": prediction.reserved_food,
                 "foodReserved": prediction.reserved_food,
+                "consensus": prediction.support_fraction,
+                "supportFraction": prediction.support_fraction,
+                "entryThreshold": prediction.entry_threshold,
                 "resolvedOutcome": outcome,
                 **data,
             },
@@ -1580,26 +1750,42 @@ class GameHarness:
         colony.food_reserved = max(0, colony.food_reserved - prediction.reserved_food)
         self.room.add_log(
             "void",
-            f"{colony.name}: prediction voided on {prediction.option.label}.",
+            f"{colony.name}: position voided on {prediction.option.label}; 2 Sugar released.",
             {
                 "colonyId": colony.colony_id,
                 "predictionId": prediction.prediction_id,
                 "opportunityId": opportunity.opportunity_id,
-                "option": prediction.option.__dict__,
+                "option": prediction.option.log_state(),
                 "reason": reason,
                 "ants": len(prediction.ant_ids),
                 "antIds": list(prediction.ant_ids),
+                "sugarReserved": prediction.reserved_food,
+                "riskSugar": MARKET_RISK_SUGAR,
+                "rewardSugar": prediction.option.reward_sugar,
                 "foodReserved": prediction.reserved_food,
             },
         )
 
     def _clear_old_opportunities(self) -> None:
         for opportunity_id, opportunity in list(self.room.opportunities.items()):
-            has_open_prediction = any(
-                prediction.opportunity_id == opportunity_id and not prediction.resolved
+            opportunity_predictions = [
+                prediction
                 for prediction in self.room.predictions.values()
-            )
+                if prediction.opportunity_id == opportunity_id
+            ]
+            has_open_prediction = any(not prediction.resolved for prediction in opportunity_predictions)
             if not has_open_prediction and self.room.event_index > opportunity.created_event_index:
+                if not opportunity_predictions:
+                    self.room.add_log(
+                        "market_closed",
+                        f"Market closed without a position: {opportunity.label}",
+                        {
+                            "opportunityId": opportunity_id,
+                            "reason": "no_entries",
+                            "positionCount": 0,
+                            "market": opportunity.public_state(),
+                        },
+                    )
                 self.room.opportunities.pop(opportunity_id, None)
 
 
@@ -1620,6 +1806,7 @@ class GameManager:
         participant2: str | None = None,
         seed: int | None = None,
         owner_anonymous_id: str | None = None,
+        owner_wallet: str | None = None,
         owner_name: str | None = None,
         room_code: str | None = None,
         competition: str | None = None,
@@ -1640,6 +1827,7 @@ class GameManager:
             start_time_iso=(start_time_iso or "").strip()[:80] or None,
             txline_validation=dict(txline_validation) if txline_validation else None,
             owner_anonymous_id=(owner_anonymous_id or "").strip()[:80] or None,
+            owner_wallet=(owner_wallet or "").strip()[:80] or None,
             owner_name=(owner_name or "").strip()[:32] or None,
             seed=seed if seed is not None else stable_seed(game_id, fixture_id) % 1_000_000,
         )
@@ -1651,6 +1839,7 @@ class GameManager:
                 "roomCode": clean_room_code,
                 "fixtureId": fixture_id,
                 "ownerAnonymousId": room.owner_anonymous_id,
+                "ownerWallet": room.owner_wallet,
                 "ownerName": room.owner_name,
             },
         )
@@ -1885,13 +2074,9 @@ def ant_bet_history(room: GameRoom, colony_id: str, ant_id: str) -> list[dict[st
         else:
             vote_count = max(1, len(current_ant_ids))
 
-        option_risk = str(option.get("risk") or "")
-        if option_risk in RESOURCE_LOSS_MULTIPLIER:
-            food_at_risk = float(RESOURCE_LOSS_MULTIPLIER[option_risk])
-        else:
-            food_reserved = _safe_history_float(data.get("foodReserved"))
-            initial_vote_count = max(1, _safe_history_int(data.get("ants"), len(initial_ant_ids)))
-            food_at_risk = round(food_reserved / initial_vote_count, 2) if food_reserved is not None else None
+        sugar_at_risk = _safe_history_float(data.get("riskSugar"))
+        if sugar_at_risk is None:
+            sugar_at_risk = float(MARKET_RISK_SUGAR)
         resource_delta = (
             _safe_history_float(resolution_data.get("resourceDelta"))
             if resolution and resolution.kind == "settlement"
@@ -1916,7 +2101,11 @@ def ant_bet_history(room: GameRoom, colony_id: str, ant_id: str) -> list[dict[st
                 "optionLabel": option.get("label") or "Prediction",
                 "risk": option.get("risk"),
                 "multiplier": option.get("multiplier"),
-                "foodAtRisk": food_at_risk,
+                "rewardSugar": option.get("rewardSugar", option.get("reward_sugar")),
+                "sugarAtRisk": sugar_at_risk,
+                "colonySugarDelta": resource_delta,
+                # Backward-compatible aliases.
+                "foodAtRisk": sugar_at_risk,
                 "colonyFoodDelta": resource_delta,
                 "antShareDelta": round(resource_delta / vote_count, 2) if resource_delta is not None else None,
                 "voteCount": vote_count,
@@ -2226,42 +2415,42 @@ def opportunity_deadline_events(context: str) -> int | None:
 def opportunity_options(context: str, participant1: str = "A", participant2: str = "B", team_label: str | None = None) -> list[OpportunityOption]:
     if context == "penalties":
         return [
-            OpportunityOption("penalty_goal", "yes, penalty scored", "safe", 1.35, "goal"),
-            OpportunityOption("penalty_no_goal", "no, missed or saved", "wild", 5.5, "no_goal", "any"),
+            OpportunityOption("penalty_goal", "yes, penalty scored", "safe", 1.35, "goal", reward_sugar=1),
+            OpportunityOption("penalty_no_goal", "no, missed or saved", "wild", 5.5, "no_goal", "any", reward_sugar=5),
         ]
     if context == "goal_next_10":
         return [
-            OpportunityOption("goal_next_10_yes", "yes, goal in the next 10 min", "risky", 2.4, "goal", "any"),
-            OpportunityOption("goal_next_10_no", "no goal in the next 10 min", "safe", 1.35, "no_goal", "any"),
+            OpportunityOption("goal_next_10_yes", "yes, goal in the next 10 min", "risky", 2.4, "goal", "any", reward_sugar=4),
+            OpportunityOption("goal_next_10_no", "no goal in the next 10 min", "safe", 1.35, "no_goal", "any", reward_sugar=1),
         ]
     if context == "next_goal_team":
         return [
-            OpportunityOption("next_goal_p1", f"{participant1} scores the next goal", "wild", 4.4, "goal", "participant1"),
-            OpportunityOption("next_goal_p2", f"{participant2} scores the next goal", "wild", 4.4, "goal", "participant2"),
-            OpportunityOption("next_goal_none", "no goal before full time", "safe", 1.35, "no_goal", "any"),
+            OpportunityOption("next_goal_p1", f"{participant1} scores the next goal", "wild", 4.4, "goal", "participant1", reward_sugar=4),
+            OpportunityOption("next_goal_p2", f"{participant2} scores the next goal", "wild", 4.4, "goal", "participant2", reward_sugar=4),
+            OpportunityOption("next_goal_none", "no goal before full time", "safe", 1.35, "no_goal", "any", reward_sugar=1),
         ]
     if context == "next_corner":
         return [
-            OpportunityOption("next_corner_p1", f"{participant1} wins the next corner", "risky", 2.6, "corner", "participant1"),
-            OpportunityOption("next_corner_p2", f"{participant2} wins the next corner", "risky", 2.6, "corner", "participant2"),
-            OpportunityOption("next_corner_none", "no corner before full time", "safe", 1.45, "no_corner", "any"),
+            OpportunityOption("next_corner_p1", f"{participant1} wins the next corner", "risky", 2.6, "corner", "participant1", reward_sugar=2),
+            OpportunityOption("next_corner_p2", f"{participant2} wins the next corner", "risky", 2.6, "corner", "participant2", reward_sugar=2),
+            OpportunityOption("next_corner_none", "no corner before full time", "safe", 1.45, "no_corner", "any", reward_sugar=1),
         ]
     if context == "next_free_kick":
         return [
-            OpportunityOption("next_free_kick_p1", f"{participant1} wins the next free kick", "risky", 2.2, "free_kick", "participant1"),
-            OpportunityOption("next_free_kick_p2", f"{participant2} wins the next free kick", "risky", 2.2, "free_kick", "participant2"),
-            OpportunityOption("next_free_kick_none", "no free kick before full time", "safe", 1.35, "no_free_kick", "any"),
+            OpportunityOption("next_free_kick_p1", f"{participant1} wins the next free kick", "risky", 2.2, "free_kick", "participant1", reward_sugar=2),
+            OpportunityOption("next_free_kick_p2", f"{participant2} wins the next free kick", "risky", 2.2, "free_kick", "participant2", reward_sugar=2),
+            OpportunityOption("next_free_kick_none", "no free kick before full time", "safe", 1.35, "no_free_kick", "any", reward_sugar=1),
         ]
     if context == "next_yellow_card":
         return [
-            OpportunityOption("next_yellow_card_p1", f"{participant1} gets the next yellow card", "wild", 3.8, "yellow_card", "participant1"),
-            OpportunityOption("next_yellow_card_p2", f"{participant2} gets the next yellow card", "wild", 3.8, "yellow_card", "participant2"),
-            OpportunityOption("next_yellow_card_none", "no yellow card before full time", "safe", 1.35, "no_yellow_card", "any"),
+            OpportunityOption("next_yellow_card_p1", f"{participant1} gets the next yellow card", "wild", 3.8, "yellow_card", "participant1", reward_sugar=3),
+            OpportunityOption("next_yellow_card_p2", f"{participant2} gets the next yellow card", "wild", 3.8, "yellow_card", "participant2", reward_sugar=3),
+            OpportunityOption("next_yellow_card_none", "no yellow card before full time", "safe", 1.35, "no_yellow_card", "any", reward_sugar=1),
         ]
     if context == "next_foul":
         return [
-            OpportunityOption("next_foul_p1", f"yes, {participant1} commits the next foul", "risky", 2.2, "foul", "participant1"),
-            OpportunityOption("next_foul_p2", f"no, {participant2} commits the next foul", "risky", 2.2, "foul", "participant2"),
+            OpportunityOption("next_foul_p1", f"yes, {participant1} commits the next foul", "risky", 2.2, "foul", "participant1", reward_sugar=2),
+            OpportunityOption("next_foul_p2", f"no, {participant2} commits the next foul", "risky", 2.2, "foul", "participant2", reward_sugar=2),
         ]
     return []
 
@@ -2421,7 +2610,9 @@ def market_available_votes(opportunity: Opportunity) -> list[dict[str, Any]]:
                 "optionId": option.option_id,
                 "risk": option.risk,
                 "multiplier": option.multiplier,
-                "lossMultiplier": RESOURCE_LOSS_MULTIPLIER[option.risk],
+                "lossMultiplier": MARKET_RISK_SUGAR,
+                "rewardSugar": option.reward_sugar,
+                "riskSugar": MARKET_RISK_SUGAR,
             }
         )
     items.append(
@@ -2431,6 +2622,8 @@ def market_available_votes(opportunity: Opportunity) -> list[dict[str, Any]]:
             "optionId": None,
             "risk": "none",
             "multiplier": 0,
+            "rewardSugar": 0,
+            "riskSugar": 0,
         }
     )
     return items
@@ -2688,75 +2881,84 @@ def create_prediction(
     strategy_style: str | None = None,
     food_budget: int | None = None,
 ) -> Prediction | None:
-    best_option = None
-    best_votes: list[dict[str, Any]] = []
-    if agent_decision and agent_decision.authoritative:
-        if agent_decision.action == "observe":
-            return None
-        agent_option = next((option for option in opportunity.options if option.option_id == agent_decision.option_id), None)
-        agent_votes = vote["predictions"].get(agent_option.option_id, []) if agent_option else []
-        voted_option, voted_option_votes = top_voted_option(opportunity, vote)
-        if agent_option and agent_votes:
-            best_option = agent_option
-            best_votes = agent_votes
-        else:
-            best_option = voted_option
-            best_votes = voted_option_votes
-    else:
-        best_option, best_votes = top_voted_option(opportunity, vote)
-    if not best_option or not best_votes:
-        return None
-
-    active_count = max(1, vote["activeCount"])
+    # Kept in the signature for compatibility with existing callers. Sugar V0 is
+    # governed only by the raw ant majority, never by weighted influence, a
+    # colony-agent override, variable stake sizing, or a per-window food budget.
+    _ = agent_decision, food_budget
     effective_style = strategy_style if strategy_style in VALID_STYLES else colony.style
-    if agent_decision and agent_decision.authoritative:
-        support_fraction = len(best_votes) / active_count
-        stake_fraction = min(clamp(agent_decision.stake_fraction, 0.02, 0.80), max(0.02, support_fraction))
-        stake = max(1, int(round(active_count * stake_fraction)))
-    else:
-        threshold = {"cautious": 0.16, "balanced": 0.12, "aggressive": 0.09}[effective_style]
-        if len(best_votes) / active_count < threshold:
-            return None
-
-        stake_factor = {"cautious": 0.42, "balanced": 0.58, "aggressive": 0.76}[effective_style]
-        risk_boost = {"safe": 0.90, "risky": 0.80, "wild": 0.66, "chaos": 0.55}[best_option.risk]
-        if max(0, colony.food - colony.food_reserved) < food_drain_for_colony(colony) * 2:
-            stake_factor += 0.14
-        stake = max(1, int(round(len(best_votes) * stake_factor * risk_boost)))
-    loss_per_ant = RESOURCE_LOSS_MULTIPLIER[best_option.risk]
-    available_food = max(0, colony.food - colony.food_reserved)
-    collateral_budget = available_food if food_budget is None else min(available_food, max(0, food_budget))
-    max_affordable_stake = int(collateral_budget // loss_per_ant)
-    if max_affordable_stake <= 0:
+    entry = entry_vote_state(opportunity, vote, effective_style)
+    best_option = entry["option"]
+    best_votes = entry["votes"]
+    if not best_option or entry["tie"] or entry["supportFraction"] < entry["entryThreshold"]:
         return None
-    stake = min(stake, len(best_votes), max_affordable_stake)
-    chosen_votes = sorted(best_votes, key=lambda item: item["weight"], reverse=True)[:stake]
-    reserved_food = int(round(stake * loss_per_ant))
+    available_sugar = max(0, colony.food - colony.food_reserved)
+    reserve_capacity = max(0, MAX_RESERVED_SUGAR - colony.food_reserved)
+    if available_sugar < MARKET_RISK_SUGAR or reserve_capacity < MARKET_RISK_SUGAR:
+        return None
+    supporting_ant_ids = [str(item.get("antId")) for item in best_votes if item.get("antId")]
+    if not supporting_ant_ids:
+        return None
     prediction = Prediction(
         prediction_id=f"pred_{uuid.uuid4().hex[:10]}",
         colony_id=colony.colony_id,
         opportunity_id=opportunity.opportunity_id,
         option=best_option,
-        ant_ids=[item["antId"] for item in chosen_votes],
+        ant_ids=supporting_ant_ids,
         created_event_index=event_index,
         deadline_clock=opportunity.deadline_clock,
         deadline_event_index=opportunity.deadline_event_index,
         info_bought=bought_info,
-        reserved_food=reserved_food,
+        reserved_food=MARKET_RISK_SUGAR,
+        support_fraction=entry["supportFraction"],
+        entry_threshold=entry["entryThreshold"],
     )
-    colony.food_reserved += reserved_food
+    colony.food_reserved += MARKET_RISK_SUGAR
     return prediction
 
 
 def top_voted_option(opportunity: Opportunity, vote: dict[str, Any]) -> tuple[OpportunityOption | None, list[dict[str, Any]]]:
-    best_option = None
-    best_votes: list[dict[str, Any]] = []
-    for option in opportunity.options:
-        votes = vote["predictions"].get(option.option_id, [])
-        if sum(item["weight"] for item in votes) > sum(item["weight"] for item in best_votes):
-            best_option = option
-            best_votes = votes
-    return best_option, best_votes
+    ranked = [
+        (option, list(vote.get("predictions", {}).get(option.option_id, [])))
+        for option in opportunity.options
+    ]
+    if not ranked:
+        return None, []
+    top_count = max(len(items) for _, items in ranked)
+    winners = [(option, items) for option, items in ranked if len(items) == top_count]
+    if top_count <= 0 or len(winners) != 1:
+        return None, []
+    return winners[0]
+
+
+def entry_vote_state(
+    opportunity: Opportunity,
+    vote: dict[str, Any],
+    style: str,
+) -> dict[str, Any]:
+    ranked = [
+        (option, list(vote.get("predictions", {}).get(option.option_id, [])))
+        for option in opportunity.options
+    ]
+    top_count = max((len(items) for _, items in ranked), default=0)
+    winners = [(option, items) for option, items in ranked if len(items) == top_count]
+    tie = len(winners) > 1
+    option, items = winners[0] if len(winners) == 1 and top_count > 0 else (None, [])
+    try:
+        active_count = max(0, int(vote.get("activeCount") or 0))
+    except (TypeError, ValueError):
+        active_count = 0
+    threshold = STYLE_ENTRY_THRESHOLDS.get(style, STYLE_ENTRY_THRESHOLDS["balanced"])
+    support_fraction = top_count / active_count if active_count else 0.0
+    return {
+        "option": option,
+        "votes": items,
+        "topVoteCount": top_count,
+        "activeCount": active_count,
+        "supportFraction": support_fraction,
+        "consensus": support_fraction,
+        "entryThreshold": threshold,
+        "tie": tie,
+    }
 
 
 def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | None, *, reason: str) -> dict[str, Any]:
@@ -3053,12 +3255,22 @@ def event_matches_team_scope(team_scope: str, event: dict[str, Any], opportunity
 def public_vote(vote: dict[str, Any]) -> dict[str, Any]:
     predictions = {}
     for option_id, items in vote["predictions"].items():
-        predictions[option_id] = {"count": len(items), "weight": round(sum(item["weight"] for item in items), 2)}
+        predictions[option_id] = {
+            "count": len(items),
+            "weight": round(sum(float(item.get("weight") or 0) for item in items), 2),
+        }
+    top_count = max((item["count"] for item in predictions.values()), default=0)
+    tied = len([item for item in predictions.values() if item["count"] == top_count]) > 1
+    active_count = max(0, int(vote.get("activeCount") or 0))
     public = {
-        "activeCount": vote["activeCount"],
+        "activeCount": active_count,
         "neutralCount": vote["neutralCount"],
         "infoRequestCount": len(vote["infoRequests"]),
         "predictions": predictions,
+        "topVoteCount": top_count,
+        "consensus": top_count / active_count if active_count else 0.0,
+        "supportFraction": top_count / active_count if active_count else 0.0,
+        "tie": tied,
     }
     if vote.get("source"):
         public["source"] = vote.get("source")
@@ -3167,14 +3379,17 @@ def format_market_vote_summary(vote: dict[str, Any]) -> str:
 
 
 def top_voted_option_label(vote: dict[str, Any]) -> str:
-    best_option_id = None
-    best_count = -1
-    for option_id, items in vote["predictions"].items():
-        if len(items) > best_count:
-            best_option_id = option_id
-            best_count = len(items)
-    if best_option_id is None or best_count <= 0:
+    counts = {
+        option_id: len(items)
+        for option_id, items in vote["predictions"].items()
+    }
+    best_count = max(counts.values(), default=0)
+    best_option_ids = [option_id for option_id, count in counts.items() if count == best_count]
+    if best_count <= 0:
         return "no prediction"
+    if len(best_option_ids) != 1:
+        return "tied vote — observe"
+    best_option_id = best_option_ids[0]
     for market_vote, label in (vote.get("voteLabels") or {}).items():
         for item in vote["predictions"].get(best_option_id, []):
             if item.get("vote") == market_vote:

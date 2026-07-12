@@ -702,10 +702,11 @@ class OpenRouterColonyAgent:
                     "role": "system",
                     "content": (
                         "You control a colony in a live football prediction game. "
-                        "Simulate internal AI squads (data, momentum, risk, survival, chaos depending on context), "
+                        "Simulate internal AI squads (data, momentum and risk depending on context), "
                         "then return a final queen decision. Squads represent groups of ants, not individuals. "
-                        "Respect the ant vote: choose an option only if it has support, and preserve the colony when confidence is low. "
-                        "Buy info if ants request it or if it can change the decision. "
+                        "The ants are fixed voters: they are never spent, wounded or killed by a market. "
+                        "Respect the ant vote and the market's displayed Sugar reward and fixed Sugar risk. "
+                        "Choose an option only if it has support. Buy info only when that feature is explicitly enabled. "
                         "Explain each squad briefly in squadVotes. Return only JSON matching the schema."
                     ),
                 },
@@ -778,14 +779,15 @@ class OpenRouterColonyAgent:
                     "role": "system",
                     "content": (
                         "You control individual ants in a football prediction game. "
-                        "Each item in ants is an autonomous agent with its own personality and memory. "
+                        "Each item in ants is an autonomous, fixed voter with its own personality and memory. "
                         "Your job is not to guess what the colony wants: each ant follows its own objective "
-                        "and decides whether to help the colony now or preserve its strength. "
+                        "and votes for the outcome it believes is best for the colony's Sugar total. "
                         "Each ant also receives strategy orders. Follow those current orders while keeping "
                         "the ant's personality and memory as its individual point of view. "
                         "Do not return a global decision: return exactly one decision per provided antId. "
                         "The only allowed output for each ant is one vote from game.market.availableVotes. "
                         "Do not invent confidence, score, probability, stake or info requests. "
+                        "Ants are not spent, wounded or killed by a market. "
                         "Paid info is disabled for now because paid tools will be added later. "
                         "Use abstain only if you do not want to commit this ant to this market. "
                         "Ants may disagree. JSON only, no explanation."

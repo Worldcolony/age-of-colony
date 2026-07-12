@@ -11,20 +11,20 @@ export const STYLE_OPTIONS = [
   {
     value: "cautious",
     label: "Cautious",
-    shortLabel: "Protect food",
-    description: "Back fewer ant votes and preserve food when support is weak.",
+    shortLabel: "Wait for strength",
+    description: "Enter only when ant consensus is especially strong.",
   },
   {
     value: "balanced",
     label: "Balanced",
     shortLabel: "Stay flexible",
-    description: "Balance food protection with steady participation across markets.",
+    description: "Enter when ant consensus is clear.",
   },
   {
     value: "aggressive",
     label: "Aggressive",
     shortLabel: "Press the edge",
-    description: "Back more supported votes and accept a larger food swing.",
+    description: "Enter more often because lighter consensus is enough.",
   },
 ] as const satisfies readonly StrategyOption<Style>[];
 

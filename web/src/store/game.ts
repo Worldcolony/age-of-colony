@@ -3,9 +3,11 @@
 import { create } from "zustand";
 import type { Fixture, GameEvent, GameState } from "@/lib/types";
 
-interface WalletState {
+export interface WalletState {
   installed: boolean;
+  ready: boolean;
   connected: boolean;
+  authenticated: boolean;
   pubkey: string | null;
   accent: string;
   short: string;
@@ -29,7 +31,16 @@ interface Store {
 }
 
 export const useStore = create<Store>((set) => ({
-  wallet: { installed: false, connected: false, pubkey: null, accent: "#38E8FF", short: "", name: null },
+  wallet: {
+    installed: false,
+    ready: false,
+    connected: false,
+    authenticated: false,
+    pubkey: null,
+    accent: "#38E8FF",
+    short: "",
+    name: null,
+  },
   setWallet: (w) => set((s) => ({ wallet: { ...s.wallet, ...w } })),
 
   game: null,

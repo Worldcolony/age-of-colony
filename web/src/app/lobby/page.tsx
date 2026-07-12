@@ -3,14 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, API_BASE } from "@/lib/api";
 import { useStore } from "@/store/game";
-import { getAnonId } from "@/lib/anon";
+import { usePlayerIdentity } from "@/lib/playerIdentity";
 import { flag, teamName, fixtureId, fmtKickoffLine } from "@/lib/format";
 import { GameShell, GameChip } from "@/components/GameShell";
 import type { Fixture } from "@/lib/types";
 
 export default function LobbyPage() {
   const router = useRouter();
-  const wallet = useStore((s) => s.wallet);
+  const identity = usePlayerIdentity();
   const setMatchFixture = useStore((s) => s.setMatchFixture);
   const resetGame = useStore((s) => s.resetGame);
 
@@ -70,9 +70,10 @@ export default function LobbyPage() {
     if (!id) return setErr("Fixture has no id.");
     setJoining(true);
     setErr("");
-    resetGame();
-    setMatchFixture(f);
     try {
+      await identity.ensureWallet();
+      resetGame();
+      setMatchFixture(f);
       const game = await api.createGame({
         fixtureId: id,
         participant1: f.participant1 ?? null,
@@ -80,7 +81,6 @@ export default function LobbyPage() {
         competition: f.competition ?? null,
         startTime: f.startTime ?? null,
         startTimeIso: f.startTimeIso ?? null,
-        anonymousId: getAnonId(),
       });
       router.push(`/room/${game.gameId}`);
     } catch (e) {
@@ -94,7 +94,13 @@ export default function LobbyPage() {
 
   return (
     <GameShell
-      chip={<GameChip emblem="🐜" title="Age of Colony" sub={wallet.connected ? wallet.short : "guest commander"} />}
+      chip={(
+        <GameChip
+          emblem="🐜"
+          title="Age of Colony"
+          sub={identity.authenticated ? identity.short : identity.ready ? "connect wallet to play" : "checking wallet…"}
+        />
+      )}
       resources={[{ icon: "⚽", value: matches.length, title: "Matches open" }]}
       nav={[
         { icon: "🗓️", label: "Matches", active: sheetOpen, onClick: () => setSheetOpen((v) => !v) },
@@ -105,13 +111,15 @@ export default function LobbyPage() {
         <button
           type="button"
           className={`g-cta ${headLive ? "rust" : ""}`}
-          disabled={joining}
+          disabled={joining || !identity.ready}
           onClick={() => {
             if (headline && !loading) joinMatch(headline.f);
             else setSheetOpen(true); // loading/offline: the sheet explains itself
           }}
         >
-          {joining
+          {!identity.ready
+            ? "Checking wallet..."
+            : joining
             ? "Entering..."
             : headline
               ? `${headLive ? "🔴 Live" : "⚔️"}  ${teamName(headline.f.participant1)} vs ${teamName(headline.f.participant2)}`
@@ -126,6 +134,11 @@ export default function LobbyPage() {
       hint="drag to orbit · pinch to zoom · tap a mound"
     >
       {err && <p className="rounded-lg border-2 border-danger/40 bg-danger/10 px-3 py-2 text-sm font-bold text-danger">{err}</p>}
+      {!identity.authenticated && (
+        <p className="well px-3 py-2 text-xs leading-relaxed text-ink-soft">
+          <b>Wallet identity required to play.</b> Phantom asks for one identity signature. No transaction and no SOL.
+        </p>
+      )}
 
       {loading ? (
         <div className="flex flex-col gap-3" role="status" aria-label="Loading matches">
@@ -149,7 +162,7 @@ export default function LobbyPage() {
         <div className="well p-4 text-center text-sm text-ink-faint">No upcoming fixtures in the next 14 days.</div>
       ) : (
         matches.slice(0, 10).map((item) => (
-          <MatchRow key={String(fixtureId(item.f))} {...item} busy={joining} onJoin={joinMatch} />
+          <MatchRow key={String(fixtureId(item.f))} {...item} busy={joining || !identity.ready} onJoin={joinMatch} />
         ))
       )}
     </GameShell>

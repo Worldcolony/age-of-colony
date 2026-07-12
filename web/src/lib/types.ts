@@ -63,8 +63,12 @@ export interface AntBet {
   optionLabel: string;
   risk?: string | null;
   multiplier?: number | null;
+  rewardSugar?: number | null;
+  riskSugar?: number | null;
   foodAtRisk?: number | null;
+  sugarAtRisk?: number | null;
   colonyFoodDelta?: number | null;
+  colonySugarDelta?: number | null;
   antShareDelta?: number | null;
   voteCount: number;
   infoBought: boolean;
@@ -111,12 +115,16 @@ export interface ColonyEconomy {
   reserved: number;
   available: number;
   net: number;
-  upkeepCost: number;
-  upkeepEveryEvents: number;
-  nextUpkeepInEvents: number;
-  lastUpkeepEventIndex?: number;
-  runwayUpkeeps: number | null;
-  status: "stable" | "watch" | "critical" | string;
+  sugarBalance?: number;
+  sugarReserved?: number;
+  sugarAvailable?: number;
+  sugarNet?: number;
+  upkeepCost?: number | null;
+  upkeepEveryEvents?: number | null;
+  nextUpkeepInEvents?: number | null;
+  lastUpkeepEventIndex?: number | null;
+  runwayUpkeeps?: number | null;
+  status?: "stable" | "watch" | "critical" | string | null;
 }
 
 export interface Fixture {
@@ -135,6 +143,7 @@ export interface Colony {
   size: number;
   playerId?: string;
   playerAnonymousId?: string;
+  playerWallet?: string;
   style: Style;
   favoriteContext: FavoriteContext;
   infoNeed: InfoNeed;
@@ -145,6 +154,8 @@ export interface Colony {
   losses?: number;
   food: number;
   foodNet?: number;
+  sugar?: number;
+  sugarNet?: number;
   economy?: ColonyEconomy;
   larvae: number;
   antsAlive: number;
@@ -163,6 +174,7 @@ export interface Player {
   playerId: string;
   name: string;
   anonymousId?: string;
+  wallet?: string;
   isHost?: boolean;
   ready?: boolean;
   colonyId?: string;
@@ -176,6 +188,8 @@ export interface OpportunityOption {
   risk?: string;
   multiplier?: number;
   lossMultiplier?: number;
+  rewardSugar?: number;
+  riskSugar?: number;
 }
 
 export interface Opportunity {
@@ -229,7 +243,7 @@ export interface GameState {
   startTime?: number | string | null;
   startTimeIso?: string | null;
   txlineValidation?: TxLineValidation | null;
-  owner?: { anonymousId?: string | null; name?: string | null } | null;
+  owner?: { anonymousId?: string | null; wallet?: string | null; name?: string | null } | null;
   status: GameStatus;
   mode?: string | null;
   agentCallMode?: AgentCallMode | null;

@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
+import { colonySugar } from "@/lib/sugar";
 import type { GameState } from "@/lib/types";
 
 export default function ResultsPage() {
@@ -19,7 +20,7 @@ export default function ResultsPage() {
   const running = game ? ["running_replay", "running_live"].includes(game.status) : false;
   useGameStream(id, { onState: setLocal }, running);
 
-  const cols = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => (b.score || 0) - (a.score || 0)), [game]);
+  const cols = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => colonySugar(b) - colonySugar(a)), [game]);
   const finished = game?.status === "finished";
 
   async function rerun() {
@@ -33,8 +34,8 @@ export default function ResultsPage() {
     const idx = cols.findIndex((c) => c.colonyId === myColonyId);
     const mine = idx >= 0 ? cols[idx] : cols[0];
     const text = mine
-      ? `🐜 My colony "${mine.name}" finished #${(idx < 0 ? 0 : idx) + 1}/${cols.length} with ${mine.score ?? 0} pts in Age of Colony!`
-      : "🐜 Age of Colony — command your colony, predict the match, rule the lobby!";
+      ? `🍬 My colony "${mine.name}" finished #${(idx < 0 ? 0 : idx) + 1}/${cols.length} with ${colonySugar(mine)} Sugar in Age of Colony!`
+      : "🐜 Age of Colony — ants vote, consensus enters, most Sugar wins!";
     try {
       if (navigator.share) await navigator.share({ title: "Age of Colony", text, url: location.href });
       else await navigator.clipboard.writeText(`${text} ${location.href}`);
@@ -53,7 +54,10 @@ export default function ResultsPage() {
           </div>
         )}
       </div>
-      <h1 className="hud-title text-[13px]">{finished ? "Final standings" : "Live rankings"}</h1>
+      <div>
+        <h1 className="hud-title text-[13px]">{finished ? "Final Sugar standings" : "Live Sugar rankings"}</h1>
+        <p className="mt-1 text-sm text-ink-faint">Colonies are ranked by Sugar. Most Sugar wins.</p>
+      </div>
 
       <div className="glass p-4">
         <div className="mb-3 flex items-end justify-center gap-2.5">
@@ -68,7 +72,7 @@ export default function ResultsPage() {
                   <>
                     <div className={`plate grid h-11 w-11 place-items-center text-xl ${pos === 0 ? "!border-gold" : ""}`}>{pos === 0 ? "👑" : "🐜"}</div>
                     <div className="max-w-full truncate text-xs font-bold">{c.name}</div>
-                    <div className="font-mono text-sm font-bold text-gold-deep">{c.score ?? 0}</div>
+                    <div className="font-mono text-sm font-bold text-gold-deep">🍬 {colonySugar(c)}</div>
                     <div className={`w-full rounded-t-md border-2 ${heights[pos]} ${tint} shadow-[2px_2px_0_rgba(74,58,30,0.3)]`}>
                       <span className="hud-title block pt-1 text-[10px] text-[#5a4a20]">{pos + 1}</span>
                     </div>
@@ -89,9 +93,8 @@ export default function ResultsPage() {
               <div key={c.colonyId} className={`glass flex items-center gap-3 px-3.5 py-3 ${c.colonyId === myColonyId ? "!border-lime shadow-[3px_3px_0_rgba(74,58,30,0.25)]" : ""}`}>
                 <span className="w-7 font-display text-[13px] text-ink-soft">#{i + 1}</span>
                 <span className="flex-1 font-bold">{c.name}</span>
-                <span className="font-mono text-xs text-ink-faint">{c.antsAlive ?? 0}🐜</span>
-                <span className="font-mono text-xs text-ink-faint">{c.accuracy != null ? Math.round(c.accuracy * 100) + "%" : "—"}</span>
-                <span className="font-mono font-bold text-cyan">{c.score ?? 0}</span>
+                <span className="hidden text-xs text-ink-faint sm:inline">{temperamentLabel(c.style)} temperament</span>
+                <span className="font-mono font-bold text-green">🍬 {colonySugar(c)} Sugar</span>
               </div>
             ))
           )}
@@ -101,4 +104,10 @@ export default function ResultsPage() {
       <button className="btn btn-primary" onClick={() => router.push("/lobby")}>Play next match</button>
     </div>
   );
+}
+
+function temperamentLabel(style: string): string {
+  if (style === "cautious") return "Careful";
+  if (style === "aggressive") return "Bold";
+  return "Steady";
 }

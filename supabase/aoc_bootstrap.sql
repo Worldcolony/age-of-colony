@@ -13,6 +13,7 @@ create table if not exists public.aoc_games (
   participant1   text,
   participant2   text,
   owner_anonymous_id text,
+  owner_wallet  text,
   owner_name     text,
   status         text not null default 'created',
   mode           text,
@@ -35,6 +36,7 @@ create index if not exists aoc_games_updated_at_idx
 
 alter table public.aoc_games
   add column if not exists owner_anonymous_id text,
+  add column if not exists owner_wallet text,
   add column if not exists owner_name text;
 
 create index if not exists aoc_games_fixture_idx
@@ -42,6 +44,9 @@ create index if not exists aoc_games_fixture_idx
 
 create index if not exists aoc_games_owner_anonymous_idx
   on public.aoc_games (owner_anonymous_id, updated_at desc);
+
+create index if not exists aoc_games_owner_wallet_idx
+  on public.aoc_games (owner_wallet, updated_at desc);
 
 create index if not exists aoc_games_status_idx
   on public.aoc_games (status);

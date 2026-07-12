@@ -166,7 +166,7 @@ export function GameShell({
 }
 
 // resource pill: flashes (scale bump + gold text) whenever its value changes,
-// so food/ant swings are legible without staring at the HUD.
+// so Sugar swings are legible without staring at the HUD.
 function ResPill({ pill }: { pill: ResourcePill }) {
   const prev = useRef(pill.value);
   const [flash, setFlash] = useState(false);
@@ -199,7 +199,7 @@ export function GameChip({ emblem, title, sub }: { emblem: string; title: string
   );
 }
 
-// ---- toasts: game events surfacing over the world ("+12 food to Maya") ----
+// ---- toasts: game events surfacing over the world ("+12 Sugar to Maya") ----
 
 export interface GameToast {
   id: number;
