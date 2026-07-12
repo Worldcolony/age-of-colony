@@ -3,6 +3,7 @@ import hashlib
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any, AsyncIterator
 
 import os
@@ -64,6 +65,9 @@ STATIC_DIR = BASE_DIR / "static"
 
 app = FastAPI(title="Age of Colony TXLine Monitor", version="0.1.0")
 _txline_validation_cache: dict[str, dict[str, Any]] = {}
+_admin_room_request_cache: dict[str, tuple[str, str]] = {}
+_admin_room_request_lock = RLock()
+ADMIN_ROOM_REQUEST_CACHE_LIMIT = 256
 
 # CORS — allow the standalone Next.js frontend (separate origin) to call the API.
 # Set WEB_ORIGINS to a comma-separated allowlist in production; defaults to "*" for dev.
@@ -263,6 +267,7 @@ class AdminRoomRequest(BaseModel):
     startTime: int | float | str | None = None
     startTimeIso: str | None = None
     seed: int | None = None
+    requestKey: str | None = Field(default=None, min_length=1, max_length=128)
     colonies: list[CreateColonyRequest] = Field(default_factory=list)
 
 
@@ -906,6 +911,40 @@ async def create_admin_room(payload: AdminRoomRequest, request: Request) -> dict
     if not payload.colonies:
         raise HTTPException(status_code=422, detail="Add at least one colony before creating an admin room.")
 
+    request_key = (payload.requestKey or "").strip()
+    if request_key:
+        fingerprint = _admin_room_payload_fingerprint(payload)
+        with _admin_room_request_lock:
+            cached = _admin_room_request_cache.get(request_key)
+            existing_room = game_manager.get_room(cached[1]) if cached else None
+            if cached and existing_room:
+                if cached[0] != fingerprint:
+                    raise HTTPException(status_code=409, detail="This admin room request key is already attached to another setup.")
+                room = existing_room
+            else:
+                if cached:
+                    _admin_room_request_cache.pop(request_key, None)
+                room = _build_admin_room(payload)
+                if len(_admin_room_request_cache) >= ADMIN_ROOM_REQUEST_CACHE_LIMIT:
+                    _admin_room_request_cache.pop(next(iter(_admin_room_request_cache)))
+                _admin_room_request_cache[request_key] = (fingerprint, room.game_id)
+    else:
+        room = _build_admin_room(payload)
+
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+def _admin_room_payload_fingerprint(payload: AdminRoomRequest) -> str:
+    canonical = json.dumps(
+        payload.model_dump(mode="json", exclude={"requestKey"}),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _build_admin_room(payload: AdminRoomRequest) -> GameRoom:
     room = game_manager.create_room(
         fixture_id=payload.fixtureId,
         participant1=payload.participant1,
@@ -928,9 +967,7 @@ async def create_admin_room(payload: AdminRoomRequest, request: Request) -> dict
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    await _sync_room_to_supabase_async(room)
-    return room.public_state()
+    return room
 
 
 @app.get("/api/fixtures/recent")

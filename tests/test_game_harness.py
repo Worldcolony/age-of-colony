@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
 from app.main import (
+    _admin_room_request_cache,
     app,
     _finish_live_game,
     _fetch_score_sources,
@@ -3709,6 +3710,45 @@ class DemoRunApiTest(unittest.TestCase):
             self.assertEqual(admin_room["fixtureId"], 616161)
             self.assertEqual(len(admin_room["colonies"]), 3)
             self.assertEqual([colony["name"] for colony in admin_room["colonies"]], ["Admin Scout", "Admin Guard", "Admin Rush"])
+
+    def test_admin_room_request_key_reuses_the_created_room(self):
+        client = TestClient(app)
+        request_key = "admin-idempotence-test-616162"
+        self.addCleanup(_admin_room_request_cache.pop, request_key, None)
+        payload = {
+            "fixtureId": 616162,
+            "participant1": "Argentina",
+            "participant2": "Switzerland",
+            "requestKey": request_key,
+            "colonies": [
+                {
+                    "name": "Retry Nest",
+                    "size": 10,
+                    "style": "balanced",
+                    "favoriteContext": "momentum",
+                    "infoNeed": "medium",
+                }
+            ],
+        }
+        room_count_before = len(game_manager.rooms)
+
+        first = client.post("/api/admin/rooms", json=payload)
+        second = client.post("/api/admin/rooms", json=payload)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["gameId"], first.json()["gameId"])
+        self.assertEqual(second.json()["roomCode"], first.json()["roomCode"])
+        self.assertEqual(len(second.json()["colonies"]), 1)
+        self.assertEqual(len(game_manager.rooms), room_count_before + 1)
+
+        conflicting = client.post(
+            "/api/admin/rooms",
+            json={**payload, "participant2": "Belgium"},
+        )
+
+        self.assertEqual(conflicting.status_code, 409)
+        self.assertEqual(len(game_manager.rooms), room_count_before + 1)
 
     def test_admin_games_flattens_supabase_rows_for_the_dashboard(self):
         class StoredAdminGames:

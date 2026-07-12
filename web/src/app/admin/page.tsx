@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { api, type ReplayFixture, type TxLineValidationResult } from "@/lib/api";
+import { ApiError, api, type ReplayFixture, type TxLineValidationResult } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { fixtureId, flag, fmtKickoffLine, fmtScore, teamName } from "@/lib/format";
 import type { CreateColonyBody, FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
 
 const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120 };
+const ADMIN_LAUNCH_REQUEST_STORAGE_KEY = "age-of-colony:admin-launch-request";
+let volatileLaunchRequest: { setupKey: string; requestKey: string } | null = null;
 const STYLES: { value: Style; label: string }[] = [
   { value: "cautious", label: "Cautious" },
   { value: "balanced", label: "Balanced" },
@@ -46,6 +48,61 @@ type FixtureValidationState = {
 
 function freshDefaultColonies(): AdminColonyDraft[] {
   return DEFAULT_ADMIN_COLONIES.map((colony) => ({ ...colony }));
+}
+
+function adminRoomSetupKey(fixture: ReplayFixture, colonies: AdminColonyDraft[]): string {
+  return JSON.stringify({
+    fixtureId: fixtureId(fixture),
+    participant1: fixture.participant1 ?? null,
+    participant2: fixture.participant2 ?? null,
+    competition: fixture.competition ?? null,
+    startTime: fixture.startTime ?? null,
+    startTimeIso: fixture.startTimeIso ?? null,
+    colonies,
+  });
+}
+
+function newLaunchRequestKey(): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function launchRequestKeyFor(setupKey: string): string {
+  if (volatileLaunchRequest?.setupKey === setupKey) return volatileLaunchRequest.requestKey;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(ADMIN_LAUNCH_REQUEST_STORAGE_KEY) || "null") as {
+      setupKey?: unknown;
+      requestKey?: unknown;
+    } | null;
+    if (stored?.setupKey === setupKey && typeof stored.requestKey === "string" && stored.requestKey) {
+      volatileLaunchRequest = { setupKey, requestKey: stored.requestKey };
+      return stored.requestKey;
+    }
+  } catch {
+    // Ignore unreadable session storage and create a fresh one-shot key.
+  }
+
+  const requestKey = newLaunchRequestKey();
+  volatileLaunchRequest = { setupKey, requestKey };
+  try {
+    sessionStorage.setItem(ADMIN_LAUNCH_REQUEST_STORAGE_KEY, JSON.stringify({ setupKey, requestKey }));
+  } catch {
+    // Continue with a one-shot key when session storage is unavailable.
+  }
+  return requestKey;
+}
+
+function clearLaunchRequestKey(requestKey: string): void {
+  if (volatileLaunchRequest?.requestKey === requestKey) volatileLaunchRequest = null;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(ADMIN_LAUNCH_REQUEST_STORAGE_KEY) || "null") as {
+      requestKey?: unknown;
+    } | null;
+    if (stored?.requestKey === requestKey) sessionStorage.removeItem(ADMIN_LAUNCH_REQUEST_STORAGE_KEY);
+  } catch {
+    // Nothing to clear when session storage is unavailable.
+  }
 }
 
 function normalizeAdminGames(value: unknown): GameState[] {
@@ -95,8 +152,8 @@ export default function AdminPage() {
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [fixtures, setFixtures] = useState<ReplayFixture[]>([]);
   const [games, setGames] = useState<GameState[]>([]);
-  const [draftGame, setDraftGame] = useState<GameState | null>(null);
-  const [roomSetupKey, setRoomSetupKey] = useState("");
+  const [pendingRoom, setPendingRoom] = useState<GameState | null>(null);
+  const [pendingSetupKey, setPendingSetupKey] = useState("");
   const [selectedFixtureKey, setSelectedFixtureKey] = useState("");
   const [fixtureSearch, setFixtureSearch] = useState("");
   const [fixtureLoadState, setFixtureLoadState] = useState<FixtureLoadState>({ status: "idle" });
@@ -124,19 +181,18 @@ export default function AdminPage() {
       .filter((colony) => colony.name),
     [colonies],
   );
-  const validationKey = selectedValidation.result?.verified
-    ? `${selectedValidation.result.dailyScoresPda ?? "verified"}:${selectedValidation.result.seq ?? "final"}`
-    : "unverified";
-  const setupKey = useMemo(
-    () => selectedFixtureId ? `${selectedFixtureId}:${validationKey}:${JSON.stringify(validColonies)}` : "",
-    [selectedFixtureId, validationKey, validColonies],
+  const totalAnts = validColonies.reduce((sum, colony) => sum + colony.size, 0);
+  const launchSetupKey = useMemo(
+    () => selectedFixture ? adminRoomSetupKey(selectedFixture, validColonies) : "",
+    [selectedFixture, validColonies],
   );
-  const roomIsCurrent = Boolean(draftGame && setupKey && roomSetupKey === setupKey);
-  const roomNeedsRebuild = Boolean(draftGame && setupKey && roomSetupKey !== setupKey);
+  const reusableRoom = pendingRoom && pendingSetupKey === launchSetupKey ? pendingRoom : null;
+  const launchReady = Boolean(selectedFixture && validColonies.length);
+  const setupLocked = Boolean(working) || refreshing || loadingFixtures;
   const runningGames = games.filter((game) => ["running_replay", "running_live"].includes(game.status));
   const finishedGames = games.filter((game) => game.status === "finished");
   const selectedFixtureGames = games.filter((game) => String(game.fixtureId ?? "") === selectedFixtureId);
-  const workflowStep = roomIsCurrent ? 4 : draftGame ? 3 : selectedFixture ? 2 : 1;
+  const workflowStep = !selectedFixture ? 1 : validColonies.length ? 3 : 2;
   const fixtureStatusLabel = selectedFixture
     ? "Selected"
     : loadingFixtures
@@ -272,7 +328,7 @@ export default function AdminPage() {
   }
 
   async function verifySelectedFixture() {
-    if (!selectedFixture) return;
+    if (!selectedFixture || working) return;
     const rawId = fixtureId(selectedFixture);
     const numericId = Number(rawId);
     const key = String(rawId);
@@ -284,6 +340,8 @@ export default function AdminPage() {
       return;
     }
 
+    setWorking("verify-only");
+    setMsg("Verifying the final score with TXLine...");
     setFixtureValidations((current) => ({ ...current, [key]: { status: "loading" } }));
     try {
       const result = await api.validateFixture(numericId, {
@@ -294,50 +352,13 @@ export default function AdminPage() {
         ...current,
         [key]: { status: result.status, result },
       }));
+      setMsg(result.verified ? "TXLine proof verified. The room is ready to be created." : result.reason || "The final proof is not available yet.");
     } catch (error) {
       setFixtureValidations((current) => ({
         ...current,
         [key]: { status: "failed", error: (error as Error).message },
       }));
-    }
-  }
-
-  async function createAdminRoom() {
-    if (!selectedFixture) return setMsg("Select a replayable match first.");
-    if (!validColonies.length) return setMsg("Add at least one admin colony.");
-    setWorking("create-room");
-    setMsg("Creating the admin room...");
-    try {
-      const room = await createRoomWithColonies(selectedFixture, validColonies);
-      setDraftGame(room);
-      setRoomSetupKey(setupKey);
-      setGame(room);
-      setMatchFixture(selectedFixture);
-      setGames((current) => [room, ...current.filter((game) => game.gameId !== room.gameId)].slice(0, 50));
-      setMsg(`Room ready for ${matchTitle(room)} with ${room.colonies.length} colonies.`);
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setWorking("");
-    }
-  }
-
-  async function startDraftReplay() {
-    if (!draftGame || !selectedFixture || !roomIsCurrent) {
-      return setMsg("Create a room with the current match and colonies before launching.");
-    }
-    setWorking("launch");
-    setMsg("Launching the replay simulation...");
-    try {
-      const started = await api.startGame(draftGame.gameId, "replay", {
-        ...REPLAY_SPEED,
-      });
-      resetGame();
-      setGame(started);
-      setMatchFixture(selectedFixture);
-      router.push(`/cockpit/${started.gameId}`);
-    } catch (e) {
-      setMsg((e as Error).message);
+      setMsg((error as Error).message);
     } finally {
       setWorking("");
     }
@@ -350,12 +371,12 @@ export default function AdminPage() {
     const numericId = Number(rawId);
     if (!Number.isSafeInteger(numericId)) return setMsg("This fixture does not have a numeric TXLine id.");
 
-    setWorking("verify-launch");
-    setMsg("Verifying the final score against TxLINE before launch...");
-    try {
-      let validation = selectedValidation.result;
-      if (!validation?.verified) {
-        setFixtureValidations((current) => ({ ...current, [String(rawId)]: { status: "loading" } }));
+    let validation = selectedValidation.result;
+    if (!validation?.verified) {
+      setWorking("verify");
+      setMsg("Verifying the final score with TXLine...");
+      setFixtureValidations((current) => ({ ...current, [String(rawId)]: { status: "loading" } }));
+      try {
         validation = await api.validateFixture(numericId, {
           participant1: selectedFixture.participant1 ?? null,
           participant2: selectedFixture.participant2 ?? null,
@@ -364,25 +385,72 @@ export default function AdminPage() {
           ...current,
           [String(rawId)]: { status: validation?.status ?? "failed", result: validation },
         }));
-      }
-      if (!validation?.verified) {
-        setMsg(validation?.reason || "The final TxLINE proof is not available yet. Retry verification before launching.");
+      } catch (error) {
+        setFixtureValidations((current) => ({
+          ...current,
+          [String(rawId)]: { status: "failed", error: (error as Error).message },
+        }));
+        setMsg((error as Error).message);
+        setWorking("");
         return;
       }
+    }
+    if (!validation?.verified) {
+      setMsg(validation?.reason || "The final TXLine proof is not available yet. Retry verification before launching.");
+      setWorking("");
+      return;
+    }
 
-      setMsg("Proof confirmed. Creating the room and launching the replay...");
-      const room = await createRoomWithColonies(selectedFixture, validColonies);
+    const requestKey = launchRequestKeyFor(launchSetupKey);
+    let room = reusableRoom;
+    if (!room) {
+      setWorking("create");
+      setMsg("Proof confirmed. Creating the room and colonies...");
+      try {
+        room = await createRoomWithColonies(selectedFixture, validColonies, requestKey);
+        setPendingRoom(room);
+        setPendingSetupKey(launchSetupKey);
+        setGames((current) => [room as GameState, ...current.filter((game) => game.gameId !== room?.gameId)].slice(0, 50));
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          clearLaunchRequestKey(requestKey);
+          setMsg("The room setup changed during the previous attempt. Review it, then launch again.");
+        } else {
+          setMsg((error as Error).message);
+        }
+        setWorking("");
+        return;
+      }
+    }
+
+    setWorking("launch");
+    setMsg("Room ready. Starting the simulation...");
+    try {
       const started = await api.startGame(room.gameId, "replay", REPLAY_SPEED);
       resetGame();
       setGame(started);
       setMatchFixture(selectedFixture);
+      setPendingRoom(null);
+      setPendingSetupKey("");
+      clearLaunchRequestKey(requestKey);
       router.push(`/cockpit/${started.gameId}`);
     } catch (error) {
-      setFixtureValidations((current) => ({
-        ...current,
-        [String(rawId)]: { status: "failed", error: (error as Error).message },
-      }));
-      setMsg((error as Error).message);
+      try {
+        const currentRoom = await api.getGame(room.gameId);
+        if (["running_replay", "running_live", "finished"].includes(currentRoom.status)) {
+          resetGame();
+          setGame(currentRoom);
+          setMatchFixture(selectedFixture);
+          setPendingRoom(null);
+          setPendingSetupKey("");
+          clearLaunchRequestKey(requestKey);
+          router.push(currentRoom.status === "finished" ? `/results/${currentRoom.gameId}` : `/cockpit/${currentRoom.gameId}`);
+          return;
+        }
+      } catch {
+        // Keep the known room and let the operator retry without creating another one.
+      }
+      setMsg(`Room ${room.gameId} is ready, but the simulation did not start. ${(error as Error).message} Retry launch to reuse the same room.`);
     } finally {
       setWorking("");
     }
@@ -420,17 +488,21 @@ export default function AdminPage() {
       participant2: manualParticipant2.trim() || "Away",
       competition: "Manual admin fixture",
     };
+    const requestKey = launchRequestKeyFor(adminRoomSetupKey(fixture, validColonies));
     setWorking("manual");
     setMsg("Creating manual replay room...");
     try {
-      const room = await createRoomWithColonies(fixture, validColonies);
+      const room = await createRoomWithColonies(fixture, validColonies, requestKey);
       const started = await api.startGame(room.gameId, "replay", {
         ...REPLAY_SPEED,
       });
       resetGame();
       setGame(started);
+      setMatchFixture(fixture);
+      clearLaunchRequestKey(requestKey);
       router.push(`/cockpit/${started.gameId}`);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) clearLaunchRequestKey(requestKey);
       setMsg((e as Error).message);
     } finally {
       setWorking("");
@@ -467,7 +539,11 @@ export default function AdminPage() {
     }
   }
 
-  async function createRoomWithColonies(fixture: ReplayFixture, colonyDrafts: AdminColonyDraft[]): Promise<GameState> {
+  async function createRoomWithColonies(
+    fixture: ReplayFixture,
+    colonyDrafts: AdminColonyDraft[],
+    requestKey: string,
+  ): Promise<GameState> {
     const id = fixtureId(fixture);
     if (!id) throw new Error("Fixture has no id.");
     return api.adminCreateRoom({
@@ -477,42 +553,50 @@ export default function AdminPage() {
       competition: fixture.competition ?? null,
       startTime: fixture.startTime ?? null,
       startTimeIso: fixture.startTimeIso ?? null,
+      requestKey,
       colonies: colonyDrafts,
     });
   }
 
   return (
     <div className="flex w-full flex-col gap-4 pb-6 lg:relative lg:left-1/2 lg:w-[min(1500px,calc(100vw-32px))] lg:-translate-x-1/2">
-      <AdminHeader refreshing={refreshing} onBack={() => router.push("/lobby")} onRefresh={() => refreshDashboard()} />
+      <AdminHeader
+        refreshing={refreshing}
+        locked={Boolean(working)}
+        onBack={() => router.push("/lobby")}
+        onRefresh={() => refreshDashboard()}
+      />
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <Kpi label="TXLine" value={health ? (tx ? "Online" : "Missing") : "Checking"} tone={health ? (tx ? "good" : "bad") : "neutral"} />
-        <Kpi label="OpenRouter" value={health ? (or ? "Online" : "Missing") : "Checking"} tone={health ? (or ? "good" : "bad") : "neutral"} />
-        <Kpi label="Replayable matches" value={fixtures.length} />
-        <Kpi label="Rooms" value={games.length} />
-        <Kpi label="Running" value={runningGames.length} tone={runningGames.length ? "warn" : "neutral"} />
-      </section>
+      <AdminStatusStrip
+        txline={health ? (tx ? "online" : "missing") : "checking"}
+        openRouter={health ? (or ? "online" : "missing") : "checking"}
+        matches={fixtures.length}
+        rooms={games.length}
+        running={runningGames.length}
+      />
 
       {msg && <Message text={msg} />}
 
-      <section className="grid gap-4">
-        <div className="glass flex flex-wrap items-start justify-between gap-3 p-4">
-          <PanelTitle eyebrow="Simulation workflow" title="Build one replay room" />
-          <span className="status-pill">Step {workflowStep}/4</span>
-        </div>
+      <WorkflowRail currentStep={workflowStep} />
 
+      <section className="grid gap-4">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(380px,0.75fr)]">
           <div className="grid min-w-0 gap-4">
             <StepCard
               number="1"
-              title="Select a previous match"
+              title="Choose a completed match"
               status={fixtureStatusLabel}
             >
+              <p className="mb-4 text-sm leading-relaxed text-ink-faint">
+                Pick the TXLine match whose event history the colonies will replay.
+              </p>
               <div className="grid gap-3 md:grid-cols-[1fr_auto]">
                 <input
                   className="input"
+                  aria-label="Search completed matches"
                   placeholder="Search team, competition, fixture id"
                   value={fixtureSearch}
+                  disabled={setupLocked}
                   onChange={(e) => setFixtureSearch(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleLoadFixtures();
@@ -520,14 +604,14 @@ export default function AdminPage() {
                 />
                 <button
                   className="btn btn-ghost !min-h-0 !w-auto px-4 py-2 text-sm"
-                  disabled={Boolean(working) || loadingFixtures}
+                  disabled={setupLocked}
                   onClick={handleLoadFixtures}
                 >
-                  {loadingFixtures ? "Loading..." : "Load matches"}
+                  {loadingFixtures ? "Loading..." : "Search matches"}
                 </button>
               </div>
 
-              <div className="mt-4 grid max-h-[520px] gap-2 overflow-y-auto pr-1">
+              <div className="mt-4 grid max-h-[340px] gap-2 overflow-y-auto pr-1">
                 {fixtures.map((fixture) => {
                   const key = String(fixtureId(fixture));
                   const selected = key === selectedFixtureId;
@@ -536,6 +620,7 @@ export default function AdminPage() {
                       key={key}
                       type="button"
                       aria-pressed={selected}
+                      disabled={setupLocked}
                       className={`rounded-md border-2 p-3 text-left transition ${
                         selected
                           ? "border-[color:var(--color-green)] bg-lime/10 shadow-[2px_2px_0_rgba(90,70,30,0.3)]"
@@ -563,10 +648,10 @@ export default function AdminPage() {
                   >
                     {fixtureStatsText() && <p className="mt-3 font-mono text-[11px] uppercase tracking-wide text-ink-faint">{fixtureStatsText()}</p>}
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                      <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={findLatestAndStart}>
+                      <button className="btn btn-primary !min-h-0 py-2 text-sm" disabled={setupLocked} onClick={findLatestAndStart}>
                         Find latest and launch
                       </button>
-                      <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={runDemo}>
+                      <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={setupLocked} onClick={runDemo}>
                         Run demo sandbox
                       </button>
                     </div>
@@ -575,23 +660,50 @@ export default function AdminPage() {
               </div>
             </StepCard>
 
-            <StepCard number="2" title="Set admin colonies" status={`${validColonies.length} active`}>
+            <StepCard
+              number="2"
+              title="Configure the colonies"
+              status={validColonies.length ? `${validColonies.length} ready` : "One required"}
+            >
+              <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+                <p className="max-w-2xl text-sm leading-relaxed text-ink-faint">
+                  Each colony gets its own population and strategy. These settings are attached when the room is created.
+                </p>
+                <span className="font-mono text-xs font-bold uppercase tracking-wide text-gold-deep">
+                  {totalAnts} ants total
+                </span>
+              </div>
+
               <div className="grid gap-3">
                 {colonies.map((colony, index) => (
                   <div key={index} className="well p-3">
-                    <div className="grid gap-3 lg:grid-cols-[minmax(180px,1.2fr)_90px_140px_140px_120px_auto]">
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-[color:var(--brd-soft)] pb-2">
+                      <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-gold-deep">
+                        Colony {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <button
+                        className="quiet-link !min-h-11 px-2 text-xs"
+                        disabled={setupLocked || colonies.length <= 1}
+                        onClick={() => removeColony(index)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(170px,1.2fr)_80px_130px_130px_110px]">
                       <Field label="Name">
                         <input
                           className="input !px-3 !py-2 text-sm"
                           value={colony.name}
                           maxLength={40}
+                          disabled={setupLocked}
                           onChange={(e) => updateColony(index, { name: e.target.value })}
                         />
                       </Field>
-                      <Field label="Size">
+                      <Field label="Ants">
                         <select
                           className="input !px-3 !py-2 text-sm"
                           value={colony.size}
+                          disabled={setupLocked}
                           onChange={(e) => updateColony(index, { size: Number(e.target.value) })}
                         >
                           {SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
@@ -601,6 +713,7 @@ export default function AdminPage() {
                         <select
                           className="input !px-3 !py-2 text-sm"
                           value={colony.style}
+                          disabled={setupLocked}
                           onChange={(e) => updateColony(index, { style: e.target.value as Style })}
                         >
                           {STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
@@ -610,49 +723,59 @@ export default function AdminPage() {
                         <select
                           className="input !px-3 !py-2 text-sm"
                           value={colony.favoriteContext}
+                          disabled={setupLocked}
                           onChange={(e) => updateColony(index, { favoriteContext: e.target.value as FavoriteContext })}
                         >
                           {GROUNDS.map((ground) => <option key={ground.value} value={ground.value}>{ground.label}</option>)}
                         </select>
                       </Field>
-                      <Field label="Info">
+                      <Field label="Info need">
                         <select
                           className="input !px-3 !py-2 text-sm"
                           value={colony.infoNeed}
+                          disabled={setupLocked}
                           onChange={(e) => updateColony(index, { infoNeed: e.target.value as InfoNeed })}
                         >
                           {INFO_NEEDS.map((need) => <option key={need.value} value={need.value}>{need.label}</option>)}
                         </select>
                       </Field>
-                      <div className="flex items-end">
-                        <button
-                          className="btn btn-ghost !min-h-0 !w-full px-3 py-2 text-sm lg:!w-auto"
-                          disabled={colonies.length <= 1}
-                          onClick={() => removeColony(index)}
-                        >
-                          Remove
-                        </button>
-                      </div>
                     </div>
                   </div>
                 ))}
               </div>
 
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={addColony}>Add colony</button>
-                <button className="btn btn-ghost !min-h-0 py-2 text-sm" onClick={() => setColonies(freshDefaultColonies())}>Reset defaults</button>
+                <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={setupLocked} onClick={addColony}>+ Add a colony</button>
+                <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={setupLocked} onClick={() => setColonies(freshDefaultColonies())}>Restore 3 defaults</button>
               </div>
             </StepCard>
           </div>
 
-          <div className="grid min-w-0 content-start gap-4">
-            <StepCard number="3" title="Create the room" status={roomIsCurrent ? "Ready" : roomNeedsRebuild ? "Needs rebuild" : "Waiting"}>
-              {selectedFixture ? <SelectedFixture fixture={selectedFixture} /> : <EmptyPanel title="No match selected" text="Pick a replayable match first." />}
+          <aside className="grid min-w-0 content-start gap-4 xl:sticky xl:top-4 xl:self-start">
+            <StepCard
+              number="3"
+              title="Create & launch"
+              status={working ? "Working" : reusableRoom ? "Room ready" : launchReady ? "Ready" : "Waiting"}
+            >
+              <p className="mb-4 text-sm leading-relaxed text-ink-faint">
+                One action verifies TXLine, creates the room with these colonies, and opens the live cockpit.
+              </p>
+
+              {selectedFixture
+                ? <SelectedFixture fixture={selectedFixture} />
+                : <EmptyPanel title="Choose a match first" text="Step 1 must be complete before a room can be created." />}
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <LaunchMetric label="Colonies" value={validColonies.length || "—"} detail={`${totalAnts} ants`} />
+                <LaunchMetric label="Replay" value="×120" detail="0.8 s minimum beat" />
+              </div>
+
               {selectedFixtureGames.length > 0 && (
                 <p className="mt-3 rounded-md border-2 border-gold/35 bg-gold/10 px-3 py-2 text-xs leading-relaxed text-ink-soft">
-                  {selectedFixtureGames.length} existing run{selectedFixtureGames.length === 1 ? "" : "s"} already use this fixture. You can still create a fresh replay.
+                  {selectedFixtureGames.length} previous run{selectedFixtureGames.length === 1 ? "" : "s"} already use this match. A new room will remain separate.
                 </p>
               )}
+
               {selectedFixture && (
                 <TxLineProofPanel
                   state={selectedValidation}
@@ -661,76 +784,42 @@ export default function AdminPage() {
                 />
               )}
 
-              <div className="well mt-4 p-3">
-                <p className="text-sm font-bold text-ink-soft">Room state</p>
-                <p className="mt-2 text-lg font-bold text-ink">
-                  {roomIsCurrent ? "Admin room ready" : roomNeedsRebuild ? "Current setup changed" : "No room created yet"}
-                </p>
-                <p className="mt-1 text-sm text-ink-faint">
-                  {roomIsCurrent && draftGame
-                    ? `${draftGame.colonies.length} colonies are attached. No room code is needed for this admin simulation.`
-                    : roomNeedsRebuild
-                      ? "Recreate the room so the selected match and colonies match what will launch."
-                      : "Create the room after choosing a match and colonies."}
-                </p>
+              <div className="mt-4 grid gap-2 border-y border-[color:var(--brd-soft)] py-4">
+                <LaunchPlanLine done={selectedValidation.status === "verified"} label="Verify the final TXLine proof" />
+                <LaunchPlanLine done={Boolean(reusableRoom)} label={`Create 1 room with ${validColonies.length || 0} colonies`} />
+                <LaunchPlanLine done={false} label="Start the replay and open the cockpit" />
               </div>
 
               <button
                 className="btn btn-primary mt-4"
-                disabled={Boolean(working) || !selectedFixture || !validColonies.length || roomIsCurrent}
-                onClick={createAdminRoom}
+                disabled={setupLocked || !launchReady || selectedValidation.status === "loading"}
+                onClick={verifyAndLaunchReplay}
               >
-                {working === "create-room"
-                  ? "Creating room..."
-                  : roomNeedsRebuild
-                    ? "Recreate room"
-                    : roomIsCurrent
-                      ? "Room ready"
-                      : "Create room"}
+                {working === "verify" || working === "verify-only"
+                  ? "Checking TXLine..."
+                  : working === "create"
+                    ? "Creating room & colonies..."
+                    : working === "launch"
+                      ? "Starting simulation..."
+                      : reusableRoom
+                        ? "Retry launch"
+                        : "Create room & launch simulation"}
               </button>
-            </StepCard>
-
-            <StepCard number="4" title="Launch simulation" status={selectedFixture ? "Ready" : "Waiting"}>
-              <div className="well p-4">
-                <p className="text-sm text-ink-soft">
-                  {roomIsCurrent
-                    ? "The next click starts the replay stream and opens the cockpit for this room."
-                    : "The main action verifies TxLINE, creates the room, then opens the cockpit in one flow."}
-                </p>
-                {draftGame && (
-                  <p className="mt-3 font-mono text-xs text-ink-faint">
-                    Game {draftGame.gameId}
-                  </p>
-                )}
-              </div>
-
-              <div className="mt-4 grid gap-2">
-                <button
-                  className="btn btn-primary"
-                  disabled={Boolean(working) || !selectedFixture || !validColonies.length}
-                  onClick={roomIsCurrent ? startDraftReplay : verifyAndLaunchReplay}
-                >
-                  {working === "launch" || working === "verify-launch"
-                    ? working === "verify-launch" ? "Verifying and launching..." : "Launching..."
-                    : roomIsCurrent ? "Launch simulation" : "Verify and launch replay"}
-                </button>
-                <button
-                  className="btn btn-ghost !min-h-0 py-2 text-sm"
-                  disabled={!draftGame}
-                  onClick={() => draftGame && router.push(`/cockpit/${draftGame.gameId}`)}
-                >
-                  Open room cockpit
-                </button>
-              </div>
+              <p className="mt-3 text-center text-[11px] leading-relaxed text-ink-faint">
+                Proof verification is read-only. No blockchain transaction or payment is sent.
+              </p>
             </StepCard>
 
             <details className="well p-4">
-              <summary className="cursor-pointer text-sm font-bold text-ink-soft">Fallback tools</summary>
+              <summary className="cursor-pointer text-sm font-bold text-ink-soft">Advanced options</summary>
+              <p className="mt-3 text-xs leading-relaxed text-ink-faint">
+                Diagnostic shortcuts below can bypass the normal proof-first flow.
+              </p>
               <div className="mt-4 grid gap-3">
-                <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={findLatestAndStart}>
-                  Find latest and launch
+                <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={setupLocked} onClick={findLatestAndStart}>
+                  Auto-pick latest match
                 </button>
-                <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working)} onClick={runDemo}>
+                <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={setupLocked} onClick={runDemo}>
                   Run demo sandbox
                 </button>
                 <div className="grid gap-3 border-t border-[color:var(--brd-soft)] pt-3">
@@ -740,40 +829,42 @@ export default function AdminPage() {
                       inputMode="numeric"
                       placeholder="18218149"
                       value={manualFixtureId}
+                      disabled={setupLocked}
                       onChange={(e) => setManualFixtureId(e.target.value)}
                     />
                   </Field>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Field label="Participant 1">
-                      <input className="input" placeholder="Home" value={manualParticipant1} onChange={(e) => setManualParticipant1(e.target.value)} />
+                      <input className="input" placeholder="Home" value={manualParticipant1} disabled={setupLocked} onChange={(e) => setManualParticipant1(e.target.value)} />
                     </Field>
                     <Field label="Participant 2">
-                      <input className="input" placeholder="Away" value={manualParticipant2} onChange={(e) => setManualParticipant2(e.target.value)} />
+                      <input className="input" placeholder="Away" value={manualParticipant2} disabled={setupLocked} onChange={(e) => setManualParticipant2(e.target.value)} />
                     </Field>
                   </div>
-                  <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={Boolean(working) || !manualFixtureId.trim()} onClick={launchManualFixture}>
+                  <button className="btn btn-ghost !min-h-0 py-2 text-sm" disabled={setupLocked || !manualFixtureId.trim()} onClick={launchManualFixture}>
                     Launch manual fixture
                   </button>
                 </div>
               </div>
             </details>
-
-          </div>
+          </aside>
         </div>
       </section>
 
-      <section className="glass flex flex-col gap-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <PanelTitle eyebrow="Runs" title="Simulation history" />
+      <details className="glass p-5">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+          <PanelTitle eyebrow="Previous runs" title="Simulation history" />
           <div className="flex gap-2">
             <span className="status-pill">{runningGames.length} running</span>
             <span className="status-pill">{finishedGames.length} finished</span>
           </div>
-        </div>
+        </summary>
 
-        <div className="grid gap-3 md:hidden">
-          {games.slice(0, 14).map((game) => (
-            <article key={game.gameId} className="well grid gap-3 p-3">
+        <div className="mt-5 grid gap-4 border-t border-[color:var(--brd-soft)] pt-5">
+
+          <div className="grid gap-3 md:hidden">
+            {games.slice(0, 14).map((game) => (
+              <article key={game.gameId} className="well grid gap-3 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="truncate font-bold text-ink">{matchTitle(game)}</h3>
@@ -794,12 +885,12 @@ export default function AdminPage() {
                   {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
                 </button>
               </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
 
-        <div className="hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[760px] border-separate border-spacing-y-2 text-left">
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[760px] border-separate border-spacing-y-2 text-left">
             <thead className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">
               <tr>
                 <th className="px-3 py-1">Run</th>
@@ -832,36 +923,134 @@ export default function AdminPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
+          {!games.length && <EmptyPanel title="No simulations yet" text="Create a room and launch it to populate this history." />}
         </div>
-        {!games.length && <EmptyPanel title="No simulations yet" text="Create a room and launch it to populate this history." />}
-      </section>
+      </details>
     </div>
   );
 }
 
 function AdminHeader({
   refreshing,
+  locked,
   onBack,
   onRefresh,
 }: {
   refreshing: boolean;
+  locked: boolean;
   onBack: () => void;
   onRefresh: () => void;
 }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4">
-      <div>
+      <div className="max-w-2xl">
         <p className="eyebrow">Age of Colony admin</p>
-        <h1 className="hud-title text-[16px] leading-relaxed md:text-[19px]">Simulation dashboard</h1>
+        <h1 className="hud-title text-[18px] leading-relaxed md:text-[22px]">Launch a replay simulation</h1>
+        <p className="mt-2 text-sm leading-relaxed text-ink-faint">
+          Choose one completed match, prepare the colonies, then create and launch the room.
+        </p>
       </div>
       <div className="flex gap-2">
-        <button className="btn btn-ghost !min-h-11 !w-auto px-4 py-2 text-sm" onClick={onBack}>Back to lobby</button>
-        <button className="btn btn-ghost !min-h-11 !w-auto px-4 py-2 text-sm" disabled={refreshing} onClick={onRefresh}>
+        <button className="btn btn-ghost !min-h-11 !w-auto px-4 py-2 text-sm" disabled={locked} onClick={onBack}>Back to lobby</button>
+        <button className="btn btn-ghost !min-h-11 !w-auto px-4 py-2 text-sm" disabled={locked || refreshing} onClick={onRefresh}>
           {refreshing ? "Refreshing..." : "Refresh data"}
         </button>
       </div>
     </header>
+  );
+}
+
+function AdminStatusStrip({
+  txline,
+  openRouter,
+  matches,
+  rooms,
+  running,
+}: {
+  txline: "online" | "missing" | "checking";
+  openRouter: "online" | "missing" | "checking";
+  matches: number;
+  rooms: number;
+  running: number;
+}) {
+  return (
+    <section className="glass grid grid-cols-2 gap-2 p-3 xl:grid-cols-5" aria-label="Admin services and activity">
+      <StatusDatum label="TXLine" value={statusWord(txline)} tone={txline === "online" ? "good" : txline === "missing" ? "bad" : "neutral"} />
+      <StatusDatum label="OpenRouter" value={statusWord(openRouter)} tone={openRouter === "online" ? "good" : openRouter === "missing" ? "bad" : "neutral"} />
+      <StatusDatum label="Matches" value={matches} />
+      <StatusDatum label="Rooms" value={rooms} />
+      <StatusDatum label="Running" value={running} tone={running ? "warn" : "neutral"} />
+    </section>
+  );
+}
+
+function statusWord(status: "online" | "missing" | "checking") {
+  if (status === "online") return "Online";
+  if (status === "missing") return "Missing";
+  return "Checking";
+}
+
+function StatusDatum({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: "neutral" | "good" | "bad" | "warn";
+}) {
+  const dotClass = tone === "good" ? "bg-lime" : tone === "bad" ? "bg-danger" : tone === "warn" ? "bg-gold" : "bg-ink-faint";
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.58)] px-3 py-2">
+      <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">{label}</span>
+      <span className="flex items-center gap-2 text-sm font-bold text-ink">
+        <span className={`h-2 w-2 rounded-full ${dotClass}`} aria-hidden="true" />
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function WorkflowRail({ currentStep }: { currentStep: number }) {
+  const steps = [
+    { number: 1, label: "Match" },
+    { number: 2, label: "Colonies" },
+    { number: 3, label: "Launch" },
+  ];
+  return (
+    <nav className="glass relative overflow-hidden p-3 sm:p-4" aria-label="Simulation setup progress">
+      <div className="absolute left-[16%] right-[16%] top-[31px] hidden border-t-2 border-dashed border-[color:var(--brd-soft)] sm:block" aria-hidden="true" />
+      <ol className="relative grid grid-cols-3 gap-2">
+        {steps.map((step) => {
+          const complete = currentStep > step.number;
+          const active = currentStep === step.number;
+          return (
+            <li
+              key={step.number}
+              className="grid justify-items-center gap-2 text-center"
+              aria-current={active ? "step" : undefined}
+            >
+              <span
+                className={`flex h-8 w-8 items-center justify-center rounded-md border-2 font-mono text-xs font-bold shadow-[2px_2px_0_rgba(74,58,30,0.18)] ${
+                  complete
+                    ? "border-lime bg-lime text-white"
+                    : active
+                      ? "border-gold bg-gold text-white"
+                      : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.92)] text-ink-faint"
+                }`}
+              >
+                {complete ? "✓" : step.number}
+              </span>
+              <span className={`font-mono text-[10px] font-bold uppercase tracking-wider ${active ? "text-gold-deep" : "text-ink-faint"}`}>
+                {step.label}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -900,12 +1089,23 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Kpi({ label, value, tone = "neutral" }: { label: string; value: ReactNode; tone?: "neutral" | "good" | "bad" | "warn" }) {
-  const toneClass = tone === "good" ? "text-lime" : tone === "bad" ? "text-danger" : tone === "warn" ? "text-gold" : "text-ink";
+function LaunchMetric({ label, value, detail }: { label: string; value: ReactNode; detail: string }) {
   return (
-    <div className="glass p-4">
-      <p className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">{label}</p>
-      <strong className={`mt-2 block text-2xl ${toneClass}`}>{value}</strong>
+    <div className="plate min-w-0 p-3">
+      <p className="font-mono text-[9px] uppercase tracking-wider text-ink-faint">{label}</p>
+      <strong className="mt-1 block text-lg text-ink">{value}</strong>
+      <p className="mt-1 truncate text-[10px] text-ink-faint">{detail}</p>
+    </div>
+  );
+}
+
+function LaunchPlanLine({ done, label }: { done: boolean; label: string }) {
+  return (
+    <div className="flex items-center gap-3 text-sm text-ink-soft">
+      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border font-mono text-[10px] font-bold ${done ? "border-lime bg-lime text-white" : "border-[color:var(--brd-soft)] text-ink-faint"}`}>
+        {done ? "✓" : "·"}
+      </span>
+      <span>{label}</span>
     </div>
   );
 }
@@ -952,9 +1152,9 @@ function TxLineProofPanel({
 
   return (
     <section
-      className={`mt-4 rounded-md border-2 p-4 ${
+      className={`mt-3 rounded-md border-2 p-3 ${
         verified
-          ? "border-lime/50 bg-lime/10 shadow-[inset_0_0_0_2px_rgba(78,126,42,0.08)]"
+          ? "border-lime/50 bg-lime/10"
           : failed
             ? "border-danger/40 bg-danger/5"
             : pending
@@ -963,68 +1163,39 @@ function TxLineProofPanel({
       }`}
       aria-live="polite"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="eyebrow">TxLINE final-score proof</p>
-          <h3 className="mt-2 text-lg font-bold text-ink">
-            {verified
-              ? "Cryptographic seal confirmed"
-              : state.status === "loading"
-                ? "Checking the Solana root…"
-                : pending
-                  ? "Final proof not available yet"
-                  : failed
-                    ? "Proof verification failed"
-                    : "Verify before replaying"}
-          </h3>
+          <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-ink-faint">TXLine proof</p>
+          <p className="mt-1 text-sm font-bold text-ink">
+            {verified ? `${scoreLabel} · ${result?.winnerLabel ?? "Final result"}` : state.status === "loading" ? "Checking Solana…" : pending ? "Proof pending" : failed ? "Verification failed" : "Checked automatically on launch"}
+          </p>
         </div>
-        <span className={`status-pill ${verified ? "!border-lime/50 !text-lime" : failed ? "!border-danger/50 !text-danger" : ""}`}>
-          {verified ? "✓ Verified" : state.status === "loading" ? "Checking" : pending ? "Pending" : failed ? "Failed" : "Unverified"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={`status-pill ${verified ? "!border-lime/50 !text-lime" : failed ? "!border-danger/50 !text-danger" : ""}`}>
+            {verified ? "✓ Verified" : state.status === "loading" ? "Checking" : pending ? "Pending" : failed ? "Failed" : "Not checked"}
+          </span>
+          <button
+            className="quiet-link !min-h-11 px-2 text-xs"
+            disabled={disabled || state.status === "loading"}
+            onClick={onVerify}
+          >
+            {verified ? "Check again" : "Check now"}
+          </button>
+        </div>
       </div>
 
       {verified && result ? (
-        <div className="mt-4 grid gap-3">
-          <div className="grid grid-cols-[auto_1fr] items-end gap-x-4 border-y border-lime/25 py-3">
-            <strong className="font-mono text-4xl leading-none text-lime">{scoreLabel}</strong>
-            <div className="min-w-0">
-              <p className="text-sm font-bold text-ink">{result.winnerLabel ? `${result.winnerLabel} confirmed` : "Final result confirmed"}</p>
-              <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
-                seq {result.seq} · {result.method} · {result.network}
-              </p>
-            </div>
-          </div>
-          <div className="grid gap-2 font-mono text-[11px] text-ink-faint">
-            <ProofLine label="Daily root PDA" value={result.dailyScoresPda} />
-            <ProofLine label="Oracle program" value={result.programId} />
-            <ProofLine label="Finalized" value={result.finalizedAt ? new Date(result.finalizedAt).toLocaleString() : null} />
-          </div>
-        </div>
+        <p className="mt-2 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
+          seq {result.seq} · {result.method} · {result.network} · read-only
+        </p>
       ) : (
-        <p className={`mt-3 text-sm ${failed ? "text-danger" : "text-ink-faint"}`}>
+        <p className={`mt-2 text-xs leading-relaxed ${failed ? "text-danger" : "text-ink-faint"}`}>
           {state.error
             || result?.reason
-            || "This runs validateStatV2 against TxLINE’s daily score root. It simulates the call and sends no transaction."}
+            || "Uses validateStatV2 against TXLine’s daily score root."}
         </p>
       )}
-
-      <button
-        className={`mt-4 !min-h-0 py-2 text-sm ${verified ? "btn btn-ghost" : "btn btn-primary"}`}
-        disabled={disabled || state.status === "loading"}
-        onClick={onVerify}
-      >
-        {state.status === "loading" ? "Verifying…" : verified ? "Verify again" : "Verify final score"}
-      </button>
     </section>
-  );
-}
-
-function ProofLine({ label, value }: { label: string; value?: string | null }) {
-  return (
-    <div className="grid min-w-0 gap-1 sm:grid-cols-[120px_1fr]">
-      <span className="uppercase tracking-wide">{label}</span>
-      <span className="truncate text-ink-soft" title={value || undefined}>{value || "—"}</span>
-    </div>
   );
 }
 

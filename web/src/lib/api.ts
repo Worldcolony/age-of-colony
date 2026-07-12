@@ -207,6 +207,7 @@ export const api = {
     startTime?: number | string | null;
     startTimeIso?: string | null;
     seed?: number;
+    requestKey?: string;
     colonies: CreateColonyBody[];
   }) => req<GameState>("/api/admin/rooms", "POST", body),
   adminGames: (limit = 50) =>
