@@ -3797,6 +3797,18 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(data["fixtures"][0]["eventCount"], 1)
         self.assertEqual(data["fixtures"][0]["source"], "historical")
 
+    def test_txline_timeout_returns_a_clear_gateway_error(self):
+        class TimeoutTxLineClient:
+            async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):
+                raise httpx.ReadTimeout("TXLine timed out")
+
+        with patch("app.main.TxLineClient", TimeoutTxLineClient):
+            response = TestClient(app).get("/api/fixtures/recent?days=1&limit=5")
+
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.json()["detail"], "TXLine did not respond before the timeout.")
+        self.assertEqual(response.json()["error"], "ReadTimeout")
+
     def test_previous_tx_run_uses_latest_fixture_with_score_data(self):
         class FakeTxLineClient:
             async def fixture_snapshot(self, *, start_epoch_day=None, competition_id=None):

@@ -41,6 +41,7 @@ class TxLineSettings:
     base_url: str = "https://txline.txodds.com"
     default_competition_id: int | None = None
     timeout_seconds: float = 20.0
+    force_ipv4: bool = True
 
     @classmethod
     def from_env(cls) -> "TxLineSettings":
@@ -52,6 +53,7 @@ class TxLineSettings:
             base_url=os.getenv("TXLINE_BASE_URL", "https://txline.txodds.com").rstrip("/"),
             default_competition_id=int(competition_id) if competition_id else None,
             timeout_seconds=float(os.getenv("TXLINE_TIMEOUT_SECONDS", "20")),
+            force_ipv4=os.getenv("TXLINE_FORCE_IPV4", "true").strip().casefold() not in {"0", "false", "no"},
         )
 
     @property
@@ -139,9 +141,18 @@ class TxLineClient:
             "Accept-Encoding": "gzip, deflate",
         }
 
+    def _transport(self) -> httpx.AsyncBaseTransport | None:
+        if not self.settings.force_ipv4:
+            return None
+        return httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+
     async def get_json(self, path: str, params: dict[str, Any] | None = None) -> Any:
         timeout = httpx.Timeout(self.settings.timeout_seconds)
-        async with httpx.AsyncClient(base_url=self.settings.base_url, timeout=timeout) as client:
+        async with httpx.AsyncClient(
+            base_url=self.settings.base_url,
+            timeout=timeout,
+            transport=self._transport(),
+        ) as client:
             response = await client.get(path, headers=self._headers(), params=_compact_params(params))
             response.raise_for_status()
             if not response.content.strip():
@@ -199,7 +210,11 @@ class TxLineClient:
 
     async def stream_score_events(self) -> AsyncIterator[dict[str, Any]]:
         timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-        async with httpx.AsyncClient(base_url=self.settings.base_url, timeout=timeout) as client:
+        async with httpx.AsyncClient(
+            base_url=self.settings.base_url,
+            timeout=timeout,
+            transport=self._transport(),
+        ) as client:
             async with client.stream("GET", "/api/scores/stream", headers=self._headers("text/event-stream")) as response:
                 response.raise_for_status()
                 event: dict[str, Any] = {}

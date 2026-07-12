@@ -1,7 +1,10 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from app.txline import (
+    TxLineClient,
+    TxLineSettings,
     _decode_sse_payloads,
     build_full_match_data,
     build_match_details,
@@ -14,6 +17,21 @@ from app.txline import (
 
 
 class TxLineNormalizationTest(unittest.TestCase):
+    def test_client_forces_ipv4_transport_by_default(self):
+        settings = TxLineSettings(jwt="jwt", api_token="token")
+        sentinel = object()
+
+        with patch("app.txline.httpx.AsyncHTTPTransport", return_value=sentinel) as transport:
+            result = TxLineClient(settings)._transport()
+
+        self.assertIs(result, sentinel)
+        transport.assert_called_once_with(local_address="0.0.0.0", retries=1)
+
+    def test_client_can_disable_ipv4_transport(self):
+        settings = TxLineSettings(jwt="jwt", api_token="token", force_ipv4=False)
+
+        self.assertIsNone(TxLineClient(settings)._transport())
+
     def test_zero_clock_and_minute_values_are_preserved(self):
         from_clock = normalize_score_record({"FixtureId": 42, "Clock": {"Seconds": 0}})
         from_minute = normalize_score_record(

@@ -291,6 +291,18 @@ async def txline_status_error_handler(_: Request, exc: httpx.HTTPStatusError) ->
     )
 
 
+@app.exception_handler(httpx.TimeoutException)
+async def txline_timeout_error_handler(_: Request, exc: httpx.TimeoutException) -> JSONResponse:
+    return JSONResponse(
+        status_code=504,
+        content={
+            "detail": "TXLine did not respond before the timeout.",
+            "hint": "Retry shortly. The TXLine connection is forced over IPv4 for Railway compatibility.",
+            "error": type(exc).__name__,
+        },
+    )
+
+
 @app.exception_handler(SupabasePersistenceError)
 async def supabase_persistence_error_handler(_: Request, exc: SupabasePersistenceError) -> JSONResponse:
     return JSONResponse(
