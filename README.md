@@ -2,7 +2,7 @@
 
 Small Python/FastAPI app for reading TXLine fixtures and score data, following live matches, inspecting historical highlights, and running a first playable **Age of Colony** loop.
 
-Age of Colony V0 lets players create a private room for a fixture, add colonies, then let ants automatically predict hot moments during a replay or live match. Each active ant gets its own personality and memory, then DeepSeek returns an individual vote. If the DeepSeek/OpenRouter agent is unavailable, the game stops with an explicit error; no local policy replaces AI ants.
+Age of Colony V0 gives players two live entry paths for each fixture: join the single shared public match, or create/join a private room with a six-digit invite code. Players add their wallet-linked colony, then ants automatically predict hot moments during the match. Each active ant gets its own personality and memory, then DeepSeek returns an individual vote. If the DeepSeek/OpenRouter agent is unavailable, the game stops with an explicit error; no local policy replaces AI ants.
 
 See also: [available TXLine data](docs/txline-data.md).
 
@@ -10,13 +10,17 @@ See also: [available TXLine data](docs/txline-data.md).
 
 ```mermaid
 flowchart LR
-    A[Create room + share code] --> B[Players join + start live]
-    B --> C[TXLine live data]
-    C --> D{Prediction moment?}
-    D -->|No| C
-    D -->|Yes| E[Prediction opens + ants vote]
-    E --> F[Room updates with result]
-    F --> C
+    A{Choose how to play} -->|Public| B[Join the fixture's shared room]
+    A -->|Friends| C[Create or join with a code]
+    B --> D[Public room starts automatically]
+    C --> E[Private host starts the room]
+    D --> F[TXLine live data]
+    E --> F
+    F --> G{Prediction moment?}
+    G -->|No| F
+    G -->|Yes| H[Prediction opens + ants vote]
+    H --> I[Room updates with result]
+    I --> F
 ```
 
 ## Configuration
@@ -37,7 +41,7 @@ export TXLINE_SOLANA_RPC_URL="https://api.mainnet-beta.solana.com"
 export TXLINE_VALIDATION_TIMEOUT_SECONDS="30"
 ```
 
-Player rooms use Phantom as the player identity. The wallet signs one short
+Public and private player rooms use Phantom as the player identity. The wallet signs one short
 login message, which the backend exchanges for an HttpOnly session cookie.
 This flow never creates a Solana transaction, never asks for a payment, and
 never spends SOL. Configure a stable secret of at least 32 bytes in production:
@@ -164,9 +168,12 @@ Admin persistence endpoints:
 
 ## Age of Colony Endpoints
 
-- `POST /api/games`: create a room for a fixture
+- `POST /api/games`: join or create the single active global room for a fixture; this room is system-owned and starts automatically
+- `POST /api/rooms`: always create a new private room for a fixture; the verified creator is its host
+- `GET /api/rooms/{room_code}`: open an active private room from its six-digit invite code
+- `POST /api/rooms/{room_code}/players`: join an active private room from its invite code
 - `POST /api/games/{game_id}/colonies`: add a colony with size, style, favorite ground, and info need
-- `POST /api/games/{game_id}/start`: start the game in `replay` or `live` mode
+- `POST /api/games/{game_id}/start`: start an admin simulation or a host-owned private room; global player rooms reject manual starts
 - `POST /api/games/{game_id}/rerun`: clone the room and rerun the replay with the same colonies
 - `GET /api/games/{game_id}`: current room state
 - `GET /api/games/{game_id}/events`: SSE stream of votes, predictions, settlements, and leaderboard updates
@@ -241,7 +248,8 @@ Starting configuration:
 
 In the interface:
 
-- **User live** opens on upcoming fixtures; **Create room** plus **Start live** connects colonies to the TXLine live stream for that fixture
+- **Public match** joins the one shared player room for the selected fixture; there is no player host, invite code, or manual start button
+- **Play with friends** creates a new invite-only room or joins one with its six-digit code; only its wallet-linked host can start it
 - **Admin replay** opens as a scrollable list of recent completed fixtures from the last 14 days for replay testing
 - **Run replay** starts the active admin room in replay mode; the journal fills while ants vote and settlements resolve
 

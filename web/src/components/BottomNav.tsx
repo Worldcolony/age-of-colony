@@ -10,8 +10,12 @@ export function BottomNav() {
   const game = useStore((s) => s.game);
   if (pathname === "/" || pathname === "/admin") return null; // title/admin screens use their own navigation hierarchy
 
-  const code = game?.roomCode;
   const id = game?.gameId;
+  const roomHref = game
+    ? game.roomScope === "private" && game.roomCode
+      ? `/room/${game.roomCode}`
+      : `/room/${game.gameId}`
+    : "/lobby";
   const adminRoute = pathname.match(/^\/(?:cockpit|results)\/([^/]+)$/);
   const routeGameId = adminRoute?.[1];
   const navGameId = routeGameId ?? id;
@@ -22,7 +26,7 @@ export function BottomNav() {
       : searchParams.get("from") === "admin");
   const playerTabs = [
     { href: "/lobby", ic: "🏟️", label: "Play", active: pathname === "/lobby" || pathname === "/admin", disabled: false },
-    { href: code ? `/room/${code}` : "/lobby", ic: "🎟️", label: "Room", active: pathname.startsWith("/room"), disabled: !code },
+    { href: roomHref, ic: "🎟️", label: "Room", active: pathname.startsWith("/room"), disabled: !game },
     { href: id ? `/cockpit/${id}` : "/setup", ic: "🐜", label: "Colony", active: pathname.startsWith("/cockpit") || pathname === "/setup", disabled: false },
     { href: id ? `/results/${id}` : "/lobby", ic: "🏆", label: "Ranks", active: pathname.startsWith("/results"), disabled: !id },
     { href: "/queen", ic: "👑", label: "Queen", active: pathname === "/queen", disabled: false },

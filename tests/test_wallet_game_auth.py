@@ -106,7 +106,7 @@ class WalletGameAuthIntegrationTest(unittest.TestCase):
         anonymous_id: str = "anon_wallet_device_a",
     ) -> tuple[dict, dict]:
         created_response = client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": self._fixture_id(),
                 "participant1": "France",
@@ -207,7 +207,7 @@ class WalletGameAuthIntegrationTest(unittest.TestCase):
         self.assertIsNone(client.cookies.get(WALLET_SESSION_COOKIE))
 
         created_response = client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": self._fixture_id(),
                 "participant1": "Spain",
@@ -392,7 +392,7 @@ class WalletGameAuthIntegrationTest(unittest.TestCase):
         intruder_client = self._client()
         anonymous_id = "anon_legacy_wallet_compat"
         created_response = owner_client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": self._fixture_id(),
                 "participant1": "Brazil",

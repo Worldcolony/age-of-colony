@@ -43,6 +43,7 @@ from .game.harness import (
     redact_public_identity,
     restore_ant_profile,
     room_kind_from_snapshot,
+    room_scope_from_snapshot,
 )
 from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .txline import (
@@ -525,19 +526,57 @@ async def create_game(payload: CreateGameRequest, request: Request) -> dict[str,
             status_code=401,
             detail="Connect a wallet or provide a browser identity to create a player room.",
         )
-    room = await _get_or_create_public_match_room(
-        payload,
-        owner_wallet=wallet,
-        owner_anonymous_id=None if wallet else anonymous_id,
-    )
+    room = await _get_or_create_public_match_room(payload)
     _require_wallet_for_wallet_room(room, wallet)
     if payload.creatorName:
-        game_manager.harness(room.game_id).join_player(
-            payload.creatorName or "Host",
-            anonymous_id=None if wallet else anonymous_id,
-            wallet=wallet,
-        )
+        try:
+            game_manager.harness(room.game_id).join_player(
+                payload.creatorName or "Player",
+                anonymous_id=None if wallet else anonymous_id,
+                wallet=wallet,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _ensure_public_match_room_armed(room)
+    await _sync_room_to_supabase_async(room)
+    return room.public_state()
+
+
+@app.post("/api/rooms")
+async def create_private_room(payload: CreateGameRequest, request: Request) -> dict[str, Any]:
+    """Create a new invite-only room, even when the fixture already has rooms."""
+
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    if not wallet and not anonymous_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Connect a wallet or provide a browser identity to create a private room.",
+        )
+    room = game_manager.create_room(
+        fixture_id=payload.fixtureId,
+        participant1=payload.participant1,
+        participant2=payload.participant2,
+        competition=payload.competition,
+        start_time=payload.startTime,
+        start_time_iso=payload.startTimeIso,
+        seed=payload.seed,
+        owner_anonymous_id=None if wallet else anonymous_id,
+        owner_wallet=wallet,
+        owner_name=payload.creatorName,
+        room_kind="player",
+        room_scope="private",
+    )
+    room.mode = "live"
+    room.agent_call_mode = "per_ant"
+    if payload.creatorName:
+        try:
+            game_manager.harness(room.game_id).join_player(
+                payload.creatorName,
+                anonymous_id=None if wallet else anonymous_id,
+                wallet=wallet,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -610,9 +649,6 @@ async def join_room_by_code(room_code: str, payload: JoinRoomRequest, request: R
 
 async def _get_or_create_public_match_room(
     payload: CreateGameRequest,
-    *,
-    owner_wallet: str | None = None,
-    owner_anonymous_id: str | None = None,
 ) -> GameRoom:
     room = _active_public_room_for_fixture(payload.fixtureId)
     if not room:
@@ -624,7 +660,13 @@ async def _get_or_create_public_match_room(
                 room = None
             else:
                 room = _restore_room_from_stored_row(stored)
+    if not room:
+        # A configured persistence lookup yields control to the event loop.
+        # Recheck memory before creating so concurrent joins still converge on
+        # one global room for the fixture.
+        room = _active_public_room_for_fixture(payload.fixtureId)
     if room:
+        _make_global_room_system_owned(room)
         _merge_public_fixture_metadata(room, payload)
         await _ensure_room_progress(room)
         return room
@@ -637,10 +679,8 @@ async def _get_or_create_public_match_room(
         start_time=payload.startTime,
         start_time_iso=payload.startTimeIso,
         seed=payload.seed,
-        owner_anonymous_id=owner_anonymous_id,
-        owner_wallet=owner_wallet,
-        owner_name=payload.creatorName,
         room_kind="player",
+        room_scope="global",
     )
     room.mode = "live"
     room.agent_call_mode = "per_ant"
@@ -651,6 +691,8 @@ def _active_public_room_for_fixture(fixture_id: int | str) -> GameRoom | None:
     for room in game_manager.rooms.values():
         if room.room_kind != "player":
             continue
+        if room.room_scope != "global":
+            continue
         if str(room.fixture_id) != str(fixture_id):
             continue
         if room.status in {"finished", "error", "stopped"}:
@@ -658,8 +700,6 @@ def _active_public_room_for_fixture(fixture_id: int | str) -> GameRoom | None:
         if room.mode == "live":
             return room
         if room.mode is not None:
-            continue
-        if not (room.owner_anonymous_id or room.owner_wallet or room.owner_name):
             continue
         return room
     return None
@@ -673,7 +713,15 @@ async def _stored_public_room_for_fixture_or_none(fixture_id: int | str) -> dict
         fixture_id,
         mode="live",
         room_kind="player",
+        room_scope="global",
     )
+
+
+def _make_global_room_system_owned(room: GameRoom) -> None:
+    room.owner_anonymous_id = None
+    room.owner_wallet = None
+    room.owner_name = None
+    room.room_scope = "global"
 
 
 def _merge_public_fixture_metadata(room: GameRoom, payload: CreateGameRequest) -> None:
@@ -699,7 +747,7 @@ def _merge_public_fixture_metadata(room: GameRoom, payload: CreateGameRequest) -
 
 
 async def _ensure_public_match_room_armed(room: GameRoom) -> None:
-    if room.mode != "live" or not room.colonies:
+    if room.room_scope != "global" or room.mode != "live" or not room.colonies:
         return
     if room.status in {"waiting_kickoff", "running_live"}:
         await _ensure_room_progress(room)
@@ -963,6 +1011,11 @@ async def update_ant_strategy(
 @app.post("/api/games/{game_id}/start")
 async def start_game(game_id: str, payload: StartGameRequest, request: Request) -> dict[str, Any]:
     room = await _get_game_or_restore_404(game_id)
+    if room.room_kind == "player" and room.room_scope == "global":
+        raise HTTPException(
+            status_code=403,
+            detail="Global match rooms start automatically at kickoff.",
+        )
     _ensure_deepseek_agent()
     mode = payload.mode.strip().casefold()
     if mode not in {"replay", "live"}:
@@ -1191,8 +1244,13 @@ async def _start_live_room_now(room: GameRoom) -> None:
 @app.post("/api/games/{game_id}/rerun")
 async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) -> dict[str, Any]:
     require_admin_tool(request)
-    _ensure_deepseek_agent()
     old_room = await _get_game_or_restore_404(game_id)
+    if old_room.room_kind == "player" and old_room.room_scope == "global":
+        raise HTTPException(
+            status_code=403,
+            detail="Global match rooms cannot be rerun manually.",
+        )
+    _ensure_deepseek_agent()
     wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
     _ensure_live_host(old_room, anonymous_id, wallet=wallet, action="rerun this replay")
     if old_room.status in {"running_replay", "running_live"}:
@@ -1214,6 +1272,7 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
         owner_wallet=old_room.owner_wallet,
         owner_name=old_room.owner_name,
         room_kind=old_room.room_kind,
+        room_scope=old_room.room_scope,
         txline_validation=old_room.txline_validation,
     )
     harness = game_manager.harness(room.game_id)
@@ -1773,6 +1832,10 @@ def _admin_game_public_state(row: Any, *, admin_only: bool = False) -> dict[str,
 
     state["gameId"] = str(game_id)
     state["roomKind"] = room_kind_from_snapshot({**row, **state})
+    if state["roomKind"] == "player":
+        state["roomScope"] = room_scope_from_snapshot({**row, **state})
+    else:
+        state.pop("roomScope", None)
     if admin_only and state["roomKind"] != "admin":
         return None
     state["status"] = str(state.get("status") or "created")
@@ -2330,6 +2393,8 @@ async def _get_room_by_code_or_restore_404(room_code: str):
         raise HTTPException(status_code=422, detail="Room code must contain 6 digits.")
     room = game_manager.get_room_by_code(clean_room_code)
     if room:
+        if room.room_kind != "player" or room.room_scope != "private":
+            raise HTTPException(status_code=404, detail="Private room code not found.")
         return room
     stored = await _stored_room_by_code_or_none(clean_room_code)
     if stored:
@@ -2338,6 +2403,8 @@ async def _get_room_by_code_or_restore_404(room_code: str):
             stored_state = await _mark_orphaned_stored_game(stored_state, public=False)
             stored = {**stored, "public_state": stored_state}
         room = _restore_room_from_stored_row(stored)
+        if room.room_kind != "player" or room.room_scope != "private":
+            raise HTTPException(status_code=404, detail="Private room code not found.")
         await _ensure_room_log_hydrated(room)
         return room
     raise HTTPException(status_code=404, detail="Room code not found.")
@@ -2412,6 +2479,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
         owner_wallet=(owner.get("wallet") if isinstance(owner, dict) else None) or row.get("owner_wallet"),
         owner_name=owner.get("name") if isinstance(owner, dict) else None,
         room_kind=room_kind_from_snapshot({**row, **public_state, "events": events or []}),
+        room_scope=room_scope_from_snapshot({**row, **public_state, "events": events or []}),
         seed=clean_seed,
     )
     room.status = public_state.get("status") or row.get("status") or "created"
@@ -2901,7 +2969,11 @@ def _merge_restored_events(room: GameRoom, events: list[dict[str, Any]]) -> None
 async def _stored_room_by_code_or_none(room_code: str) -> dict[str, Any] | None:
     if not supabase_store.configured:
         return None
-    return await asyncio.to_thread(supabase_store.latest_game_for_room_code, room_code)
+    return await asyncio.to_thread(
+        supabase_store.latest_game_for_room_code,
+        room_code,
+        room_scope="private",
+    )
 
 
 def _fallback_room_code_from_game_id(game_id: str) -> str:

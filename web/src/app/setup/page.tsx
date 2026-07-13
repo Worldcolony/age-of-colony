@@ -11,7 +11,7 @@ import {
 } from "@/lib/playerIdentity";
 import { useStore } from "@/store/game";
 import { Segmented } from "@/components/Segmented";
-import type { FavoriteContext, InfoNeed, Style } from "@/lib/types";
+import type { FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
 
 const STYLES: { value: Style; label: string }[] = [
   { value: "cautious", label: "Careful" },
@@ -108,7 +108,7 @@ export default function SetupPage() {
     try {
       if (currentColony) {
         setMyColonyId(currentColony.colonyId);
-        router.push(`/room/${game!.roomCode || game!.gameId}`);
+        router.push(roomHref(game!));
         return;
       }
 
@@ -143,7 +143,7 @@ export default function SetupPage() {
       if (existing) {
         setGame(joined);
         setMyColonyId(existing.colonyId);
-        router.push(`/room/${joined.roomCode || joined.gameId}`);
+        router.push(roomHref(joined));
         return;
       }
 
@@ -154,7 +154,7 @@ export default function SetupPage() {
       setGame(g);
       const mine = findIdentityColony(g, activeIdentity);
       if (mine) setMyColonyId(mine.colonyId);
-      router.push(`/room/${g.roomCode || game!.roomCode || game!.gameId}`);
+      router.push(roomHref(g));
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -217,11 +217,17 @@ export default function SetupPage() {
                   ? "Connect wallet & create colony"
                   : "Create my colony"}
           </button>
-          <button className="quiet-link py-2" onClick={() => router.push(`/room/${game.roomCode || game.gameId}`)}>Back to room</button>
+          <button className="quiet-link py-2" onClick={() => router.push(roomHref(game))}>Back to room</button>
         </div>
       </div>
     </div>
   );
+}
+
+function roomHref(game: GameState): string {
+  return game.roomScope === "private" && game.roomCode
+    ? `/room/${game.roomCode}`
+    : `/room/${game.gameId}`;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

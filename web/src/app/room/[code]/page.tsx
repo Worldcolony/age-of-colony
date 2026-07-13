@@ -51,6 +51,7 @@ export default function RoomPage() {
   const [msg, setMsg] = useState("");
   const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState("");
   const [sheetOpen, setSheetOpen] = useState(true);
   const { toasts, push } = useGameToasts();
   const [style, setStyle] = useState<Style>("balanced");
@@ -60,22 +61,33 @@ export default function RoomPage() {
   const p2 = teamName(game?.participant2 ?? mf?.participant2);
   const kickoffLine = fmtKickoffLine(game?.startTime ?? mf?.startTime, game?.startTimeIso ?? mf?.startTimeIso);
   const roomKey = String(code || "");
-  const roomCode = game?.roomCode || (isRoomCode(roomKey) ? roomKey : "");
+  const isPrivateRoom = game?.roomScope === "private";
+  const privateRoomCode = isPrivateRoom
+    ? game?.roomCode || (isRoomCode(roomKey) ? roomKey : "")
+    : "";
+  const invitationPath = privateRoomCode ? `/room/${privateRoomCode}` : "";
 
   const me = useMemo(() => findIdentityPlayer(players, identity.snapshot), [identity.snapshot, players]);
   const myColony = useMemo(() => findIdentityColony(game, identity.snapshot), [game, identity.snapshot]);
+  const hostPlayer = useMemo(() => players.find((player) => player.isHost), [players]);
   const isHost = isIdentityHost(game, identity.snapshot);
   const myReady = Boolean(me?.ready || myColony);
   const missingPlayers = players.filter((p) => !p.ready);
   const hasColony = Boolean(game?.colonies?.length);
-  const canStart = Boolean(isHost && hasColony && missingPlayers.length === 0 && game?.status === "created");
+  const canStart = Boolean(isPrivateRoom && isHost && hasColony && missingPlayers.length === 0 && game?.status === "created");
   const canEnterCockpit = Boolean(game?.gameId && game.status && RUNNING.has(game.status) && myReady);
   const entriesLocked = Boolean(game?.status && !["created", "waiting_kickoff"].includes(game.status));
-  const startHelper = game?.status === "waiting_kickoff"
-    ? "Match will start automatically at kickoff."
-    : !hasColony
-      ? "Create a colony to enter this match room."
-      : "Ready. The live game starts automatically.";
+  const startHelper = !isPrivateRoom
+    ? "This public match starts automatically at kickoff — no player needs to launch it."
+    : game?.status === "waiting_kickoff"
+      ? "Room locked. The live game will open automatically at kickoff."
+      : !hasColony
+        ? "Create a colony to enter this private room."
+        : isHost
+          ? missingPlayers.length
+            ? "The host can start once every colony is ready."
+            : "Every colony is ready. You can start the private match."
+          : "Waiting for the host to start the private match.";
 
   function syncGame(g: GameState, activeIdentity: PlayerIdentitySnapshot = identity.snapshot) {
     setGame(g);
@@ -144,8 +156,8 @@ export default function RoomPage() {
         const walletAddress = await identity.ensureWallet();
         activeIdentity = identityWithWallet(identity.snapshot, walletAddress);
         try {
-          g = roomCode
-            ? await api.joinRoomByCode(roomCode, cleanName, undefined)
+          g = privateRoomCode
+            ? await api.joinRoomByCode(privateRoomCode, cleanName, undefined)
             : await api.joinPlayer(game.gameId, cleanName, undefined);
           syncGame(g, activeIdentity);
         } catch (joinErr) {
@@ -211,6 +223,21 @@ export default function RoomPage() {
     }
   }
 
+  async function copyPrivateRoomValue(kind: "code" | "invitation") {
+    if (!privateRoomCode) {
+      setCopyFeedback("The room code is not available yet.");
+      return;
+    }
+
+    const value = kind === "code"
+      ? privateRoomCode
+      : `${window.location.origin}${invitationPath}`;
+    const copied = await copyToClipboard(value);
+    setCopyFeedback(copied
+      ? kind === "code" ? "Room code copied." : "Invitation link copied."
+      : `Copy manually: ${value}`);
+  }
+
   const readyCount = players.filter((p) => p.ready).length;
   const running = Boolean(game?.gameId && game.status && RUNNING.has(game.status));
   const needsWalletToJoin = !me && !identity.authenticated;
@@ -239,7 +266,7 @@ export default function RoomPage() {
     <button type="button" className="g-cta rust" onClick={() => router.replace(`/cockpit/${game!.gameId}`)}>
       🔴 Enter live cockpit
     </button>
-  ) : isHost && game?.status === "created" ? (
+  ) : isPrivateRoom && isHost && game?.status === "created" ? (
     <button type="button" className="g-cta" disabled={!canStart || starting} onClick={start}>
       {starting ? "Starting..." : "🚀 Start now"}
     </button>
@@ -269,6 +296,59 @@ export default function RoomPage() {
       hint={myReady ? "your mound is on the map · drag to explore" : "join to raise your mound on the map"}
     >
       <p className="loop-strip">🐜 ants vote → 🤝 consensus enters → 🍬 results change Sugar → 🏆 most Sugar wins</p>
+      <section className="well flex flex-col gap-3 p-3" aria-labelledby="room-kind-title">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p id="room-kind-title" className="font-bold text-ink">
+              {isPrivateRoom ? "Private room" : "Public match"}
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+              {isPrivateRoom
+                ? `Hosted by ${hostPlayer?.name || "the room creator"}. Share the code with the people you want to invite.`
+                : "Open to every player. The match launches automatically at kickoff."}
+            </p>
+          </div>
+          <span className="status-pill shrink-0">{isPrivateRoom ? "Private" : "Public"}</span>
+        </div>
+
+        {isPrivateRoom && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-xl border border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.5)] p-3">
+              <p className="text-xs font-bold uppercase tracking-wide text-ink-faint">Room code</p>
+              <p className="mt-1 text-xl font-bold tabular-nums tracking-[0.18em] text-ink" aria-label={privateRoomCode ? `Room code ${privateRoomCode}` : "Room code loading"}>
+                {privateRoomCode || "Loading…"}
+              </p>
+              <button
+                type="button"
+                className="btn btn-ghost mt-3 !min-h-10 px-3 py-2 text-xs"
+                disabled={!privateRoomCode}
+                onClick={() => void copyPrivateRoomValue("code")}
+                aria-label="Copy private room code"
+              >
+                Copy code
+              </button>
+            </div>
+            <div className="rounded-xl border border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.5)] p-3">
+              <p className="text-xs font-bold uppercase tracking-wide text-ink-faint">Invitation</p>
+              <p className="mt-1 truncate text-sm font-bold text-ink-soft" title={invitationPath}>
+                {invitationPath || "Link loading…"}
+              </p>
+              <button
+                type="button"
+                className="btn btn-ghost mt-3 !min-h-10 px-3 py-2 text-xs"
+                disabled={!privateRoomCode}
+                onClick={() => void copyPrivateRoomValue("invitation")}
+                aria-label="Copy private room invitation link"
+              >
+                Copy invitation
+              </button>
+            </div>
+          </div>
+        )}
+
+        <p className="sr-only" role="status" aria-live="polite">{copyFeedback}</p>
+        {copyFeedback && <p className="text-xs font-bold text-ink-soft" aria-hidden="true">{copyFeedback}</p>}
+      </section>
       <p className="text-center text-xs font-bold text-gold-deep">Create your colony before kickoff. Entries lock when live play starts.</p>
       {needsWalletToJoin && (
         <p className="well px-3 py-2 text-xs leading-relaxed text-ink-soft">
@@ -316,7 +396,7 @@ export default function RoomPage() {
       <div className="well flex flex-col gap-1 p-3">
         <div className="flex items-center justify-between">
           <h2 className="font-bold">Colonies {players.length ? `(${readyCount}/${players.length})` : ""}</h2>
-          {isHost && <span className="status-pill">Host</span>}
+          {isPrivateRoom && isHost && <span className="status-pill">Host</span>}
         </div>
         <div className="flex flex-col divide-y divide-[color:var(--brd-soft)]">
           {players.length === 0 ? (
@@ -328,7 +408,7 @@ export default function RoomPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <strong className="truncate">{p.name}</strong>
-                    {p.isHost && <span className="rounded-md border border-gold/50 px-2 py-0.5 text-xs font-bold text-gold">Host</span>}
+                    {isPrivateRoom && p.isHost && <span className="rounded-md border border-gold/50 px-2 py-0.5 text-xs font-bold text-gold">Host</span>}
                   </div>
                   {p.colonyName && p.colonyName !== p.name && <p className="truncate text-xs text-ink-faint">{p.colonyName}</p>}
                 </div>
@@ -350,6 +430,32 @@ export default function RoomPage() {
 
 function isRoomCode(value: string): boolean {
   return /^\d{6}$/.test(value);
+}
+
+async function copyToClipboard(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall through to the DOM fallback for browsers that block Clipboard API access.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+  }
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

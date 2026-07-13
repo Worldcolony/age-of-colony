@@ -299,7 +299,11 @@ function CockpitRun({ id }: { id: string }) {
   const adminContext = game ? adminRoom : searchParams.get("from") === "admin";
   const cockpitExitHref = adminContext
     ? "/admin"
-    : game?.roomCode ? `/room/${game.roomCode}` : "/lobby";
+    : game
+      ? game.roomScope === "private" && game.roomCode
+        ? `/room/${game.roomCode}`
+        : `/room/${game.gameId}`
+      : "/lobby";
   const resultsHref = adminContext ? `/results/${id}?from=admin` : `/results/${id}`;
   if (adminRoom && !defaultAdminColonyIdRef.current && sorted[0]) {
     // Pin the initial choice: ranking changes must never silently switch which

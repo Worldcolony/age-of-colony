@@ -121,6 +121,18 @@ export interface RunPreviousRequest {
   colonies?: CreateColonyBody[];
 }
 
+export interface CreatePlayerRoomRequest {
+  fixtureId: number | string;
+  participant1?: string | null;
+  participant2?: string | null;
+  competition?: string | null;
+  startTime?: number | string | null;
+  startTimeIso?: string | null;
+  seed?: number;
+  anonymousId?: string;
+  creatorName?: string;
+}
+
 export const api = {
   health: () => req<Record<string, unknown>>("/health"),
 
@@ -143,17 +155,8 @@ export const api = {
     req<TxLineValidationResult>(`/api/admin/fixtures/${fixtureId}/txline-validation${qs(p)}`, "POST"),
   liveTarget: (p?: { days?: number }) => req<FixtureList>(`/api/fixtures/live-target${qs(p)}`),
 
-  createGame: (body: {
-    fixtureId: number | string;
-    participant1?: string | null;
-    participant2?: string | null;
-    competition?: string | null;
-    startTime?: number | string | null;
-    startTimeIso?: string | null;
-    seed?: number;
-    anonymousId?: string;
-    creatorName?: string;
-  }) => req<GameState>("/api/games", "POST", body),
+  createGame: (body: CreatePlayerRoomRequest) => req<GameState>("/api/games", "POST", body),
+  createPrivateRoom: (body: CreatePlayerRoomRequest) => req<GameState>("/api/rooms", "POST", body),
   getGame: (id: string) => req<GameState>(`/api/games/${id}`),
   getReplay: (id: string) => req<{ game: GameState; events: import("./types").GameEvent[] }>(`/api/games/${id}/replay`),
   joinPlayer: (id: string, name: string, anonymousId?: string) => req<GameState>(`/api/games/${id}/players`, "POST", { name, anonymousId }),

@@ -86,7 +86,9 @@ function ResultsRun({ id }: { id: string }) {
         {finished && (
           <div className="flex gap-2">
             <button className="btn btn-magenta !min-h-0 !w-auto px-3 py-1 text-sm" onClick={share}>Share</button>
-            <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={rerun}>↻ Rerun</button>
+            {adminContext && (
+              <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={rerun}>↻ Rerun</button>
+            )}
           </div>
         )}
       </div>

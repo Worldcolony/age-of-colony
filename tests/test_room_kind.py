@@ -66,14 +66,16 @@ class RoomKindTest(unittest.TestCase):
         self.addCleanup(game_manager.room_codes.pop, admin_state["roomCode"], None)
 
         self.assertEqual(player_state["roomKind"], "player")
+        self.assertEqual(player_state["roomScope"], "global")
         self.assertEqual(admin_state["roomKind"], "admin")
+        self.assertNotIn("roomScope", admin_state)
 
         blocked_join = client.post(
             f"/api/rooms/{admin_state['roomCode']}/players",
             json={"name": "Not an admin colony"},
         )
-        self.assertEqual(blocked_join.status_code, 409, blocked_join.text)
-        self.assertIn("admin simulation rooms", blocked_join.json()["detail"])
+        self.assertEqual(blocked_join.status_code, 404, blocked_join.text)
+        self.assertIn("Private room code", blocked_join.json()["detail"])
 
     def test_legacy_snapshot_inference_requires_a_durable_admin_marker(self):
         self.assertEqual(room_kind_from_snapshot({}), "player")

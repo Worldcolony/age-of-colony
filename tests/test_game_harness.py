@@ -2842,6 +2842,9 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(payload["response_format"]["json_schema"]["name"], "single_ant_agent_decision")
         self.assertEqual(schema["required"], ["antId", "vote"])
         self.assertNotIn("reason", schema["properties"])
+        system_prompt = payload["messages"][0]["content"]
+        self.assertIn("cautious ants should abstain unless the signal is strong", system_prompt)
+        self.assertIn("aggressive ants may choose with lighter evidence", system_prompt)
 
     def test_openrouter_ant_payload_uses_dynamic_market_vote_schema(self):
         agent = OpenRouterColonyAgent(
@@ -3590,7 +3593,7 @@ class DemoRunApiTest(unittest.TestCase):
     def test_private_room_code_endpoint_supports_join(self):
         client = TestClient(app)
         created = client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": 818181,
                 "participant1": "USA",
@@ -3638,7 +3641,9 @@ class DemoRunApiTest(unittest.TestCase):
 
         self.assertEqual(len(created["players"]), 1)
         self.assertEqual(created["players"][0]["name"], "Host Alice")
-        self.assertTrue(created["players"][0]["isHost"])
+        self.assertNotIn("isHost", created["players"][0])
+        self.assertIsNone(created["owner"])
+        self.assertEqual(created["roomScope"], "global")
 
         colony_response = client.post(
             f"/api/games/{created['gameId']}/colonies",
@@ -3706,7 +3711,7 @@ class DemoRunApiTest(unittest.TestCase):
     def test_player_name_controls_linked_colony_name(self):
         client = TestClient(app)
         created = client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": 929293,
                 "participant1": "Mexico",
@@ -3768,8 +3773,15 @@ class DemoRunApiTest(unittest.TestCase):
         schedule.assert_called_once()
 
         joined_after_lock = client.post(
-            f"/api/rooms/{created['roomCode']}/players",
-            json={"name": "Late Bob", "anonymousId": "anon_late_bob"},
+            "/api/games",
+            json={
+                "fixtureId": 929292,
+                "participant1": "USA",
+                "participant2": "Japan",
+                "startTimeIso": kickoff.isoformat(),
+                "creatorName": "Late Bob",
+                "anonymousId": "anon_late_bob",
+            },
         )
         self.assertEqual(joined_after_lock.status_code, 200)
 
@@ -3819,8 +3831,15 @@ class DemoRunApiTest(unittest.TestCase):
         live_task.assert_called_once()
 
         late_join = client.post(
-            f"/api/rooms/{created['roomCode']}/players",
-            json={"name": "Late Live", "anonymousId": "anon_late_live"},
+            "/api/games",
+            json={
+                "fixtureId": 959595,
+                "participant1": "Australia",
+                "participant2": "Egypt",
+                "startTimeIso": kickoff.isoformat(),
+                "creatorName": "Late Live",
+                "anonymousId": "anon_late_live",
+            },
         )
         self.assertEqual(late_join.status_code, 409)
 
@@ -4141,7 +4160,7 @@ class DemoRunApiTest(unittest.TestCase):
     def test_live_host_cannot_finish_before_verified_full_time(self):
         client = TestClient(app)
         created = client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": 939393,
                 "participant1": "Spain",
@@ -5154,7 +5173,7 @@ class DemoRunApiTest(unittest.TestCase):
     def test_start_game_keeps_agent_call_mode_on_room_state(self):
         client = TestClient(app)
         created = client.post(
-            "/api/games",
+            "/api/rooms",
             json={
                 "fixtureId": "demo-sandbox-previous",
                 "participant1": "North Colony FC",
@@ -5207,6 +5226,7 @@ class DemoRunApiTest(unittest.TestCase):
             participant1="France",
             participant2="Belgium",
             seed=95,
+            room_scope="private",
         )
         game_manager.harness(room.game_id).add_colony(
             "Live Nest",
@@ -5313,7 +5333,7 @@ class DemoRunApiTest(unittest.TestCase):
         client = TestClient(app)
         with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")), patch("app.main.TxLineClient", FakeTxLineClient):
             created = client.post(
-                "/api/games",
+                "/api/rooms",
                 json={
                     "fixtureId": 777,
                     "participant1": "Argentina",
@@ -5347,6 +5367,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         game = response.json()
         self.assertNotEqual(game["gameId"], created["gameId"])
+        self.assertEqual(game["roomScope"], "private")
         self.assertEqual(game["fixtureId"], 777)
         self.assertEqual(len(game["colonies"]), 1)
         self.assertEqual(game["agentCallMode"], "batch")

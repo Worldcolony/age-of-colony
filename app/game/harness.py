@@ -21,6 +21,8 @@ VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
 RoomKind = Literal["admin", "player"]
 VALID_ROOM_KINDS = {"admin", "player"}
+RoomScope = Literal["global", "private"]
+VALID_ROOM_SCOPES = {"global", "private"}
 JOINABLE_STATUSES = {"created", "waiting_kickoff"}
 STRATEGY_EDITABLE_STATUSES = {"created", "waiting_kickoff", "running_replay", "running_live"}
 STARTING_COLONY_ANTS = 20
@@ -94,6 +96,53 @@ def room_kind_from_snapshot(value: Any, *, default: RoomKind = "player") -> Room
                 if candidate in VALID_ROOM_KINDS:
                     return cast(RoomKind, candidate)
     return default
+
+
+def room_scope_from_snapshot(
+    value: Any,
+    *,
+    room_kind: RoomKind | None = None,
+) -> RoomScope | None:
+    """Resolve the player-room scope while keeping legacy rooms compatible.
+
+    Admin simulations do not participate in the player lobby and therefore do
+    not have a scope. Player snapshots created before ``roomScope`` existed are
+    the historical public match rooms, so they remain ``global``.
+    """
+
+    resolved_kind = room_kind or room_kind_from_snapshot(value)
+    if resolved_kind == "admin":
+        return None
+    if not isinstance(value, dict):
+        return "global"
+
+    for key in ("roomScope", "room_scope"):
+        candidate = value.get(key)
+        if candidate in VALID_ROOM_SCOPES:
+            return cast(RoomScope, candidate)
+
+    nested_snapshot = value.get("public_state")
+    if isinstance(nested_snapshot, dict):
+        for key in ("roomScope", "room_scope"):
+            candidate = nested_snapshot.get(key)
+            if candidate in VALID_ROOM_SCOPES:
+                return cast(RoomScope, candidate)
+
+    for collection_key in ("events", "log"):
+        events = value.get(collection_key)
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or event.get("kind") != "game_created":
+                continue
+            data = event.get("data")
+            if not isinstance(data, dict):
+                continue
+            for key in ("roomScope", "room_scope"):
+                candidate = data.get(key)
+                if candidate in VALID_ROOM_SCOPES:
+                    return cast(RoomScope, candidate)
+    return "global"
 
 
 def redact_public_identity(value: Any) -> Any:
@@ -596,6 +645,7 @@ class GameRoom:
     owner_wallet: str | None = None
     owner_name: str | None = None
     room_kind: RoomKind = "player"
+    room_scope: RoomScope | None = None
     seed: int = 7
     status: str = "created"
     mode: str | None = None
@@ -614,6 +664,13 @@ class GameRoom:
     def __post_init__(self) -> None:
         if self.room_kind not in VALID_ROOM_KINDS:
             raise ValueError("room_kind must be admin or player")
+        if self.room_kind == "admin":
+            if self.room_scope is not None:
+                raise ValueError("admin rooms cannot have a player room_scope")
+        elif self.room_scope is None:
+            self.room_scope = "global"
+        elif self.room_scope not in VALID_ROOM_SCOPES:
+            raise ValueError("room_scope must be global or private")
         self.match_state = MatchState(self.fixture_id, self.participant1, self.participant2)
 
     def add_log(self, kind: str, message: str, data: dict[str, Any] | None = None) -> None:
@@ -657,6 +714,8 @@ class GameRoom:
             "agentUsage": self.agent_usage,
             "logCount": len(self.log),
         }
+        if self.room_kind == "player":
+            state["roomScope"] = self.room_scope
         restored_snapshot = getattr(self, "_aoc_restored_public_state", None)
         if self.status in {"finished", "stopped", "error"} and isinstance(restored_snapshot, dict):
             snapshot = copy.deepcopy(restored_snapshot)
@@ -664,6 +723,10 @@ class GameRoom:
             snapshot["mode"] = self.mode
             snapshot["agentCallMode"] = self.agent_call_mode
             snapshot["roomKind"] = self.room_kind
+            if self.room_kind == "player":
+                snapshot["roomScope"] = self.room_scope
+            else:
+                snapshot.pop("roomScope", None)
             try:
                 snapshot["logCount"] = max(int(snapshot.get("logCount") or 0), len(self.log))
             except (TypeError, ValueError):
@@ -1893,6 +1956,7 @@ class GameManager:
         owner_wallet: str | None = None,
         owner_name: str | None = None,
         room_kind: RoomKind = "player",
+        room_scope: RoomScope | None = None,
         room_code: str | None = None,
         competition: str | None = None,
         start_time: Any = None,
@@ -1915,20 +1979,24 @@ class GameManager:
             owner_wallet=(owner_wallet or "").strip()[:80] or None,
             owner_name=(owner_name or "").strip()[:32] or None,
             room_kind=room_kind,
+            room_scope=room_scope,
             seed=seed if seed is not None else stable_seed(game_id, fixture_id) % 1_000_000,
         )
+        creation_data = {
+            "gameId": game_id,
+            "roomCode": clean_room_code,
+            "fixtureId": fixture_id,
+            "ownerAnonymousId": room.owner_anonymous_id,
+            "ownerWallet": room.owner_wallet,
+            "ownerName": room.owner_name,
+            "roomKind": room.room_kind,
+        }
+        if room.room_kind == "player":
+            creation_data["roomScope"] = room.room_scope
         room.add_log(
             "game_created",
             f"Room {clean_room_code} created for fixture {fixture_id}.",
-            {
-                "gameId": game_id,
-                "roomCode": clean_room_code,
-                "fixtureId": fixture_id,
-                "ownerAnonymousId": room.owner_anonymous_id,
-                "ownerWallet": room.owner_wallet,
-                "ownerName": room.owner_name,
-                "roomKind": room.room_kind,
-            },
+            creation_data,
         )
         self.rooms[game_id] = room
         self.room_codes[clean_room_code] = game_id

@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .game.harness import PRIVATE_SNAPSHOT_KEY, RoomKind, room_kind_from_snapshot
+from .game.harness import (
+    PRIVATE_SNAPSHOT_KEY,
+    RoomKind,
+    RoomScope,
+    room_kind_from_snapshot,
+    room_scope_from_snapshot,
+)
 from .txline import load_dotenv
 
 
@@ -359,6 +365,7 @@ class SupabaseGameStore:
         limit: int = 20,
         mode: str | None = None,
         room_kind: RoomKind | None = None,
+        room_scope: RoomScope | None = None,
     ) -> dict[str, Any] | None:
         if not self.configured:
             return None
@@ -388,6 +395,7 @@ class SupabaseGameStore:
             "&status=not.in.(finished,error,stopped)"
             "&order=updated_at.desc,game_id.desc"
         )
+        room_kind_filter = None
         if room_kind is not None:
             # New snapshots can be filtered before LIMIT. Missing roomKind must
             # remain eligible so pre-migration snapshots still use the local,
@@ -396,7 +404,25 @@ class SupabaseGameStore:
                 f"(public_state->>roomKind.eq.{room_kind},"
                 "public_state->>roomKind.is.null)"
             )
-            query = f"{query}&{urllib.parse.urlencode({'or': room_kind_filter})}"
+        scope_filter = None
+        if room_scope == "global":
+            # Legacy player snapshots predate roomScope and represent the
+            # original global match room. Private rooms always carry an
+            # explicit marker and are never eligible for a global lookup.
+            scope_filter = (
+                "(public_state->>roomScope.eq.global,"
+                "public_state->>roomScope.is.null)"
+            )
+        if room_kind_filter and scope_filter:
+            combined_filter = f"(or{room_kind_filter},or{scope_filter})"
+            query = f"{query}&{urllib.parse.urlencode({'and': combined_filter})}"
+        else:
+            if room_kind_filter:
+                query = f"{query}&{urllib.parse.urlencode({'or': room_kind_filter})}"
+            if scope_filter:
+                query = f"{query}&{urllib.parse.urlencode({'or': scope_filter})}"
+        if room_scope == "private":
+            query = f"{query}&public_state->>roomScope=eq.private"
 
         for page in range(_LATEST_FIXTURE_MAX_PAGES):
             offset = page * safe_limit
@@ -426,6 +452,10 @@ class SupabaseGameStore:
                         # but are unsafe for automatic public-room reuse: they
                         # may be pre-migration admin simulations.
                         continue
+                if room_scope is not None:
+                    snapshot = {**row, **public_state} if isinstance(public_state, dict) else row
+                    if room_scope_from_snapshot(snapshot) != room_scope:
+                        continue
                 if mode is not None:
                     row_mode = public_state.get("mode") if isinstance(public_state, dict) else None
                     row_mode = row_mode or row.get("mode")
@@ -444,7 +474,13 @@ class SupabaseGameStore:
                 break
         return None
 
-    def latest_game_for_room_code(self, room_code: str, *, limit: int = 200) -> dict[str, Any] | None:
+    def latest_game_for_room_code(
+        self,
+        room_code: str,
+        *,
+        limit: int = 200,
+        room_scope: RoomScope | None = None,
+    ) -> dict[str, Any] | None:
         if not self.configured:
             return None
         clean_room_code = "".join(character for character in str(room_code or "") if character.isdigit())[:6]
@@ -454,6 +490,8 @@ class SupabaseGameStore:
         for row in payload.get("games", []):
             public_state = row.get("public_state") or {}
             if not isinstance(public_state, dict):
+                continue
+            if room_scope is not None and room_scope_from_snapshot({**row, **public_state}) != room_scope:
                 continue
             status = public_state.get("status") or row.get("status")
             if str(public_state.get("roomCode") or "") == clean_room_code and status not in {"finished", "error", "stopped"}:
