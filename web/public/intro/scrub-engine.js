@@ -265,7 +265,8 @@ function mountScrollWorld(container, config) {
   }
 
   function raf() {
-    const eps = isMobile() ? 0.02 : 0.008;   // coarser seek step on phones = fewer decodes
+    const mob = isMobile();
+    const eps = mob ? 0.02 : 0.008;   // coarser seek step on phones = fewer decodes
     for (let i = 0; i < NSEG; i++) {
       const s = SEGMENTS[i];
       if (!s.hasClip || !s.ready || !s.video) continue;
@@ -274,10 +275,21 @@ function mountScrollWorld(container, config) {
       // cur keeps lerping, so we snap to the latest target the moment it's free.
       if (s.video.seeking) continue;
       if (!s.visible && Math.abs(s.cur - s.target) < 0.002) continue;
-      s.cur += (s.target - s.cur) * (reduce ? 1 : 0.18);
+      // Phones ease harder: with coalesced seeks the video already lags the finger,
+      // so the desktop lerp reads as rubber-banding on touch momentum.
+      s.cur += (s.target - s.cur) * (reduce ? 1 : (mob ? 0.42 : 0.18));
       const dur = s.video.duration || 1;
       const t = clamp(s.cur, 0, 0.999) * dur;
-      if (Math.abs(s.video.currentTime - t) > eps) { try { s.video.currentTime = t; } catch (e) {} }
+      const gap = Math.abs(s.video.currentTime - t);
+      if (gap > eps) {
+        try {
+          // Big momentum jumps on phones: fastSeek (WebKit/Firefox) snaps to the
+          // nearest keyframe — far cheaper than a precise seek, and with tight-GOP
+          // mobile encodes it lands within a frame or two anyway.
+          if (mob && gap > 0.4 && typeof s.video.fastSeek === 'function') s.video.fastSeek(t);
+          else s.video.currentTime = t;
+        } catch (e) {}
+      }
     }
     requestAnimationFrame(raf);
   }
