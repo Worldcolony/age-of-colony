@@ -141,6 +141,10 @@ existing WorldColony Supabase SQL editor. The first persistence pass writes:
 - `aoc_games`: one public state snapshot per room
 - `aoc_game_events`: the replay/admin journal for each room
 
+Keep the current Railway service at **one replica** and one Uvicorn worker.
+Active rooms, SSE workers, and TXLine live tasks are process-owned; horizontal
+scaling requires shared runtime coordination and is not supported by this V0.
+
 The app still works in memory if Supabase is missing, but admin history is reset
 when Railway restarts or redeploys the service. Check `/health` for
 `supabase.configured: true`.
