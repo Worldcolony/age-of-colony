@@ -95,6 +95,57 @@ class SugarPlaytestToolTest(unittest.TestCase):
 
         self.assertIsNone(agent._correct_vote(market, votes))
 
+    def test_real_fixture_oracle_uses_real_team_labels_and_skips_unconfirmed_events(self):
+        events = [
+            {
+                "fixtureId": 99,
+                "seq": 1,
+                "minute": 20,
+                "clockSeconds": 1200,
+                "action": "danger_possession",
+            },
+            {
+                "fixtureId": 99,
+                "seq": 2,
+                "minute": 21,
+                "clockSeconds": 1260,
+                "action": "goal",
+                "highlights": ["goal"],
+                "participantLabel": "France",
+                "confirmed": False,
+            },
+            {
+                "fixtureId": 99,
+                "seq": 3,
+                "minute": 22,
+                "clockSeconds": 1320,
+                "action": "goal",
+                "highlights": ["goal"],
+                "participantLabel": "Morocco",
+                "confirmed": True,
+            },
+        ]
+        agent = LocalVoterAgent(
+            policy="accuracy_100",
+            seed=1,
+            run_index=0,
+            events=events,
+            participant1="France",
+            participant2="Morocco",
+        )
+        market = {
+            "marketId": "opp_99_1_next_goal_team",
+            "context": "next_goal_team",
+            "minute": 20,
+        }
+        votes = [
+            {"vote": "option_a", "optionId": "next_goal_p1", "rewardSugar": 4},
+            {"vote": "option_b", "optionId": "next_goal_p2", "rewardSugar": 4},
+            {"vote": "option_c", "optionId": "next_goal_none", "rewardSugar": 1},
+        ]
+
+        self.assertEqual(agent._correct_vote(market, votes), "option_b")
+
 
 if __name__ == "__main__":
     unittest.main()

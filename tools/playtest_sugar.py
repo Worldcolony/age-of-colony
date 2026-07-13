@@ -46,6 +46,7 @@ POLICIES = {
     "accuracy_50": 0.50,
     "accuracy_60": 0.60,
     "accuracy_70": 0.70,
+    "accuracy_100": 1.00,
     "reward_chaser": None,
 }
 POLICY_DESCRIPTIONS = {
@@ -53,6 +54,7 @@ POLICY_DESCRIPTIONS = {
     "accuracy_50": "Each ant individually receives the correct outcome with 50% probability.",
     "accuracy_60": "Each ant individually receives the correct outcome with 60% probability.",
     "accuracy_70": "Each ant individually receives the correct outcome with 70% probability.",
+    "accuracy_100": "Every ant receives the correct outcome; this exposes the observed outcome mix.",
     "reward_chaser": "Each ant chooses among the highest displayed Sugar rewards.",
 }
 REWARD_CONTEXTS = (
@@ -69,13 +71,24 @@ REWARD_CONTEXTS = (
 class LocalVoterAgent:
     """A deterministic local replacement for ``decide_ants``."""
 
-    def __init__(self, *, policy: str, seed: int, run_index: int, events: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        *,
+        policy: str,
+        seed: int,
+        run_index: int,
+        events: list[dict[str, Any]],
+        participant1: str | None = None,
+        participant2: str | None = None,
+    ) -> None:
         if policy not in POLICIES:
             raise ValueError(f"Unknown policy: {policy}")
         self.policy = policy
         self.seed = seed
         self.run_index = run_index
         self.events = events
+        self.participant1 = participant1 or str(DEMO_FIXTURE["participant1"])
+        self.participant2 = participant2 or str(DEMO_FIXTURE["participant2"])
 
     def decide(self, *, game_id: str, stage: str, context: dict[str, Any]) -> None:
         return None
@@ -168,6 +181,11 @@ class LocalVoterAgent:
             )
             source_event = self.events[source_position] if source_position >= 0 else {}
             future = self.events[source_position + 1 :] if source_position >= 0 else list(self.events)
+        future = [
+            event
+            for event in future
+            if event.get("confirmed") is None or truthy(event.get("confirmed"))
+        ]
         source_clock = _as_int(source_event.get("clockSeconds"), minute * 60)
 
         option_id: str | None = None
@@ -217,9 +235,9 @@ class LocalVoterAgent:
             prefix = prefix_by_context.get(context)
             if prefix and result:
                 team = _event_team(result)
-                if team == str(DEMO_FIXTURE["participant1"]):
+                if team == self.participant1:
                     option_id = f"{prefix}_p1"
-                elif team == str(DEMO_FIXTURE["participant2"]):
+                elif team == self.participant2:
                     option_id = f"{prefix}_p2"
             elif prefix and context != "next_foul":
                 option_id = f"{prefix}_none"
@@ -270,25 +288,61 @@ def reward_audit() -> list[dict[str, Any]]:
 
 
 def run_playtests(*, policies: Iterable[str], runs: int, seed: int = 7) -> dict[str, Any]:
+    return run_fixture_playtests(
+        fixture=dict(DEMO_FIXTURE),
+        events=demo_events(DEMO_FIXTURE["fixtureId"]),
+        policies=policies,
+        runs=runs,
+        seed=seed,
+    )
+
+
+def run_fixture_playtests(
+    *,
+    fixture: dict[str, Any],
+    events: Iterable[dict[str, Any]],
+    policies: Iterable[str],
+    runs: int,
+    seed: int = 7,
+) -> dict[str, Any]:
     if runs <= 0:
         raise ValueError("runs must be positive")
     clean_policies = list(policies)
+    replay_events = list(events)
     unknown = [policy for policy in clean_policies if policy not in POLICIES]
     if unknown:
         raise ValueError(f"Unknown policies: {', '.join(unknown)}")
     return {
-        "fixture": dict(DEMO_FIXTURE),
+        "fixture": dict(fixture),
         "runsPerPolicy": runs,
         "seed": seed,
         "rewardAudit": reward_audit(),
         "policies": {
-            policy: _run_policy(policy=policy, runs=runs, seed=seed)
+            policy: _run_policy(
+                policy=policy,
+                runs=runs,
+                seed=seed,
+                fixture=fixture,
+                source_events=replay_events,
+            )
             for policy in clean_policies
         },
     }
 
 
-def _run_policy(*, policy: str, runs: int, seed: int) -> dict[str, Any]:
+def _run_policy(
+    *,
+    policy: str,
+    runs: int,
+    seed: int,
+    fixture: dict[str, Any] | None = None,
+    source_events: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    fixture = dict(fixture or DEMO_FIXTURE)
+    fixture_id = fixture.get("fixtureId")
+    participant1 = str(fixture.get("participant1") or "A")
+    participant2 = str(fixture.get("participant2") or "B")
+    replay_events = list(source_events) if source_events is not None else demo_events(DEMO_FIXTURE["fixtureId"])
     style_totals: dict[str, dict[str, Any]] = {
         style: {
             "offers": 0,
@@ -310,13 +364,20 @@ def _run_policy(*, policy: str, runs: int, seed: int) -> dict[str, Any]:
     invariant_failures: list[str] = []
 
     for run_index in range(runs):
-        events = demo_events(DEMO_FIXTURE["fixtureId"])
-        agent = LocalVoterAgent(policy=policy, seed=seed, run_index=run_index, events=events)
+        events = [dict(event) for event in replay_events]
+        agent = LocalVoterAgent(
+            policy=policy,
+            seed=seed,
+            run_index=run_index,
+            events=events,
+            participant1=participant1,
+            participant2=participant2,
+        )
         manager = GameManager(decision_agent=agent)
         room = manager.create_room(
-            fixture_id=DEMO_FIXTURE["fixtureId"],
-            participant1=str(DEMO_FIXTURE["participant1"]),
-            participant2=str(DEMO_FIXTURE["participant2"]),
+            fixture_id=fixture_id,
+            participant1=participant1,
+            participant2=participant2,
             seed=seed + run_index,
         )
         harness = manager.harness(room.game_id)
