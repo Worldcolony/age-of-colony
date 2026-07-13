@@ -258,6 +258,7 @@ class UpdateAntStrategyRequest(BaseModel):
     style: str | None = None
     favoriteContext: str | None = None
     infoNeed: str | None = None
+    analysisRole: Literal["reactive", "statistical", "situational"] | None = None
     inheritGlobal: bool = False
     anonymousId: str | None = None
 
@@ -995,6 +996,7 @@ async def update_ant_strategy(
             style=payload.style,
             favorite_context=payload.favoriteContext,
             info_need=payload.infoNeed,
+            analysis_role=payload.analysisRole,
             inherit_global=payload.inheritGlobal,
         )
     except ValueError as exc:
@@ -1297,7 +1299,14 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
         ]
         carried_ant_ids: list[str] = []
         for ant in cloned_colony.ants:
-            if not any((ant.style_override, ant.favorite_context_override, ant.info_need_override)):
+            if not any(
+                (
+                    ant.style_override,
+                    ant.favorite_context_override,
+                    ant.info_need_override,
+                    ant.analysis_role_override,
+                )
+            ):
                 continue
             carried_ant_ids.append(ant.ant_id)
             room.add_log(
@@ -2587,6 +2596,12 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
                 ant.style_override = strategy.get("style") or None
                 ant.favorite_context_override = strategy.get("favoriteContext") or None
                 ant.info_need_override = strategy.get("infoNeed") or None
+                stored_analysis_role = strategy.get("analysisRole")
+                ant.analysis_role_override = (
+                    str(stored_analysis_role)
+                    if stored_analysis_role in {"reactive", "statistical", "situational"}
+                    else ant.analysis_role_override
+                )
         room.colonies[colony.colony_id] = colony
     _merge_restored_events(room, events or [])
     _restore_live_market_positions(room, public_state)

@@ -1,6 +1,7 @@
 // Age of Colony — engine API types (mirrors app/game/harness.py public_state shapes).
 
 export type Style = "cautious" | "balanced" | "aggressive";
+export type AnalysisRole = "reactive" | "statistical" | "situational";
 export type FavoriteContext = "penalties" | "corners" | "momentum" | "chaos" | "balanced";
 export type InfoNeed = "low" | "medium" | "high";
 export type GameStatus = "created" | "waiting_kickoff" | "running_replay" | "running_live" | "finished" | string;
@@ -13,6 +14,9 @@ export interface ColonyStrategy {
 }
 
 export interface AntStrategy extends ColonyStrategy {
+  analysisRole: AnalysisRole;
+  inheritsRole?: boolean;
+  roleSource?: "archetype" | "custom" | string;
   inheritsGlobal: boolean;
   source: "colony" | "custom" | "ant" | string;
 }
@@ -167,7 +171,7 @@ export interface Colony {
   infoPurchases?: number;
   scoreBreakdown?: Record<string, number>;
   archetypes?: Record<string, unknown>;
-  antStrategies?: Record<string, Partial<ColonyStrategy>>;
+  antStrategies?: Record<string, Partial<AntStrategy>>;
 }
 
 export interface Player {
@@ -287,5 +291,6 @@ export interface StrategyPatch {
 }
 
 export interface AntStrategyPatch extends StrategyPatch {
+  analysisRole?: AnalysisRole;
   inheritGlobal?: boolean;
 }

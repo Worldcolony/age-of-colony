@@ -531,7 +531,6 @@ function CockpitRun({ id }: { id: string }) {
                 onSelect={selectAdminColony}
               />
             )}
-            <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} />
             <ColonyCommandPanel
               gameId={id}
               status={status}
@@ -544,6 +543,7 @@ function CockpitRun({ id }: { id: string }) {
               onDirtyChange={adminRoom ? setMobileAdminCommandDirty : undefined}
               onGameChange={setGame}
             />
+            <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} />
           </div>
         ) : status === "created" ? (
           <div className="flex flex-col gap-3 text-center">
@@ -716,7 +716,6 @@ function CockpitRun({ id }: { id: string }) {
               onDirtyChange={adminRoom ? setDesktopAdminCommandDirty : undefined}
               onGameChange={setGame}
               initialScope={adminRoom ? "colony" : "ants"}
-              expandedByDefault
             />
           )}
           <ColonyRoster

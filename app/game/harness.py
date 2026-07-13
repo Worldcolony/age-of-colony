@@ -19,6 +19,29 @@ VALID_SIZES = {10, 20, 50}
 VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
+VALID_ANALYSIS_ROLES = {"reactive", "statistical", "situational"}
+ANALYSIS_ROLE_BY_ARCHETYPE = {
+    "cautious": "statistical",
+    "balanced": "situational",
+    "data_first": "statistical",
+    "opportunist": "situational",
+    "momentum": "reactive",
+    "chaos": "reactive",
+}
+SIGNAL_COUNT_KEYS = (
+    "goal",
+    "shot",
+    "corner",
+    "free_kick",
+    "foul",
+    "yellow",
+    "red",
+    "penalty",
+    "penalty_scored",
+    "penalty_missed",
+    "danger",
+    "attack",
+)
 RoomKind = Literal["admin", "player"]
 VALID_ROOM_KINDS = {"admin", "player"}
 RoomScope = Literal["global", "private"]
@@ -271,6 +294,7 @@ class AntState:
     style_override: str | None = None
     favorite_context_override: str | None = None
     info_need_override: str | None = None
+    analysis_role_override: str | None = None
 
     def is_active(self, event_index: int) -> bool:
         return self.alive and self.wounded_until_event <= event_index
@@ -445,9 +469,21 @@ class ColonyState:
                     "style": ant.style_override,
                     "favoriteContext": ant.favorite_context_override,
                     "infoNeed": ant.info_need_override,
+                    **(
+                        {"analysisRole": ant.analysis_role_override}
+                        if ant.analysis_role_override is not None
+                        else {}
+                    ),
                 }
                 for ant in self.ants
-                if any((ant.style_override, ant.favorite_context_override, ant.info_need_override))
+                if any(
+                    (
+                        ant.style_override,
+                        ant.favorite_context_override,
+                        ant.info_need_override,
+                        ant.analysis_role_override,
+                    )
+                )
             },
         }
         if self.player_id:
@@ -585,7 +621,10 @@ class MatchState:
     game_state: Any = None
     status_id: Any = None
     possession_label: str | None = None
-    recent_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=30))
+    # TXLine commonly emits well over one thousand records for a match. Keep the
+    # complete in-memory timeline so the statistical lens is genuinely based on
+    # the whole match; presentation helpers still select a short recent tail.
+    recent_events: deque[dict[str, Any]] = field(default_factory=deque)
 
     def update(self, event: dict[str, Any]) -> None:
         if event.get("gameState") is not None:
@@ -1205,6 +1244,7 @@ class GameHarness:
         style: str | None = None,
         favorite_context: str | None = None,
         info_need: str | None = None,
+        analysis_role: str | None = None,
         inherit_global: bool = False,
     ) -> AntState:
         if self.room.status not in STRATEGY_EDITABLE_STATUSES:
@@ -1218,7 +1258,13 @@ class GameHarness:
         if not ant.alive:
             raise ValueError("dead ants cannot receive new orders")
 
-        if not inherit_global and style is None and favorite_context is None and info_need is None:
+        if (
+            not inherit_global
+            and style is None
+            and favorite_context is None
+            and info_need is None
+            and analysis_role is None
+        ):
             raise ValueError("provide an ant strategy or set inheritGlobal to true")
         if style is not None:
             style = normalize_style(style)
@@ -1232,6 +1278,10 @@ class GameHarness:
             info_need = normalize_info_need(info_need)
             if info_need not in VALID_INFO_NEEDS:
                 raise ValueError("info_need must be low, medium or high")
+        if analysis_role is not None:
+            analysis_role = str(analysis_role).strip().casefold()
+            if analysis_role not in VALID_ANALYSIS_ROLES:
+                raise ValueError("analysis_role must be reactive, statistical or situational")
 
         with colony.strategy_lock:
             if inherit_global:
@@ -1245,6 +1295,11 @@ class GameHarness:
                     ant.favorite_context_override = favorite_context
                 if info_need is not None:
                     ant.info_need_override = info_need
+            # The analysis role is ant-only: there is no colony-level role to
+            # inherit. Apply it independently so legacy `inheritGlobal` calls
+            # cannot erase an order those clients do not know about.
+            if analysis_role is not None:
+                ant.analysis_role_override = analysis_role
             colony.strategy_revision += 1
             revision = colony.strategy_revision
             strategy = ant_strategy_state(ant, colony)
@@ -1252,7 +1307,8 @@ class GameHarness:
             "ant_strategy_updated",
             (
                 f"{colony.name} updates {ant.ant_id}: {strategy['style']}, "
-                f"{strategy['favoriteContext']}, info {strategy['infoNeed']}."
+                f"{strategy['favoriteContext']}, info {strategy['infoNeed']}, "
+                f"role {strategy['analysisRole']}."
             ),
             {
                 "colonyId": colony.colony_id,
@@ -1566,25 +1622,26 @@ class GameHarness:
         ant_counts = colony_ant_counts(colony, self.room.event_index)
         stage = "post_info" if info_packet else "pre_info"
         orders = strategy_snapshot or colony_strategy_snapshot(colony)
+        signal_pack = build_market_signal_pack(self.room.match_state, opportunity)
+        agent_reliability = agent_reliability_context(signal_pack["reliability"])
+        agent_opportunity = agent_opportunity_context(opportunity)
+        agent_market = agent_market_context(opportunity)
+        agent_market.pop("minute", None)
+        if opportunity.context != "penalties":
+            agent_market.pop("teamLabel", None)
         context = {
             "match": {
                 "fixtureId": self.room.fixture_id,
                 "participant1": self.room.participant1,
                 "participant2": self.room.participant2,
-                "score": self.room.match_state.score if self.room.match_state else None,
-                "possessionLabel": self.room.match_state.possession_label if self.room.match_state else None,
-                "recentEvents": recent_event_brief(self.room.match_state),
+                "dataReliability": agent_reliability,
             },
             "colony": {
                 "name": colony.name,
-                "style": orders["style"],
-                "favoriteContext": orders["favoriteContext"],
-                "infoNeed": orders["infoNeed"],
                 "strategyRevision": orders["revision"],
                 "sugar": colony.food,
                 "sugarReserved": colony.food_reserved,
                 "sugarAvailable": max(0, colony.food - colony.food_reserved),
-                "entryThreshold": STYLE_ENTRY_THRESHOLDS[str(orders["style"])],
                 "riskPerMarket": MARKET_RISK_SUGAR,
                 "maxReservedSugar": MAX_RESERVED_SUGAR,
                 # Backward-compatible aliases for older agent adapters.
@@ -1595,8 +1652,6 @@ class GameHarness:
                 "antsActive": ant_counts["activeCount"],
                 "antsEngaged": ant_counts["engagedCount"],
                 "antsWounded": ant_counts["woundedCount"],
-                "accuracy": round(colony.memory.accuracy, 3),
-                "contextRate": round(colony.memory.context_rate(opportunity.context), 3),
             },
             "rules": {
                 "stage": stage,
@@ -1607,20 +1662,42 @@ class GameHarness:
                 "infoFeatureReason": "Paid info is disabled for now and will return later with concrete info types.",
                 "oneDecisionPerAnt": True,
                 "economy": "Each entered market risks exactly 2 Sugar; rewards are the option's rewardSugar.",
-                "entryRule": "The raw top-vote count divided by active ants must meet the colony entryThreshold; a tie means observe with no entry.",
+                "doctrineAppliedAfterVotes": True,
             },
-            "opportunity": opportunity.public_state(),
-            "market": agent_market_context(opportunity),
-            "infoPacket": info_packet.__dict__ if info_packet else None,
+            "opportunity": agent_opportunity,
+            "market": agent_market,
         }
         ant_orders = orders.get("ants") or {}
-        ants = [
-            ant_agent_context(ant, opportunity, colony, strategy=ant_orders.get(ant.ant_id))
-            for ant in active_ants
-        ]
+        ants = []
+        analysis_roles: dict[str, str] = {}
+        for ant in active_ants:
+            ant_strategy = ant_orders.get(ant.ant_id) or ant_strategy_state(ant, colony)
+            analysis_role = str(ant_strategy.get("analysisRole") or effective_analysis_role(ant))
+            if analysis_role not in VALID_ANALYSIS_ROLES:
+                analysis_role = effective_analysis_role(ant)
+            analysis_roles[ant.ant_id] = analysis_role
+            agent_strategy = {"analysisRole": analysis_role}
+            ants.append(
+                ant_agent_context(
+                    ant,
+                    opportunity,
+                    colony,
+                    strategy=agent_strategy,
+                    role_evidence=role_evidence_from_signal_pack(signal_pack, analysis_role),
+                    reliability=agent_reliability,
+                )
+            )
         decisions = decide_ants(game_id=self.room.game_id, stage=stage, context=context, ants=ants)
         self._sync_agent_usage()
-        vote = vote_from_ant_agent_decisions(colony, opportunity, self.room.event_index, decisions or [], info_packet=info_packet)
+        vote = vote_from_ant_agent_decisions(
+            colony,
+            opportunity,
+            self.room.event_index,
+            decisions or [],
+            info_packet=info_packet,
+            reliability=signal_pack["reliability"],
+            analysis_roles=analysis_roles,
+        )
         if not vote:
             raise RuntimeError("DeepSeek did not produce any usable vote.")
         if vote.get("agentDecisionCount") != vote.get("activeCount"):
@@ -2087,6 +2164,7 @@ def clone_ant_for_new_match(ant: AntState) -> AntState:
         style_override=ant.style_override,
         favorite_context_override=ant.favorite_context_override,
         info_need_override=ant.info_need_override,
+        analysis_role_override=ant.analysis_role_override,
     )
 
 
@@ -2104,6 +2182,10 @@ def ant_profile_state(ant: AntState) -> dict[str, Any]:
         "momentumBias": ant.momentum_bias,
         "chaosBias": ant.chaos_bias,
         "baseInfluence": ant.base_influence,
+        "naturalAnalysisRole": natural_analysis_role(ant),
+        "analysisRole": effective_analysis_role(ant),
+        "analysisRoleOverride": ant.analysis_role_override,
+        "roleSource": "custom" if ant.analysis_role_override else "archetype",
     }
 
 
@@ -2151,17 +2233,38 @@ def restore_ant_profile(ant: AntState, profile: Any) -> AntState:
     ant.chaos_bias = stored_float("chaosBias", ant.chaos_bias, 0.0, 1.0)
     ant.base_influence = stored_float("baseInfluence", ant.base_influence, 0.35, 2.25)
     ant.influence = ant.base_influence
+    stored_role_override = profile.get("analysisRoleOverride")
+    if stored_role_override is None and profile.get("roleSource") == "custom":
+        stored_role_override = profile.get("analysisRole")
+    if stored_role_override in VALID_ANALYSIS_ROLES:
+        ant.analysis_role_override = str(stored_role_override)
     return ant
+
+
+def natural_analysis_role(ant: AntState) -> str:
+    """Return the stable evidence lens attached to an ant's archetype."""
+
+    return ANALYSIS_ROLE_BY_ARCHETYPE.get(ant.archetype, "situational")
+
+
+def effective_analysis_role(ant: AntState) -> str:
+    if ant.analysis_role_override in VALID_ANALYSIS_ROLES:
+        return str(ant.analysis_role_override)
+    return natural_analysis_role(ant)
 
 
 def ant_strategy_state(ant: AntState, colony: ColonyState) -> dict[str, Any]:
     inherits_global = not any(
         (ant.style_override, ant.favorite_context_override, ant.info_need_override)
     )
+    inherits_role = ant.analysis_role_override is None
     return {
         "style": ant.style_override or colony.style,
         "favoriteContext": ant.favorite_context_override or colony.favorite_context,
         "infoNeed": ant.info_need_override or colony.info_need,
+        "analysisRole": effective_analysis_role(ant),
+        "inheritsRole": inherits_role,
+        "roleSource": "archetype" if inherits_role else "custom",
         "inheritsGlobal": inherits_global,
         "source": "colony" if inherits_global else "custom",
     }
@@ -2783,41 +2886,27 @@ def ant_agent_context(
     colony: ColonyState | None = None,
     *,
     strategy: dict[str, Any] | None = None,
+    role_evidence: dict[str, Any] | None = None,
+    reliability: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    attempts = ant.memory.attempts_by_context.get(opportunity.context, 0)
-    wins = ant.memory.wins_by_context.get(opportunity.context, 0)
-    losses = ant.memory.losses_by_context.get(opportunity.context, 0)
-    effective_strategy = strategy or (ant_strategy_state(ant, colony) if colony else {
-        "style": ant.style_override or "balanced",
-        "favoriteContext": ant.favorite_context_override or ant.favorite_context,
-        "infoNeed": ant.info_need_override or "medium",
-        "inheritsGlobal": False,
-        "source": "ant",
-    })
+    requested_role = strategy.get("analysisRole") if isinstance(strategy, dict) else None
+    effective_strategy = {
+        "analysisRole": (
+            str(requested_role)
+            if requested_role in VALID_ANALYSIS_ROLES
+            else effective_analysis_role(ant)
+        )
+    }
     return {
         "antId": ant.ant_id,
-        "archetype": ant.archetype,
         "objective": (
             "Help your colony win across the match: earn resources, avoid bad resource losses, "
-            "take good multipliers when the risk is worth it, and learn from your own results."
+            "and take good rewards when the fixed 2 Sugar risk is worth it."
         ),
-        "personality": {
-            "riskAppetite": round(ant.risk_appetite, 3),
-            "favoriteContext": ant.favorite_context,
-            "infoHunger": round(ant.info_hunger, 3),
-            "lossSensitivity": round(ant.loss_sensitivity, 3),
-            "momentumBias": round(ant.momentum_bias, 3),
-            "chaosBias": round(ant.chaos_bias, 3),
-            "influence": round(ant.influence, 3),
-        },
         "strategy": effective_strategy,
-        "memory": {
-            "context": opportunity.context,
-            "attempts": attempts,
-            "wins": wins,
-            "losses": losses,
-            "successRate": round(ant.memory.success_rate(opportunity.context), 3),
-            "recentLosses": ant.memory.recent_losses,
+        "dataReliability": copy.deepcopy(reliability) if isinstance(reliability, dict) else None,
+        "roleEvidence": copy.deepcopy(role_evidence) if isinstance(role_evidence, dict) else {
+            "role": effective_strategy["analysisRole"],
         },
     }
 
@@ -2862,6 +2951,28 @@ def agent_market_context(opportunity: Opportunity) -> dict[str, Any]:
     }
 
 
+def agent_opportunity_context(opportunity: Opportunity) -> dict[str, Any]:
+    """Return market facts shared by every role without trigger-time clues."""
+
+    labels = {
+        "penalties": "Penalty: goal or no goal?",
+        "goal_next_10": "Market: goal in the next 10 minutes?",
+        "next_goal_team": "Market: who scores the next goal?",
+        "next_corner": "Market: who wins the next corner?",
+        "next_free_kick": "Market: who wins the next free kick?",
+        "next_yellow_card": "Market: who gets the next yellow card?",
+        "next_foul": "Market: who commits the next foul?",
+    }
+    state = opportunity.public_state()
+    state.pop("minute", None)
+    state["label"] = labels.get(opportunity.context, "Market")
+    if opportunity.context == "penalties" and opportunity.team_label:
+        state["label"] += f" for {opportunity.team_label}"
+    else:
+        state.pop("teamLabel", None)
+    return state
+
+
 def market_available_votes(opportunity: Opportunity) -> list[dict[str, Any]]:
     vote_keys = ["yes", "no"] if len(opportunity.options) <= 2 else ["option_a", "option_b", "option_c", "option_d"]
     items = []
@@ -2900,6 +3011,8 @@ def vote_from_ant_agent_decisions(
     decisions: list[Any],
     *,
     info_packet: InfoPacket | None = None,
+    reliability: dict[str, Any] | None = None,
+    analysis_roles: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     active_ants = colony.active_ants(event_index)
     if not active_ants or not decisions:
@@ -2923,11 +3036,21 @@ def vote_from_ant_agent_decisions(
     vote_labels = {item["vote"]: item["meaning"] for item in market["availableVotes"]}
     vote_option_ids = {item["vote"]: item.get("optionId") for item in market["availableVotes"]}
     vote_counts: dict[str, int] = {item["vote"]: 0 for item in market["availableVotes"]}
+    role_vote_counts: dict[str, dict[str, int]] = {
+        role: {vote: 0 for vote in vote_counts}
+        for role in sorted(VALID_ANALYSIS_ROLES)
+    }
+    role_ant_counts: dict[str, int] = {role: 0 for role in sorted(VALID_ANALYSIS_ROLES)}
 
     for ant in active_ants:
+        role = (analysis_roles or {}).get(ant.ant_id) or effective_analysis_role(ant)
+        if role not in VALID_ANALYSIS_ROLES:
+            role = effective_analysis_role(ant)
+        role_ant_counts[role] += 1
         decision = decision_by_ant_id.get(ant.ant_id)
         if not decision:
             vote_counts["abstain"] += 1
+            role_vote_counts[role]["abstain"] += 1
             neutral += 1
             continue
 
@@ -2937,6 +3060,7 @@ def vote_from_ant_agent_decisions(
         if vote not in vote_counts:
             vote = "abstain"
         vote_counts[vote] += 1
+        role_vote_counts[role][vote] += 1
         option_id = _ant_decision_value(decision, "option_id", "optionId", vote_option_ids.get(vote))
         raw_action = _ant_decision_value(decision, "action", default=None)
         action = str(raw_action or ("predict" if option_id in predictions else "neutral"))
@@ -2946,6 +3070,7 @@ def vote_from_ant_agent_decisions(
                 {
                     "antId": ant.ant_id,
                     "archetype": ant.archetype,
+                    "analysisRole": role,
                     "vote": vote,
                     "voteLabel": vote_labels.get(vote),
                     "action": action,
@@ -2982,6 +3107,9 @@ def vote_from_ant_agent_decisions(
         "market": market,
         "voteCounts": vote_counts,
         "voteLabels": vote_labels,
+        "roleVoteCounts": role_vote_counts,
+        "roleAntCounts": role_ant_counts,
+        "reliabilitySummary": reliability_summary(reliability),
         "agentSamples": samples,
     }
 
@@ -3547,8 +3675,558 @@ def public_vote(vote: dict[str, Any]) -> dict[str, Any]:
         public["market"] = vote.get("market", {})
         public["voteCounts"] = vote.get("voteCounts", {})
         public["voteLabels"] = vote.get("voteLabels", {})
+        public["roleVoteCounts"] = vote.get("roleVoteCounts", {})
+        public["roleAntCounts"] = vote.get("roleAntCounts", {})
+        public["reliabilitySummary"] = vote.get("reliabilitySummary", {})
         public["agentSamples"] = vote.get("agentSamples", [])
     return public
+
+
+def reliability_summary(reliability: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(reliability, dict):
+        return {}
+    return {
+        "level": reliability.get("level"),
+        "qualityScore": reliability.get("qualityScore"),
+        "issueCodes": list(reliability.get("issueCodes") or []),
+        "sampleSize": reliability.get("sampleSize"),
+        "signalSampleSize": reliability.get("signalSampleSize"),
+        "recentSampleSize": reliability.get("recentSampleSize"),
+        "recentSignalSampleSize": reliability.get("recentSignalSampleSize"),
+        "unresolvedVar": bool(reliability.get("unresolvedVar")),
+    }
+
+
+def agent_reliability_context(reliability: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose source quality without leaking another role's sample volumes."""
+
+    if not isinstance(reliability, dict):
+        return {}
+    return {
+        "level": reliability.get("level"),
+        "qualityScore": reliability.get("qualityScore"),
+        "issueCodes": list(reliability.get("issueCodes") or []),
+        "unresolvedVar": bool(reliability.get("unresolvedVar")),
+        "confirmedFalseCount": reliability.get("confirmedFalseCount"),
+        "discardedCount": reliability.get("discardedCount"),
+        "amendedCount": reliability.get("amendedCount"),
+        "confirmedMissingIsNeutral": True,
+    }
+
+
+def build_market_signal_pack(
+    match_state: MatchState | None,
+    opportunity: Opportunity,
+) -> dict[str, Any]:
+    """Build one deterministic TXLine-derived evidence packet for a market.
+
+    The packet contains all three lenses, but callers must select exactly one
+    with :func:`role_evidence_from_signal_pack` before creating an ant payload.
+    Reliability is deliberately factual: only explicit bad or missing source
+    states are reported, and ``confirmed=None`` remains neutral.
+    """
+
+    source_event = opportunity.source_event if isinstance(opportunity.source_event, dict) else {}
+    raw_events = list(match_state.recent_events) if match_state else []
+    if source_event and not any(_same_signal_record(source_event, item) for item in raw_events):
+        raw_events.append(source_event)
+    canonical_events = canonicalize_signal_events(raw_events)
+
+    history_clock = max(
+        (clock for event in canonical_events if (clock := _signal_clock_seconds(event)) is not None),
+        default=None,
+    )
+    source_clock = _signal_clock_seconds(source_event)
+    current_clock = source_clock if source_clock is not None else history_clock
+    source_minute = parse_int(source_event.get("minute"))
+    current_minute = source_minute
+    if current_minute is None and current_clock is not None:
+        current_minute = current_clock // 60
+
+    score = _signal_score_from_canonical_events(canonical_events)
+    raw_history_has_score = any(_event_score_has_value(event) for event in raw_events)
+    if score is None and not raw_history_has_score:
+        score = match_state.score if match_state and isinstance(match_state.score, dict) else None
+    score_context = _signal_score_context(score, current_minute, current_clock)
+
+    recent_events = [
+        event
+        for event in canonical_events
+        if current_clock is not None
+        and (event_clock := _signal_clock_seconds(event)) is not None
+        and current_clock - 300 <= event_clock <= current_clock
+    ]
+
+    cumulative_counts = _empty_signal_counts()
+    recent_counts = _empty_signal_counts()
+    classified_events: list[dict[str, Any]] = []
+    recent_classified_events: list[dict[str, Any]] = []
+    classified_missing_clock = 0
+    classified_missing_team = 0
+
+    for event in canonical_events:
+        signal_types = _signal_types(event)
+        if not signal_types:
+            continue
+        if event.get("confirmed") is not None and not truthy(event.get("confirmed")):
+            continue
+        classified_events.append(event)
+        team_key = _signal_team_key(event, match_state)
+        event_clock = _signal_clock_seconds(event)
+        if team_key == "unknown":
+            classified_missing_team += 1
+        if event_clock is None:
+            classified_missing_clock += 1
+        for signal_type in signal_types:
+            cumulative_counts[team_key][signal_type] += 1
+        if (
+            current_clock is not None
+            and event_clock is not None
+            and current_clock - 300 <= event_clock <= current_clock
+        ):
+            recent_classified_events.append(event)
+            for signal_type in signal_types:
+                recent_counts[team_key][signal_type] += 1
+
+    reliability = _signal_reliability(
+        raw_events=raw_events,
+        canonical_events=canonical_events,
+        classified_events=classified_events,
+        recent_events=recent_events,
+        recent_classified_events=recent_classified_events,
+        current_clock=current_clock,
+        score_available=bool(score_context["scoreAvailable"]),
+        missing_clock_count=classified_missing_clock,
+        missing_team_count=classified_missing_team,
+    )
+    team_labels = {
+        "participant1": match_state.participant1 if match_state else None,
+        "participant2": match_state.participant2 if match_state else None,
+        "unknown": "Unknown team",
+    }
+    recent_event_sample = [
+        _signal_event_brief(event, match_state, current_clock)
+        for event in recent_classified_events[-8:]
+    ]
+    role_evidence = {
+        "reactive": {
+            "role": "reactive",
+            "windowMinutes": 5,
+            "sampleSize": len(recent_events),
+            "signalSampleSize": len(recent_classified_events),
+            "countsByTeam": recent_counts,
+            "teamLabels": team_labels,
+            "recentEvents": recent_event_sample,
+        },
+        "statistical": {
+            "role": "statistical",
+            "scope": "full_match_so_far",
+            "sampleSize": len(canonical_events),
+            "signalSampleSize": len(classified_events),
+            "eventCount": len(canonical_events),
+            "countsByTeam": cumulative_counts,
+            "teamLabels": team_labels,
+        },
+        "situational": {
+            "role": "situational",
+            "scoreMinuteContext": score_context,
+            "marketContext": opportunity.context,
+            "riskSugar": MARKET_RISK_SUGAR,
+            "options": [
+                {
+                    "optionId": option.option_id,
+                    "rewardSugar": option.reward_sugar,
+                    "risk": option.risk,
+                }
+                for option in opportunity.options
+            ],
+        },
+    }
+    return {
+        "fixtureId": match_state.fixture_id if match_state else source_event.get("fixtureId"),
+        "marketContext": opportunity.context,
+        "reliability": reliability,
+        "roleEvidence": role_evidence,
+    }
+
+
+def role_evidence_from_signal_pack(signal_pack: dict[str, Any], role: str) -> dict[str, Any]:
+    role_key = role if role in VALID_ANALYSIS_ROLES else "situational"
+    evidence_by_role = signal_pack.get("roleEvidence")
+    if not isinstance(evidence_by_role, dict):
+        return {"role": role_key}
+    evidence = evidence_by_role.get(role_key)
+    return copy.deepcopy(evidence) if isinstance(evidence, dict) else {"role": role_key}
+
+
+def canonicalize_signal_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate event revisions and apply explicit amendments/discards."""
+
+    canonical: list[dict[str, Any] | None] = []
+    sequence_indexes: dict[str, int] = {}
+    latest_id_indexes: dict[str, int] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        action = _event_token(event.get("action"))
+        event_id = event.get("id")
+        id_key = str(event_id) if event_id is not None else None
+        if action == "action_discarded":
+            if id_key is not None and id_key in latest_id_indexes:
+                canonical[latest_id_indexes[id_key]] = None
+            continue
+        if action in {"action_amend", "action_amended"}:
+            if id_key is not None and id_key in latest_id_indexes:
+                index = latest_id_indexes[id_key]
+                canonical[index] = event
+            else:
+                index = len(canonical)
+                canonical.append(event)
+            amended_sequence = event.get("seq")
+            if amended_sequence is not None:
+                sequence_indexes[str(amended_sequence)] = index
+            if id_key is not None:
+                latest_id_indexes[id_key] = index
+            continue
+
+        sequence = event.get("seq")
+        sequence_key = str(sequence) if sequence is not None else None
+        if id_key is not None and id_key in latest_id_indexes:
+            index = latest_id_indexes[id_key]
+            canonical[index] = event
+        elif sequence_key is not None and sequence_key in sequence_indexes:
+            index = sequence_indexes[sequence_key]
+            canonical[index] = event
+        else:
+            index = len(canonical)
+            canonical.append(event)
+        if sequence_key is not None:
+            sequence_indexes[sequence_key] = index
+        if id_key is not None:
+            latest_id_indexes[id_key] = index
+    return [event for event in canonical if isinstance(event, dict)]
+
+
+def _same_signal_record(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_seq = left.get("seq")
+    right_seq = right.get("seq")
+    if left_seq is not None and right_seq is not None:
+        return str(left_seq) == str(right_seq)
+    return left is right
+
+
+def _empty_signal_counts() -> dict[str, dict[str, int]]:
+    return {
+        team: {signal_type: 0 for signal_type in SIGNAL_COUNT_KEYS}
+        for team in ("participant1", "participant2", "unknown")
+    }
+
+
+def _signal_types(event: dict[str, Any]) -> set[str]:
+    flags = {_event_token(value) for value in event.get("highlights") or []}
+    targets = event_targets(event)
+    signal_types: set[str] = set()
+    if "goal" in targets:
+        signal_types.add("goal")
+    if "shot" in targets:
+        signal_types.add("shot")
+    if "corner" in targets:
+        signal_types.add("corner")
+    if "free_kick" in targets:
+        signal_types.add("free_kick")
+    if "foul" in targets:
+        signal_types.add("foul")
+    if "yellow_card" in targets:
+        signal_types.add("yellow")
+    if "red_card" in targets:
+        signal_types.add("red")
+    penalty_tokens = {
+        _event_token(event.get(key))
+        for key in ("action", "type", "outcome", "goalType")
+    }
+    penalty_event = (
+        "penalty" in flags
+        or _event_is_penalty_award(event)
+        or bool(
+            penalty_tokens.intersection(
+                {
+                    "penalty",
+                    "penalty_scored",
+                    "penalty_saved",
+                    "penalty_missed",
+                    "penalty_failed",
+                    "spot_kick",
+                }
+            )
+        )
+    )
+    if penalty_event:
+        signal_types.add("penalty")
+        if "goal" in targets:
+            signal_types.add("penalty_scored")
+        elif targets.intersection({"miss", "saved"}):
+            signal_types.add("penalty_missed")
+    if "high_danger" in flags or _event_has_text(event, "high_danger", "high danger", "danger_possession"):
+        signal_types.add("danger")
+    if "attack" in flags or _event_has_text(event, "attack_possession", "attack possession"):
+        signal_types.add("attack")
+    return signal_types
+
+
+def _signal_requires_confirmation(event: dict[str, Any]) -> bool:
+    return bool(
+        _signal_types(event).intersection(
+            {"goal", "penalty", "penalty_scored", "penalty_missed"}
+        )
+    )
+
+
+def _signal_clock_seconds(event: dict[str, Any]) -> int | None:
+    clock = parse_int(event.get("clockSeconds"))
+    if clock is not None and clock >= 0:
+        return clock
+    minute = parse_int(event.get("minute"))
+    return minute * 60 if minute is not None and minute >= 0 else None
+
+
+def _signal_team_key(event: dict[str, Any], match_state: MatchState | None) -> str:
+    participant = event.get("participant")
+    possession = event.get("possession")
+    for value in (participant, possession):
+        if str(value) == "1":
+            return "participant1"
+        if str(value) == "2":
+            return "participant2"
+
+    labels = [event.get("participantLabel"), event.get("possessionLabel")]
+    participant1 = str(match_state.participant1 or "").strip().casefold() if match_state else ""
+    participant2 = str(match_state.participant2 or "").strip().casefold() if match_state else ""
+    for label in labels:
+        normalized = str(label or "").strip().casefold()
+        if normalized and participant1 and normalized == participant1:
+            return "participant1"
+        if normalized and participant2 and normalized == participant2:
+            return "participant2"
+    return "unknown"
+
+
+def _signal_score_from_canonical_events(
+    events: Iterable[dict[str, Any]],
+) -> dict[str, int | None] | None:
+    """Rebuild the latest score without trusting an event later discarded."""
+
+    score: dict[str, int | None] = {"participant1": None, "participant2": None}
+    found = False
+    for event in events:
+        if event.get("confirmed") is not None and not truthy(event.get("confirmed")):
+            continue
+        event_score = event.get("score")
+        if not isinstance(event_score, dict):
+            continue
+        for participant in ("participant1", "participant2"):
+            value = parse_int(event_score.get(participant))
+            if value is None:
+                continue
+            score[participant] = value
+            found = True
+    if not found:
+        return None
+    return {
+        "participant1": score["participant1"],
+        "participant2": score["participant2"],
+    }
+
+
+def _signal_score_context(
+    score: dict[str, Any] | None,
+    minute: int | None,
+    clock_seconds: int | None,
+) -> dict[str, Any]:
+    participant1 = parse_int(score.get("participant1")) if isinstance(score, dict) else None
+    participant2 = parse_int(score.get("participant2")) if isinstance(score, dict) else None
+    score_available = participant1 is not None and participant2 is not None
+    time_available = minute is not None or clock_seconds is not None
+    available = score_available and time_available
+    if not score_available:
+        leader = "unknown"
+    elif participant1 == participant2:
+        leader = "tied"
+    elif participant1 > participant2:
+        leader = "participant1"
+    else:
+        leader = "participant2"
+    return {
+        "available": available,
+        "scoreAvailable": score_available,
+        "timeAvailable": time_available,
+        "score": {
+            "participant1": participant1,
+            "participant2": participant2,
+        },
+        "minute": minute,
+        "clockSeconds": clock_seconds,
+        "leader": leader,
+    }
+
+
+def _signal_reliability(
+    *,
+    raw_events: list[dict[str, Any]],
+    canonical_events: list[dict[str, Any]],
+    classified_events: list[dict[str, Any]],
+    recent_events: list[dict[str, Any]],
+    recent_classified_events: list[dict[str, Any]],
+    current_clock: int | None,
+    score_available: bool,
+    missing_clock_count: int,
+    missing_team_count: int,
+) -> dict[str, Any]:
+    scoped_raw_events = _recent_reliability_events(raw_events, current_clock)
+    scoped_canonical_events = _recent_reliability_events(canonical_events, current_clock)
+    unconfirmed_count = len(
+        [
+            event
+            for event in scoped_canonical_events
+            if event.get("confirmed") is not None and not truthy(event.get("confirmed"))
+            and _signal_requires_confirmation(event)
+        ]
+    )
+    discarded_count = len(
+        [event for event in scoped_raw_events if _event_token(event.get("action")) == "action_discarded"]
+    )
+    amended_count = len(
+        [
+            event
+            for event in scoped_raw_events
+            if _event_token(event.get("action")) in {"action_amend", "action_amended"}
+        ]
+    )
+    unresolved_var = _has_unresolved_var(raw_events)
+    latest_event_clock = max(
+        (clock for event in canonical_events if (clock := _signal_clock_seconds(event)) is not None),
+        default=None,
+    )
+
+    issues: list[dict[str, Any]] = []
+
+    def add_issue(code: str, count: int | None = None) -> None:
+        issue: dict[str, Any] = {"code": code}
+        if count is not None:
+            issue["count"] = count
+        issues.append(issue)
+
+    if unconfirmed_count:
+        add_issue("explicitly_unconfirmed", unconfirmed_count)
+    if unresolved_var:
+        add_issue("unresolved_var")
+    if discarded_count:
+        add_issue("discarded_action", discarded_count)
+    if amended_count:
+        add_issue("amended_action", amended_count)
+    if current_clock is None:
+        add_issue("missing_current_clock")
+    if missing_clock_count:
+        add_issue("missing_event_clock", missing_clock_count)
+    if missing_team_count:
+        add_issue("missing_event_team", missing_team_count)
+    if not score_available:
+        add_issue("missing_score")
+    if not canonical_events:
+        add_issue("missing_sample")
+    elif len(recent_events) < 2:
+        add_issue("small_recent_sample", len(recent_events))
+    if (
+        current_clock is not None
+        and latest_event_clock is not None
+        and current_clock - latest_event_clock > 300
+    ):
+        add_issue("stale_event_clock")
+
+    critical_codes = {"explicitly_unconfirmed", "unresolved_var"}
+    issue_codes = [str(issue["code"]) for issue in issues]
+    if any(code in critical_codes for code in issue_codes):
+        level = "poor"
+    elif issues:
+        level = "limited"
+    else:
+        level = "good"
+    quality_score = max(
+        0.0,
+        1.0
+        - sum(0.3 if code in critical_codes else 0.1 for code in issue_codes),
+    )
+    return {
+        "level": level,
+        "qualityScore": round(quality_score, 2),
+        "issues": issues,
+        "issueCodes": issue_codes,
+        "eventCount": len(canonical_events),
+        "sampleSize": len(canonical_events),
+        "signalSampleSize": len(classified_events),
+        "recentSampleSize": len(recent_events),
+        "recentSignalSampleSize": len(recent_classified_events),
+        "unresolvedVar": unresolved_var,
+        "confirmedFalseCount": unconfirmed_count,
+        "discardedCount": discarded_count,
+        "amendedCount": amended_count,
+        "confirmedMissingIsNeutral": True,
+    }
+
+
+def _recent_reliability_events(
+    events: list[dict[str, Any]],
+    current_clock: int | None,
+) -> list[dict[str, Any]]:
+    if current_clock is None:
+        return events[-12:]
+    recent = [
+        event
+        for event in events
+        if (clock := _signal_clock_seconds(event)) is not None
+        and current_clock - 300 <= clock <= current_clock
+    ]
+    return recent or events[-12:]
+
+
+def _has_unresolved_var(events: list[dict[str, Any]]) -> bool:
+    unresolved = False
+    for event in events:
+        action = _event_token(event.get("action"))
+        if action in {"var_end", "var_complete", "var_completed"}:
+            unresolved = False
+            continue
+        if action not in {"var", "var_start"}:
+            continue
+        has_explicit_resolution = _event_has_text(
+            event,
+            "var end",
+            "overturned",
+            "confirmed goal",
+            "goal confirmed",
+            "penalty confirmed",
+            "no penalty",
+            "review complete",
+        )
+        unresolved = not has_explicit_resolution
+    return unresolved
+
+
+def _signal_event_brief(
+    event: dict[str, Any],
+    match_state: MatchState | None,
+    current_clock: int | None,
+) -> dict[str, Any]:
+    event_clock = _signal_clock_seconds(event)
+    return {
+        "secondsAgo": (
+            max(0, current_clock - event_clock)
+            if current_clock is not None and event_clock is not None
+            else None
+        ),
+        "action": event.get("action"),
+        "team": _signal_team_key(event, match_state),
+        "signalTypes": sorted(_signal_types(event)),
+    }
 
 
 def recent_event_brief(match_state: MatchState | None) -> list[dict[str, Any]]:

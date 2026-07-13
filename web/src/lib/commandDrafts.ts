@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
-import type { ColonyStrategy } from "./types";
+import type { AnalysisRole, Style } from "./types";
+
+export interface ColonyDoctrineDraft {
+  style: Style;
+}
 
 export interface AntCommandDraft {
-  custom: boolean;
-  strategy: ColonyStrategy;
+  analysisRole: AnalysisRole;
 }
 
 interface PendingCommandSave<T> {
@@ -30,7 +33,7 @@ export interface CommandDraftSubmission<T> {
 }
 
 export interface ColonyCommandDrafts {
-  global?: CommandDraftEntry<ColonyStrategy>;
+  global?: CommandDraftEntry<ColonyDoctrineDraft>;
   ants: Record<string, CommandDraftEntry<AntCommandDraft>>;
 }
 
@@ -63,26 +66,24 @@ function revision(value: unknown, fallback = -1): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function isStrategy(value: unknown): value is ColonyStrategy {
+function isDoctrine(value: unknown): value is ColonyDoctrineDraft {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Partial<ColonyStrategy>;
-  return ["cautious", "balanced", "aggressive"].includes(String(candidate.style))
-    && ["penalties", "corners", "momentum", "chaos", "balanced"].includes(String(candidate.favoriteContext))
-    && ["low", "medium", "high"].includes(String(candidate.infoNeed));
+  const candidate = value as Partial<ColonyDoctrineDraft>;
+  return ["cautious", "balanced", "aggressive"].includes(String(candidate.style));
 }
 
 function isAntDraft(value: unknown): value is AntCommandDraft {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as { custom?: unknown; strategy?: unknown };
-  return typeof candidate.custom === "boolean" && isStrategy(candidate.strategy);
+  const candidate = value as Partial<AntCommandDraft>;
+  return ["reactive", "statistical", "situational"].includes(String(candidate.analysisRole));
 }
 
-function cloneStrategy(value: ColonyStrategy): ColonyStrategy {
-  return { ...value };
+function cloneDoctrine(value: ColonyDoctrineDraft): ColonyDoctrineDraft {
+  return { style: value.style };
 }
 
 function cloneAntDraft(value: AntCommandDraft): AntCommandDraft {
-  return { custom: value.custom, strategy: cloneStrategy(value.strategy) };
+  return { analysisRole: value.analysisRole };
 }
 
 function normalizePending<T>(
@@ -131,12 +132,12 @@ function normalizeDrafts(value: unknown): ColonyCommandDrafts | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as { global?: unknown; ants?: unknown };
 
-  // Schema v2 wraps every value with the server revision it was based on and
-  // an edit token. Legacy values are retained with revision -1: the first
-  // authoritative roster that already equals them safely reconciles them.
-  const global = normalizeEntry(candidate.global, isStrategy, cloneStrategy)
-    ?? (isStrategy(candidate.global) ? {
-      value: cloneStrategy(candidate.global),
+  // The current command UI stores only the global doctrine and one analysis
+  // role per ant. A legacy global strategy is safely reduced to its style;
+  // legacy per-ant drafts have no equivalent role and are intentionally ignored.
+  const global = normalizeEntry(candidate.global, isDoctrine, cloneDoctrine)
+    ?? (isDoctrine(candidate.global) ? {
+      value: cloneDoctrine(candidate.global),
       baseRevision: -1,
       editId: nextId("edit"),
       pending: [],
@@ -211,15 +212,12 @@ function replaceSnapshot(key: string, next: ColonyCommandDrafts): void {
   notify(key);
 }
 
-function sameStrategy(left: ColonyStrategy, right: ColonyStrategy): boolean {
-  return left.style === right.style
-    && left.favoriteContext === right.favoriteContext
-    && left.infoNeed === right.infoNeed;
+function sameDoctrine(left: ColonyDoctrineDraft, right: ColonyDoctrineDraft): boolean {
+  return left.style === right.style;
 }
 
 function sameAntDraft(left: AntCommandDraft, right: AntCommandDraft): boolean {
-  return left.custom === right.custom
-    && (!left.custom || sameStrategy(left.strategy, right.strategy));
+  return left.analysisRole === right.analysisRole;
 }
 
 function subscribe(key: string, listener: () => void): () => void {
@@ -318,7 +316,7 @@ export function useColonyCommandDrafts(gameId: string, colonyId: string): Colony
 export function setGlobalCommandDraft(
   gameId: string,
   colonyId: string,
-  draft: ColonyStrategy | null,
+  draft: ColonyDoctrineDraft | null,
   baseRevision: number,
 ): void {
   const key = draftKey(gameId, colonyId);
@@ -327,10 +325,10 @@ export function setGlobalCommandDraft(
     replaceSnapshot(key, { ants: current.ants });
     return;
   }
-  if (current.global && sameStrategy(current.global.value, draft)) return;
+  if (current.global && sameDoctrine(current.global.value, draft)) return;
   replaceSnapshot(key, {
     global: {
-      value: cloneStrategy(draft),
+      value: cloneDoctrine(draft),
       baseRevision: Math.max(revision(baseRevision), current.global?.baseRevision ?? -1),
       editId: nextId("edit"),
       pending: current.global?.pending ?? [],
@@ -370,11 +368,11 @@ export function beginGlobalCommandSave(
   gameId: string,
   colonyId: string,
   expectedEditId: string,
-): CommandDraftSubmission<ColonyStrategy> | null {
+): CommandDraftSubmission<ColonyDoctrineDraft> | null {
   const key = draftKey(gameId, colonyId);
   const current = getSnapshot(key);
   if (!current.global) return null;
-  const started = beginSave(current.global, expectedEditId, cloneStrategy);
+  const started = beginSave(current.global, expectedEditId, cloneDoctrine);
   if (!started) return null;
   replaceSnapshot(key, { global: started.entry, ants: current.ants });
   return started.submission;
@@ -402,14 +400,14 @@ export function beginAntCommandSave(
 export function reconcileGlobalCommandDraft(
   gameId: string,
   colonyId: string,
-  serverValue: ColonyStrategy,
+  serverValue: ColonyDoctrineDraft,
   serverRevision: number,
   acknowledgedSaveId?: string,
 ): void {
   const key = draftKey(gameId, colonyId);
   const current = getSnapshot(key);
   if (!current.global) return;
-  const nextGlobal = reconcileEntry(current.global, serverValue, serverRevision, sameStrategy, acknowledgedSaveId);
+  const nextGlobal = reconcileEntry(current.global, serverValue, serverRevision, sameDoctrine, acknowledgedSaveId);
   if (nextGlobal === current.global) return;
   replaceSnapshot(key, {
     ...(nextGlobal ? { global: nextGlobal } : {}),

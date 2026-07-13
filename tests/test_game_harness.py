@@ -47,6 +47,7 @@ from app.game.harness import (
     build_opportunities,
     create_prediction,
     info_cost_for_colony,
+    natural_analysis_role,
     opportunity_options,
     run_vote,
     should_buy_info,
@@ -884,15 +885,13 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(
             first_ant["strategy"],
             {
-                "style": "aggressive",
-                "favoriteContext": "chaos",
-                "infoNeed": "low",
-                "inheritsGlobal": False,
-                "source": "custom",
+                "analysisRole": natural_analysis_role(ant),
             },
         )
-        self.assertEqual(inherited_ant["strategy"]["style"], "balanced")
-        self.assertTrue(inherited_ant["strategy"]["inheritsGlobal"])
+        self.assertEqual(
+            set(inherited_ant["strategy"]),
+            {"analysisRole"},
+        )
         self.assertEqual(first_call["context"]["colony"]["strategyRevision"], 1)
         self.assertEqual(first_call["context"]["rules"]["agentCallMode"], "batch")
         self.assertEqual(room.public_state()["agentCallMode"], "batch")
@@ -913,10 +912,7 @@ class GameHarnessTest(unittest.TestCase):
 
         second_call = agent.calls[-1]
         second_ant = next(item for item in second_call["ants"] if item["antId"] == ant.ant_id)
-        self.assertEqual(second_ant["strategy"]["style"], "balanced")
-        self.assertEqual(second_ant["strategy"]["favoriteContext"], "momentum")
-        self.assertEqual(second_ant["strategy"]["infoNeed"], "medium")
-        self.assertTrue(second_ant["strategy"]["inheritsGlobal"])
+        self.assertEqual(second_ant["strategy"]["analysisRole"], natural_analysis_role(ant))
         self.assertEqual(second_call["context"]["colony"]["strategyRevision"], 2)
         self.assertNotIn(ant.ant_id, colony.public_state(room.event_index)["antStrategies"])
 
@@ -2578,7 +2574,7 @@ class GameHarnessTest(unittest.TestCase):
                     {
                         "antId": ant["antId"],
                         "vote": vote,
-                        "reason": f"{ant['archetype']} likes pressure",
+                        "reason": f"{ant['antId']} likes pressure",
                     }
                     for ant in ants
                 ]
@@ -2607,13 +2603,15 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertEqual(len(agent.calls), len(BASELINE_MARKET_CONTEXTS))
         self.assertEqual([call["context"]["market"]["context"] for call in agent.calls], list(BASELINE_MARKET_CONTEXTS))
-        self.assertEqual(agent.calls[0]["context"]["colony"]["style"], "balanced")
-        self.assertEqual(agent.calls[0]["context"]["colony"]["favoriteContext"], "momentum")
-        self.assertEqual(agent.calls[0]["context"]["colony"]["infoNeed"], "medium")
+        self.assertNotIn("style", agent.calls[0]["context"]["colony"])
+        self.assertNotIn("favoriteContext", agent.calls[0]["context"]["colony"])
+        self.assertNotIn("infoNeed", agent.calls[0]["context"]["colony"])
+        self.assertTrue(agent.calls[0]["context"]["rules"]["doctrineAppliedAfterVotes"])
         self.assertEqual(agent.calls[0]["context"]["market"]["availableVotes"][0]["vote"], "yes")
         self.assertIn("objective", agent.calls[0]["ants"][0])
-        self.assertIn("personality", agent.calls[0]["ants"][0])
-        self.assertIn("memory", agent.calls[0]["ants"][0])
+        self.assertNotIn("archetype", agent.calls[0]["ants"][0])
+        self.assertNotIn("personality", agent.calls[0]["ants"][0])
+        self.assertNotIn("memory", agent.calls[0]["ants"][0])
         self.assertTrue(any(event.kind == "ant_agent_vote" for event in room.log))
         self.assertTrue(any(prediction.option.option_id == "goal_next_10_yes" for prediction in room.predictions.values()))
         self.assertFalse(any(event.kind == "agent_decision" for event in room.log))
@@ -2843,8 +2841,9 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(schema["required"], ["antId", "vote"])
         self.assertNotIn("reason", schema["properties"])
         system_prompt = payload["messages"][0]["content"]
-        self.assertIn("cautious ants should abstain unless the signal is strong", system_prompt)
-        self.assertIn("aggressive ants may choose with lighter evidence", system_prompt)
+        self.assertIn("doctrine is applied only after all individual votes", system_prompt)
+        self.assertIn("must not change what an ant votes for", system_prompt)
+        self.assertNotIn("aggressive ants may choose with lighter evidence", system_prompt)
 
     def test_openrouter_ant_payload_uses_dynamic_market_vote_schema(self):
         agent = OpenRouterColonyAgent(

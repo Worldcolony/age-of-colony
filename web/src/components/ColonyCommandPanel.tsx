@@ -11,18 +11,19 @@ import {
   setGlobalCommandDraft,
   useColonyCommandDrafts,
   type AntCommandDraft,
+  type ColonyDoctrineDraft,
   type CommandDraftEntry,
 } from "@/lib/commandDrafts";
 import {
-  FOCUS_OPTIONS,
+  ANALYSIS_ROLE_OPTIONS,
   STYLE_OPTIONS,
   isStrategyEditableStatus,
   optionLabel,
   strategySummary,
   type StyleDoctrine,
-  type StrategyOption,
 } from "@/lib/strategy";
 import type {
+  AnalysisRole,
   Ant,
   AntBet,
   AntDetailResponse,
@@ -82,7 +83,6 @@ function ColonyCommandPanelState({
   const [globalError, setGlobalError] = useState("");
   const [announcement, setAnnouncement] = useState("");
   const [query, setQuery] = useState("");
-  const [overridesOnly, setOverridesOnly] = useState(false);
   const [selectedAntId, setSelectedAntId] = useState<string | null>(null);
   const [selectedAntView, setSelectedAntView] = useState<"history" | "strategy">("strategy");
   const [antDetail, setAntDetail] = useState<AntDetailResponse | null>(null);
@@ -97,17 +97,23 @@ function ColonyCommandPanelState({
   const currentGlobalRevision = rosterIsAtLeastAsFresh
     ? roster!.strategyRevision
     : colony.strategyRevision ?? -1;
-  const globalDraft = commandDrafts.global?.value ?? currentGlobal;
+  const currentDoctrine = doctrineFromStrategy(currentGlobal);
+  const globalDraft = commandDrafts.global?.value ?? currentDoctrine;
   const adminControl = controlMode === "admin";
   const antsLabel = adminControl ? "Colony ants" : "My ants";
-  const globalDirty = Boolean(commandDrafts.global && !sameStrategy(commandDrafts.global.value, currentGlobal));
+  const globalDirty = Boolean(commandDrafts.global && !sameDoctrine(commandDrafts.global.value, currentDoctrine));
   const ants = roster?.ants ?? EMPTY_ANTS;
   const antDraftDirty = Object.entries(commandDrafts.ants).some(([antId, entry]) => {
     const ant = ants.find((candidate) => candidate.antId === antId);
     return !ant || !sameAntCommand(entry.value, ant);
   });
   const commandDirty = globalDirty || antDraftDirty;
-  const customCount = ants.filter((ant) => !ant.strategy.inheritsGlobal).length;
+  const roleCounts = useMemo(() => Object.fromEntries(
+    ANALYSIS_ROLE_OPTIONS.map((option) => [
+      option.value,
+      ants.filter((ant) => effectiveAnalysisRole(ant, commandDrafts.ants[ant.antId])).length,
+    ]),
+  ) as Record<AnalysisRole, number>, [ants, commandDrafts.ants]);
   const selectedAnt = ants.find((ant) => ant.antId === selectedAntId) ?? null;
   const rosterPaneClass = selectedAnt
     ? compactLayout ? "hidden" : "hidden xl:grid"
@@ -118,14 +124,15 @@ function ColonyCommandPanelState({
   const visibleAnts = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return ants.filter((ant) => {
-      if (overridesOnly && ant.strategy.inheritsGlobal) return false;
       if (!needle) return true;
-      return [ant.antId, ant.archetype, ant.naturalFocus, ant.strategy.favoriteContext]
+      const role = effectiveAnalysisRole(ant, commandDrafts.ants[ant.antId]);
+      const roleOption = ANALYSIS_ROLE_OPTIONS.find((option) => option.value === role);
+      return [ant.antId, ant.archetype, roleOption?.label, roleOption?.shortLabel]
         .join(" ")
         .toLowerCase()
         .includes(needle);
     });
-  }, [ants, overridesOnly, query]);
+  }, [ants, commandDrafts.ants, query]);
 
   useEffect(() => {
     onDirtyChange?.(commandDirty);
@@ -137,23 +144,17 @@ function ColonyCommandPanelState({
     reconcileGlobalCommandDraft(
       gameId,
       colony.colonyId,
-      {
-        style: currentGlobal.style,
-        favoriteContext: currentGlobal.favoriteContext,
-        infoNeed: currentGlobal.infoNeed,
-      },
+      { style: currentGlobal.style },
       currentGlobalRevision,
     );
   }, [
     colony.colonyId,
-    currentGlobal.favoriteContext,
-    currentGlobal.infoNeed,
     currentGlobal.style,
     currentGlobalRevision,
     gameId,
   ]);
 
-  function updateGlobalDraft(update: (current: ColonyStrategy) => ColonyStrategy) {
+  function updateGlobalDraft(update: (current: ColonyDoctrineDraft) => ColonyDoctrineDraft) {
     const next = update(globalDraft);
     // A second mounted panel can edit while this panel's PATCH is pending. If
     // that newer edit returns to the current server value, retain it as a new
@@ -162,7 +163,7 @@ function ColonyCommandPanelState({
     setGlobalCommandDraft(
       gameId,
       colony.colonyId,
-      sameStrategy(next, currentGlobal) && !hasPendingSave ? null : next,
+      sameDoctrine(next, currentDoctrine) && !hasPendingSave ? null : next,
       currentGlobalRevision,
     );
   }
@@ -278,7 +279,7 @@ function ColonyCommandPanelState({
     setAnnouncement("");
     try {
       const game = await api.updateStrategy(gameId, colony.colonyId, {
-        ...submittedDraft,
+        style: submittedDraft.style,
         anonymousId,
       });
       const savedColony = game.colonies.find((candidate) => candidate.colonyId === colony.colonyId);
@@ -287,7 +288,7 @@ function ColonyCommandPanelState({
         reconcileGlobalCommandDraft(
           gameId,
           colony.colonyId,
-          savedStrategy,
+          doctrineFromStrategy(savedStrategy),
           savedColony.strategyRevision ?? submission.baseRevision + 1,
           submission.saveId,
         );
@@ -392,7 +393,9 @@ function ColonyCommandPanelState({
           >
             <span className="text-lg" aria-hidden="true">👑</span>
             <strong className="text-sm">Colony strategy</strong>
-            <span className="truncate text-xs text-ink-faint">{strategySummary(strategyFromColony(colony))}</span>
+            <span className="truncate text-xs text-ink-faint">
+              Doctrine {optionLabel(STYLE_OPTIONS, colony.style)}
+            </span>
           </button>
           <button
             type="button"
@@ -414,11 +417,10 @@ function ColonyCommandPanelState({
 
       {expanded && (
         <div id={disclosureId} className="colony-command-disclosure grid gap-4 border-t-2 border-[color:var(--brd-soft)] pt-3">
-          <div className="seg" role="tablist" aria-label="Colony command scope">
+          <div className="seg" aria-label="Colony command scope">
             <button
               type="button"
-              role="tab"
-              aria-selected={scope === "ants"}
+              aria-pressed={scope === "ants"}
               data-active={scope === "ants"}
               onClick={() => openScope("ants")}
             >
@@ -426,8 +428,7 @@ function ColonyCommandPanelState({
             </button>
             <button
               type="button"
-              role="tab"
-              aria-selected={scope === "colony"}
+              aria-pressed={scope === "colony"}
               data-active={scope === "colony"}
               onClick={() => openScope("colony")}
             >
@@ -436,7 +437,7 @@ function ColonyCommandPanelState({
           </div>
 
           {scope === "colony" && (
-            <section className="well grid gap-3 p-3" role="tabpanel" aria-labelledby={`${disclosureId}-global-title`}>
+            <section className="well grid gap-3 p-3" aria-labelledby={`${disclosureId}-global-title`}>
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <p className="eyebrow">Default orders</p>
@@ -445,7 +446,7 @@ function ColonyCommandPanelState({
                 <span className="status-pill !border-green/50 !text-green">Next market</span>
               </div>
               <p className="text-xs leading-relaxed text-ink-faint">
-                Ants set to follow the colony inherit these orders. Ants with a custom strategy keep their own orders.
+                The doctrine controls how much consensus is required before the colony enters. Each ant keeps its own analysis role.
               </p>
 
               <DoctrineSelector
@@ -454,28 +455,7 @@ function ColonyCommandPanelState({
                 onChange={(style) => updateGlobalDraft((current) => ({ ...current, style }))}
                 disabled={!editable || savingGlobal}
                 descriptionId={`${disclosureId}-style-help`}
-                mode="colony"
               />
-
-              <details className="strategy-advanced well px-3 py-2">
-                <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-ink-soft">
-                  <span>Market preference</span>
-                  <span className="status-pill !px-2 !py-0.5">{optionLabel(FOCUS_OPTIONS, globalDraft.favoriteContext)}</span>
-                </summary>
-                <div className="grid gap-3 border-t border-[color:var(--brd-soft)] pb-1 pt-3">
-                  <ChoiceChips
-                    legend="Signals to favor"
-                    options={FOCUS_OPTIONS}
-                    value={globalDraft.favoriteContext}
-                    onChange={(favoriteContext) => updateGlobalDraft((current) => ({ ...current, favoriteContext }))}
-                    disabled={!editable || savingGlobal}
-                    descriptionId={`${disclosureId}-focus-help`}
-                  />
-                  <p className="text-[11px] leading-relaxed text-ink-faint">
-                    This preference guides the ants. It does not change the colony&apos;s consensus gate.
-                  </p>
-                </div>
-              </details>
 
               {globalError && <InlineError message={globalError} />}
               {!editable && <InlineNotice message="This match is finished. Orders are now read-only." />}
@@ -510,14 +490,14 @@ function ColonyCommandPanelState({
           )}
 
           {scope === "ants" && (
-            <section className="grid min-w-0 gap-3" role="tabpanel" aria-labelledby={`${disclosureId}-ants-title`}>
+            <section className="grid min-w-0 gap-3" aria-labelledby={`${disclosureId}-ants-title`}>
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <p className="eyebrow">Individual control</p>
                   <h3 id={`${disclosureId}-ants-title`} className="font-bold">{antsLabel}</h3>
                   {roster && (
                     <p className="mt-1 text-xs text-ink-faint">
-                      {roster.ants.length - customCount} follow colony · {customCount} custom
+                      One analysis role per ant. The colony doctrine stays global.
                     </p>
                   )}
                 </div>
@@ -538,24 +518,18 @@ function ColonyCommandPanelState({
               ) : roster ? (
                 <div className={`command-ant-workspace grid min-w-0 gap-3 ${compactLayout ? "" : "xl:grid-cols-[minmax(250px,0.72fr)_minmax(0,1.28fr)]"}`}>
                   <div className={`${rosterPaneClass} min-w-0 content-start gap-3`}>
-                    <div className={`grid gap-2 ${compactLayout ? "" : "sm:grid-cols-[1fr_auto] xl:grid-cols-1"}`}>
+                    <RoleDistribution counts={roleCounts} />
+
+                    <div className="grid gap-2">
                       <label>
                         <span className="sr-only">Search ants</span>
                         <input
                           className="input !py-2 text-sm"
                           type="search"
-                          placeholder="Search ant or archetype"
+                          placeholder="Search ant, archetype or role"
                           value={query}
                           onChange={(event) => setQuery(event.target.value)}
                         />
-                      </label>
-                      <label className="well flex min-h-11 cursor-pointer items-center gap-2 px-3 text-sm font-bold text-ink-soft">
-                        <input
-                          type="checkbox"
-                          checked={overridesOnly}
-                          onChange={(event) => setOverridesOnly(event.target.checked)}
-                        />
-                        Custom strategies only
                       </label>
                     </div>
 
@@ -582,12 +556,11 @@ function ColonyCommandPanelState({
                               <span className="min-w-0">
                                 <span className="flex min-w-0 items-center gap-2">
                                   <strong className="truncate text-sm">{antLabel(ant)}</strong>
-                                  {hasDraft
-                                    ? <span className="status-pill !border-gold/60 !px-2 !py-0.5 !text-gold-deep">draft</span>
-                                    : !ant.strategy.inheritsGlobal && <span className="status-pill !px-2 !py-0.5">custom</span>}
+                                  {hasDraft && <span className="status-pill !border-gold/60 !px-2 !py-0.5 !text-gold-deep">draft</span>}
+                                  {selected && <span className="status-pill !border-gold/60 !px-2 !py-0.5 !text-gold-deep">selected</span>}
                                 </span>
                                 <span className="mt-1 block truncate text-xs text-ink-faint">
-                                  {strategySummary(ant.strategy)} · {performanceLabel(ant)}
+                                  {optionLabel(ANALYSIS_ROLE_OPTIONS, effectiveAnalysisRole(ant, commandDrafts.ants[ant.antId]))} · {performanceLabel(ant)}
                                 </span>
                               </span>
                               <span className="font-mono text-sm font-bold text-gold-deep" aria-hidden="true">→</span>
@@ -625,7 +598,6 @@ function ColonyCommandPanelState({
                           loading={loadingAntDetail}
                           error={antDetailError}
                           view={selectedAntView}
-                          globalStrategy={currentGlobal}
                           disabled={!editable || !selectedAnt.alive}
                           onViewChange={setSelectedAntView}
                           onRefresh={() => loadAntDetail(selectedAnt.antId)}
@@ -676,7 +648,6 @@ function AntDetailPanel({
   loading,
   error,
   view,
-  globalStrategy,
   disabled,
   onViewChange,
   onRefresh,
@@ -691,7 +662,6 @@ function AntDetailPanel({
   loading: boolean;
   error: string;
   view: "history" | "strategy";
-  globalStrategy: ColonyStrategy;
   disabled: boolean;
   onViewChange: (view: "history" | "strategy") => void;
   onRefresh: () => Promise<void>;
@@ -712,7 +682,7 @@ function AntDetailPanel({
               <p className="eyebrow">Selected ant</p>
               <h4 className="truncate text-base font-bold">{antLabel(currentAnt)}</h4>
               <p className="mt-1 truncate text-xs text-ink-faint">
-                {strategySummary(currentAnt.strategy)} · influence {currentAnt.influence.toFixed(2)}
+                {optionLabel(ANALYSIS_ROLE_OPTIONS, analysisRoleFromAnt(currentAnt))} · {ANALYSIS_ROLE_OPTIONS.find((option) => option.value === analysisRoleFromAnt(currentAnt))?.shortLabel}
               </p>
             </div>
           </div>
@@ -726,11 +696,10 @@ function AntDetailPanel({
         </div>
       </div>
 
-      <div className="seg" role="tablist" aria-label={`Details for ${antLabel(currentAnt)}`}>
+      <div className="seg" aria-label={`Details for ${antLabel(currentAnt)}`}>
         <button
           type="button"
-          role="tab"
-          aria-selected={view === "strategy"}
+          aria-pressed={view === "strategy"}
           data-active={view === "strategy"}
           onClick={() => onViewChange("strategy")}
         >
@@ -738,8 +707,7 @@ function AntDetailPanel({
         </button>
         <button
           type="button"
-          role="tab"
-          aria-selected={view === "history"}
+          aria-pressed={view === "history"}
           data-active={view === "history"}
           onClick={() => onViewChange("history")}
         >
@@ -748,7 +716,7 @@ function AntDetailPanel({
       </div>
 
       {view === "history" ? (
-        <div role="tabpanel" className="grid gap-3">
+        <div className="grid gap-3">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs leading-relaxed text-ink-faint">
               Sugar belongs to the colony. Each row shows this ant&apos;s vote and the colony position it joined.
@@ -779,12 +747,11 @@ function AntDetailPanel({
           {error && detail && <InlineNotice message={`History refresh failed: ${error}`} />}
         </div>
       ) : (
-        <div role="tabpanel" className="grid gap-3">
+        <div className="grid gap-3">
           <AntOrderEditor
             key={currentAnt.antId}
             id={`${id}-orders`}
             ant={currentAnt}
-            globalStrategy={globalStrategy}
             disabled={disabled}
             onClose={() => onViewChange("history")}
             onSave={onSave}
@@ -899,14 +866,12 @@ function DoctrineSelector({
   onChange,
   disabled,
   descriptionId,
-  mode,
 }: {
   legend: string;
   value: ColonyStrategy["style"];
   onChange: (value: ColonyStrategy["style"]) => void;
   disabled: boolean;
   descriptionId: string;
-  mode: "colony" | "ant";
 }) {
   const selected = STYLE_OPTIONS.find((option) => option.value === value) ?? STYLE_OPTIONS[0];
   return (
@@ -925,21 +890,13 @@ function DoctrineSelector({
           >
             <span className="doctrine-card-head">
               <strong>{option.label}</strong>
-              {mode === "colony" && <b className="doctrine-gate-number">{option.gateVotes}/20</b>}
+              <b className="doctrine-gate-number">{option.gateVotes}/20</b>
             </span>
-            <span className="doctrine-card-kicker">
-              {mode === "colony" ? option.cadenceLabel : option.antShortLabel}
-            </span>
+            <span className="doctrine-card-kicker">{option.cadenceLabel}</span>
           </button>
         ))}
       </div>
-      {mode === "colony" ? (
-        <ConsensusGatePreview doctrine={selected} descriptionId={descriptionId} />
-      ) : (
-        <p id={descriptionId} className="strategy-effect text-xs leading-relaxed text-ink-faint">
-          <strong className="text-ink-soft">{selected.antShortLabel}.</strong> {selected.antDescription}
-        </p>
-      )}
+      <ConsensusGatePreview doctrine={selected} descriptionId={descriptionId} />
     </fieldset>
   );
 }
@@ -978,42 +935,68 @@ function ConsensusGatePreview({
   );
 }
 
-function ChoiceChips<T extends string>({
-  legend,
-  options,
+function RoleDistribution({ counts }: { counts: Record<AnalysisRole, number> }) {
+  const titleId = useId();
+  return (
+    <section className="grid gap-2" aria-labelledby={titleId}>
+      <div>
+        <p className="eyebrow">Role distribution</p>
+        <h4 id={titleId} className="text-sm font-bold text-ink">How the ants read each market</h4>
+      </div>
+      <dl className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+        {ANALYSIS_ROLE_OPTIONS.map((option) => (
+          <div key={option.value} className="well grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2">
+            <dt className="min-w-0">
+              <span className="block truncate text-xs font-bold text-ink">{option.label}</span>
+              <span className="block truncate text-[10px] text-ink-faint">{option.shortLabel}</span>
+            </dt>
+            <dd className="order-first font-mono text-xl font-bold text-gold-deep">{counts[option.value]}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function AnalysisRoleSelector({
   value,
   onChange,
   disabled,
   descriptionId,
 }: {
-  legend: string;
-  options: readonly StrategyOption<T>[];
-  value: T;
-  onChange: (value: T) => void;
+  value: AnalysisRole;
+  onChange: (value: AnalysisRole) => void;
   disabled: boolean;
   descriptionId: string;
 }) {
-  const selected = options.find((option) => option.value === value) ?? options[0];
+  const selected = ANALYSIS_ROLE_OPTIONS.find((option) => option.value === value) ?? ANALYSIS_ROLE_OPTIONS[0];
   return (
     <fieldset className="grid gap-2" aria-describedby={descriptionId}>
-      <legend className="text-sm font-bold text-ink-soft">{legend}</legend>
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className="chip disabled:cursor-not-allowed disabled:opacity-50"
-            data-active={option.value === value}
-            aria-pressed={option.value === value}
-            disabled={disabled}
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
+      <legend className="text-sm font-bold text-ink-soft">Analysis role</legend>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {ANALYSIS_ROLE_OPTIONS.map((option) => {
+          const active = option.value === value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              className={`well grid min-h-24 cursor-pointer content-start gap-1 p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${active ? "!border-gold bg-gold/10" : "hover:border-gold/60"}`}
+              aria-pressed={active}
+              disabled={disabled}
+              onClick={() => onChange(option.value)}
+            >
+              <span className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-sm text-ink">{option.label}</strong>
+                {active && <span className="status-pill !border-gold/60 !px-2 !py-0.5 !text-gold-deep">Selected</span>}
+              </span>
+              <span className="text-xs font-bold text-ink-soft">{option.shortLabel}</span>
+              <span className="text-[11px] leading-relaxed text-ink-faint">{option.description}</span>
+            </button>
+          );
+        })}
       </div>
-      <p id={descriptionId} className="text-xs leading-relaxed text-ink-faint">
-        <strong className="text-ink-soft">{selected.shortLabel}.</strong> {selected.description}
+      <p id={descriptionId} className="text-xs leading-relaxed text-ink-faint" aria-live="polite">
+        <strong className="text-ink-soft">{selected.label} reads {selected.shortLabel.toLowerCase()}.</strong> The colony doctrine still decides how much consensus is required.
       </p>
     </fieldset>
   );
@@ -1022,7 +1005,6 @@ function ChoiceChips<T extends string>({
 function AntOrderEditor({
   id,
   ant,
-  globalStrategy,
   disabled,
   onClose,
   onSave,
@@ -1032,7 +1014,6 @@ function AntOrderEditor({
 }: {
   id: string;
   ant: Ant;
-  globalStrategy: ColonyStrategy;
   disabled: boolean;
   onClose: () => void;
   onSave: (patch: AntStrategyPatch, submittedDraft: CommandDraftEntry<AntCommandDraft>) => Promise<void>;
@@ -1042,13 +1023,11 @@ function AntOrderEditor({
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const serverStrategy = strategyFromAnt(ant);
-  const custom = commandDraft?.value.custom ?? !ant.strategy.inheritsGlobal;
-  const draft = commandDraft?.value.strategy ?? serverStrategy;
+  const draft = commandDraft?.value ?? commandFromAnt(ant);
   const dirty = Boolean(commandDraft && !sameAntCommand(commandDraft.value, ant));
 
-  function updateDraft(nextCustom: boolean, nextStrategy: ColonyStrategy) {
-    const next = { custom: nextCustom, strategy: nextStrategy };
+  function updateDraft(analysisRole: AnalysisRole) {
+    const next = { analysisRole };
     // Keep a clean-looking newer edit while an older request is pending. Its
     // edit token is what prevents that older acknowledgement from winning.
     const hasPendingSave = Boolean(commandDraft?.pending.length);
@@ -1069,10 +1048,7 @@ function AntOrderEditor({
     setSaving(true);
     setError("");
     try {
-      await onSave(
-        custom ? draft : { inheritGlobal: true },
-        commandDraft,
-      );
+      await onSave({ analysisRole: draft.analysisRole }, commandDraft);
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -1082,53 +1058,16 @@ function AntOrderEditor({
 
   return (
     <form id={id} className="ant-order-editor well grid gap-3 p-3" onSubmit={submit}>
-      <fieldset className="grid gap-2">
-        <legend className="text-sm font-bold text-ink-soft">Order source</legend>
-        <div className="seg">
-          <button type="button" data-active={!custom} aria-pressed={!custom} disabled={disabled || saving} onClick={() => updateDraft(false, draft)}>
-            Follow colony
-          </button>
-          <button type="button" data-active={custom} aria-pressed={custom} disabled={disabled || saving} onClick={() => updateDraft(true, draft)}>
-            Custom
-          </button>
-        </div>
-      </fieldset>
-
-      {!custom ? (
-        <div className="rounded-md border-2 border-green/30 bg-green/10 p-3 text-xs leading-relaxed text-ink-soft">
-          <p>
-            This ant follows <strong>{optionLabel(STYLE_OPTIONS, globalStrategy.style)}</strong> colony orders and every later colony update.
-          </p>
-          <p className="mt-1 text-ink-faint">Choose Custom to give it a different voting posture.</p>
-        </div>
-      ) : (
-        <div className="grid gap-3">
-          <DoctrineSelector
-            legend="Personal voting posture"
-            value={draft.style}
-            disabled={disabled || saving}
-            onChange={(style) => updateDraft(custom, { ...draft, style })}
-            descriptionId={`${id}-style-help`}
-            mode="ant"
-          />
-          <details className="strategy-advanced well px-3 py-2">
-            <summary className="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-bold text-ink-soft">
-              <span>Personal market preference</span>
-              <span className="status-pill !px-2 !py-0.5">{optionLabel(FOCUS_OPTIONS, draft.favoriteContext)}</span>
-            </summary>
-            <div className="border-t border-[color:var(--brd-soft)] pb-1 pt-3">
-              <ChoiceChips
-                legend="Signals to favor"
-                options={FOCUS_OPTIONS}
-                value={draft.favoriteContext}
-                onChange={(favoriteContext) => updateDraft(custom, { ...draft, favoriteContext })}
-                disabled={disabled || saving}
-                descriptionId={`${id}-focus-help`}
-              />
-            </div>
-          </details>
-        </div>
-      )}
+      <div>
+        <p className="eyebrow">One choice for this ant</p>
+        <h5 className="text-sm font-bold text-ink">Choose which match data it prioritizes</h5>
+      </div>
+      <AnalysisRoleSelector
+        value={draft.analysisRole}
+        disabled={disabled || saving}
+        onChange={updateDraft}
+        descriptionId={`${id}-role-help`}
+      />
 
       {!ant.alive && <InlineNotice message="This ant is dead and cannot receive new orders." />}
       {error && <InlineError message={error} />}
@@ -1147,7 +1086,7 @@ function AntOrderEditor({
           {dirty ? "Keep draft & close" : "View history"}
         </button>
         <button type="submit" className="btn btn-primary !min-h-11 px-3 py-2 text-sm" disabled={disabled || !dirty || saving} aria-busy={saving}>
-          {saving ? "Applying..." : custom ? "Apply personal orders" : "Follow colony orders"}
+          {saving ? "Applying role..." : `Apply ${optionLabel(ANALYSIS_ROLE_OPTIONS, draft.analysisRole)} role`}
         </button>
       </div>
       <p className="text-center text-[11px] font-bold text-ink-faint">Applies to next market</p>
@@ -1245,30 +1184,37 @@ function strategyFromColony(colony: Colony): ColonyStrategy {
   };
 }
 
-function strategyFromAnt(ant: Ant): ColonyStrategy {
-  return {
-    style: ant.strategy.style,
-    favoriteContext: ant.strategy.favoriteContext,
-    infoNeed: ant.strategy.infoNeed,
-  };
+function doctrineFromStrategy(strategy: Pick<ColonyStrategy, "style">): ColonyDoctrineDraft {
+  return { style: strategy.style };
+}
+
+function sameDoctrine(left: ColonyDoctrineDraft, right: ColonyDoctrineDraft): boolean {
+  return left.style === right.style;
+}
+
+function analysisRoleFromAnt(ant: Ant): AnalysisRole {
+  const storedRole = (ant.strategy as Partial<typeof ant.strategy>).analysisRole;
+  if (storedRole && ANALYSIS_ROLE_OPTIONS.some((option) => option.value === storedRole)) {
+    return storedRole;
+  }
+  if (ant.archetype === "momentum" || ant.archetype === "chaos") return "reactive";
+  if (ant.archetype === "cautious" || ant.archetype === "data_first") return "statistical";
+  return "situational";
+}
+
+function effectiveAnalysisRole(
+  ant: Ant,
+  draft?: CommandDraftEntry<AntCommandDraft>,
+): AnalysisRole {
+  return draft?.value.analysisRole ?? analysisRoleFromAnt(ant);
 }
 
 function commandFromAnt(ant: Ant): AntCommandDraft {
-  return {
-    custom: !ant.strategy.inheritsGlobal,
-    strategy: strategyFromAnt(ant),
-  };
+  return { analysisRole: analysisRoleFromAnt(ant) };
 }
 
 function sameAntCommand(draft: AntCommandDraft, ant: Ant): boolean {
-  return draft.custom === !ant.strategy.inheritsGlobal
-    && (!draft.custom || sameStrategy(draft.strategy, ant.strategy));
-}
-
-function sameStrategy(left: ColonyStrategy, right: ColonyStrategy): boolean {
-  return left.style === right.style
-    && left.favoriteContext === right.favoriteContext
-    && left.infoNeed === right.infoNeed;
+  return draft.analysisRole === analysisRoleFromAnt(ant);
 }
 
 function antLabel(ant: Ant): string {

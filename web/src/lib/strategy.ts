@@ -1,4 +1,4 @@
-import type { FavoriteContext, InfoNeed, Style } from "./types";
+import type { AnalysisRole, FavoriteContext, InfoNeed, Style } from "./types";
 
 export interface StrategyOption<T extends string> {
   value: T;
@@ -10,8 +10,6 @@ export interface StrategyOption<T extends string> {
 export interface StyleDoctrine extends StrategyOption<Style> {
   gateVotes: number;
   cadenceLabel: string;
-  antShortLabel: string;
-  antDescription: string;
 }
 
 export const STYLE_OPTIONS = [
@@ -22,8 +20,6 @@ export const STYLE_OPTIONS = [
     description: "Enter only when ant consensus is especially strong.",
     gateVotes: 14,
     cadenceLabel: "Fewer, stronger entries",
-    antShortLabel: "Demand conviction",
-    antDescription: "This ant is encouraged to abstain unless the available signal feels strong.",
   },
   {
     value: "balanced",
@@ -32,8 +28,6 @@ export const STYLE_OPTIONS = [
     description: "Enter when ant consensus is clear.",
     gateVotes: 12,
     cadenceLabel: "Measured entries",
-    antShortLabel: "Weigh the signal",
-    antDescription: "This ant is encouraged to balance evidence and opportunity before choosing.",
   },
   {
     value: "aggressive",
@@ -42,10 +36,29 @@ export const STYLE_OPTIONS = [
     description: "Enter more often because lighter consensus is enough.",
     gateVotes: 11,
     cadenceLabel: "More frequent entries",
-    antShortLabel: "Back the instinct",
-    antDescription: "This ant is encouraged to choose with lighter evidence and abstain less often.",
   },
 ] as const satisfies readonly StyleDoctrine[];
+
+export const ANALYSIS_ROLE_OPTIONS = [
+  {
+    value: "reactive",
+    label: "Scout",
+    shortLabel: "Last 5 minutes",
+    description: "Tracks recent pressure, shots, corners, and fast changes in the match.",
+  },
+  {
+    value: "statistical",
+    label: "Analyst",
+    shortLabel: "Full match",
+    description: "Compares cumulative trends and resists short-lived bursts of momentum.",
+  },
+  {
+    value: "situational",
+    label: "Tactician",
+    shortLabel: "Score and minute",
+    description: "Reads the score, time remaining, and each team's urgency.",
+  },
+] as const satisfies readonly StrategyOption<AnalysisRole>[];
 
 export const FOCUS_OPTIONS = [
   {
@@ -121,8 +134,10 @@ export function optionLabel<T extends string>(
 
 export function strategySummary(strategy: {
   style: Style;
-  favoriteContext: FavoriteContext;
-  infoNeed: InfoNeed;
+  analysisRole?: AnalysisRole | null;
 }): string {
-  return `${optionLabel(STYLE_OPTIONS, strategy.style)} · ${optionLabel(FOCUS_OPTIONS, strategy.favoriteContext)}`;
+  const doctrine = optionLabel(STYLE_OPTIONS, strategy.style);
+  return strategy.analysisRole
+    ? `${optionLabel(ANALYSIS_ROLE_OPTIONS, strategy.analysisRole)} · ${doctrine}`
+    : doctrine;
 }

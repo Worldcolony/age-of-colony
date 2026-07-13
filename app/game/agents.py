@@ -547,31 +547,46 @@ class OpenRouterColonyAgent:
     ) -> list[AntAgentDecision] | None:
         decisions: list[AntAgentDecision] = []
         batch_size = max(1, self.settings.ant_batch_size)
-        for start in range(0, len(ants), batch_size):
-            calls = self.calls_by_game.get(game_id, 0)
-            if calls >= self.settings.max_calls_per_game or not self._reserve_agent_call(game_id):
-                raise AgentDecisionError("Budget d'appels agent atteint pour cette partie.")
+        # A mixed-role prompt would expose every evidence lens to the same model
+        # call. Split batches by analysis role first so Scout, Analyst and
+        # Tactician evidence remain mechanically isolated while retaining the
+        # lower-cost batch mode (normally at most three calls for 20 ants).
+        role_groups: dict[str, list[dict[str, Any]]] = {}
+        for ant in ants:
+            strategy = ant.get("strategy") if isinstance(ant, dict) else None
+            role = strategy.get("analysisRole") if isinstance(strategy, dict) else None
+            role_key = str(role or "unassigned")
+            role_groups.setdefault(role_key, []).append(ant)
 
-            batch = ants[start : start + batch_size]
-            data = self._call_openrouter_ants_for_game(game_id=game_id, stage=stage, context=context, ants=batch)
-            parsed = self._parse_ant_decisions(data, batch, _vote_map_from_context(context))
-            if len(parsed) != len(batch):
-                answered_ids = {decision.ant_id for decision in parsed}
-                missing_ids = [str(ant.get("antId") or "") for ant in batch if str(ant.get("antId") or "") not in answered_ids]
-                raise AgentDecisionError(
-                    f"DeepSeek answered for {len(parsed)}/{len(batch)} ants in a batch.",
-                    details=[
-                        {
-                            "category": "missing_ant_decisions",
-                            "missingAntIds": missing_ids[:20],
-                            "missingCount": len(missing_ids),
-                        }
-                    ],
-                )
-            for decision in parsed:
-                decision.raw["_callMode"] = "batch"
-            decisions.extend(parsed)
-        return decisions
+        for role_key, role_ants in role_groups.items():
+            for start in range(0, len(role_ants), batch_size):
+                calls = self.calls_by_game.get(game_id, 0)
+                if calls >= self.settings.max_calls_per_game or not self._reserve_agent_call(game_id):
+                    raise AgentDecisionError("Budget d'appels agent atteint pour cette partie.")
+
+                batch = role_ants[start : start + batch_size]
+                data = self._call_openrouter_ants_for_game(game_id=game_id, stage=stage, context=context, ants=batch)
+                parsed = self._parse_ant_decisions(data, batch, _vote_map_from_context(context))
+                if len(parsed) != len(batch):
+                    answered_ids = {decision.ant_id for decision in parsed}
+                    missing_ids = [str(ant.get("antId") or "") for ant in batch if str(ant.get("antId") or "") not in answered_ids]
+                    raise AgentDecisionError(
+                        f"DeepSeek answered for {len(parsed)}/{len(batch)} ants in a batch.",
+                        details=[
+                            {
+                                "category": "missing_ant_decisions",
+                                "missingAntIds": missing_ids[:20],
+                                "missingCount": len(missing_ids),
+                            }
+                        ],
+                    )
+                for decision in parsed:
+                    decision.raw["_callMode"] = "batch"
+                    decision.raw["_analysisRoleBatch"] = role_key
+                decisions.extend(parsed)
+
+        decision_by_id = {decision.ant_id: decision for decision in decisions}
+        return [decision_by_id[str(ant.get("antId") or "")] for ant in ants]
 
     def _call_openrouter_ants_for_game(
         self,
@@ -779,11 +794,19 @@ class OpenRouterColonyAgent:
                     "role": "system",
                     "content": (
                         "You control individual ants in a football prediction game. "
-                        "Each item in ants is an autonomous, fixed voter with its own personality and memory. "
+                        "Each item in ants is an autonomous, fixed voter with one assigned analysis role. "
                         "Your job is not to guess what the colony wants: each ant follows its own objective "
                         "and votes for the outcome it believes is best for the colony's Sugar total. "
-                        "Each ant also receives strategy orders. Follow those current orders while keeping "
-                        "the ant's personality and memory as its individual point of view. "
+                        "Each ant independently interprets only the evidence attached to that role. "
+                        "strategy.analysisRole controls the only football evidence lens this ant may use: "
+                        "reactive reads the last five minutes, statistical reads full-match counts, and "
+                        "situational reads score, minute and market context. Do not reconstruct or borrow "
+                        "another role's evidence. dataReliability is a common factual quality check. An ant must "
+                        "vote abstain when its own role evidence is missing or irrelevant to the current market, "
+                        "or when the source is explicitly unreliable. There is no sentinel role. "
+                        "The colony doctrine is applied only after all individual votes as a consensus threshold. "
+                        "It must not change what an ant votes for or how often that ant abstains. Legacy per-ant "
+                        "style, favoriteContext and infoNeed orders are intentionally absent from this decision. "
                         "Do not return a global decision: return exactly one decision per provided antId. "
                         "The only allowed output for each ant is one vote from game.market.availableVotes. "
                         "Do not invent confidence, score, probability, stake or info requests. "
