@@ -7,26 +7,45 @@ export interface StrategyOption<T extends string> {
   description: string;
 }
 
+export interface StyleDoctrine extends StrategyOption<Style> {
+  gateVotes: number;
+  cadenceLabel: string;
+  antShortLabel: string;
+  antDescription: string;
+}
+
 export const STYLE_OPTIONS = [
   {
     value: "cautious",
     label: "Cautious",
     shortLabel: "Wait for strength",
     description: "Enter only when ant consensus is especially strong.",
+    gateVotes: 14,
+    cadenceLabel: "Fewer, stronger entries",
+    antShortLabel: "Demand conviction",
+    antDescription: "This ant is encouraged to abstain unless the available signal feels strong.",
   },
   {
     value: "balanced",
     label: "Balanced",
     shortLabel: "Stay flexible",
     description: "Enter when ant consensus is clear.",
+    gateVotes: 12,
+    cadenceLabel: "Measured entries",
+    antShortLabel: "Weigh the signal",
+    antDescription: "This ant is encouraged to balance evidence and opportunity before choosing.",
   },
   {
     value: "aggressive",
     label: "Aggressive",
     shortLabel: "Press the edge",
     description: "Enter more often because lighter consensus is enough.",
+    gateVotes: 11,
+    cadenceLabel: "More frequent entries",
+    antShortLabel: "Back the instinct",
+    antDescription: "This ant is encouraged to choose with lighter evidence and abstain less often.",
   },
-] as const satisfies readonly StrategyOption<Style>[];
+] as const satisfies readonly StyleDoctrine[];
 
 export const FOCUS_OPTIONS = [
   {

@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
@@ -9,8 +9,11 @@ import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
+import { AdminColonySwitcher } from "@/components/AdminColonySwitcher";
+import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
 import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
+import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, game_started: 3 };
@@ -99,11 +102,16 @@ interface MarketOutcome {
 
 export default function CockpitPage() {
   const { id } = useParams<{ id: string }>();
-  return <CockpitRun key={id} id={id} />;
+  return (
+    <Suspense fallback={<div className="grid min-h-[70dvh] place-items-center text-sm font-bold text-ink-faint">Loading cockpit...</div>}>
+      <CockpitRun key={id} id={id} />
+    </Suspense>
+  );
 }
 
 function CockpitRun({ id }: { id: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const storedGame = useStore((s) => s.game);
   const game = storedGame?.gameId === id ? storedGame : null;
   const setGame = useStore((s) => s.setGame);
@@ -123,6 +131,9 @@ function CockpitRun({ id }: { id: string }) {
   const [selectedMarketId, setSelectedMarketId] = useState<string | null>(null);
   const [selectedSettledId, setSelectedSettledId] = useState<string | null>(null);
   const [watchedColonyId, setWatchedColonyId] = useState<string | null>(null);
+  const [mobileAdminCommandDirty, setMobileAdminCommandDirty] = useState(false);
+  const [desktopAdminCommandDirty, setDesktopAdminCommandDirty] = useState(false);
+  const defaultAdminColonyIdRef = useRef<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const snapshotRequestSequence = useRef(0);
   const snapshotReadyRef = useRef(false);
@@ -191,6 +202,7 @@ function CockpitRun({ id }: { id: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    let snapshotInterval: number | null = null;
     const resetTimer = window.setTimeout(() => {
       if (cancelled) return;
       setCockpitLoading(true);
@@ -233,16 +245,20 @@ function CockpitRun({ id }: { id: string }) {
           if (cancelled) return;
           setCockpitLoading(false);
           setCockpitError(error instanceof Error ? error.message : "This simulation could not be loaded.");
+          if (snapshotInterval !== null) {
+            window.clearInterval(snapshotInterval);
+            snapshotInterval = null;
+          }
         }
       }
     }
 
     loadSnapshot();
-    const interval = window.setInterval(loadSnapshot, 5000);
+    snapshotInterval = window.setInterval(loadSnapshot, 5000);
     return () => {
       cancelled = true;
       window.clearTimeout(resetTimer);
-      window.clearInterval(interval);
+      if (snapshotInterval !== null) window.clearInterval(snapshotInterval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -272,19 +288,32 @@ function CockpitRun({ id }: { id: string }) {
       if (g.status === "created") setSheetOpen(true);
       setLastSyncAt(Date.now());
     },
-  });
+  }, !cockpitError);
 
   const sorted = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => colonySugar(b) - colonySugar(a)), [game?.colonies]);
   useEffect(() => {
     sortedRef.current = sorted;
   }, [sorted]);
   const ownColony = useMemo(() => findIdentityColony(game, identity.snapshot), [game, identity.snapshot]);
-  const adminRoom = (game?.players?.length ?? 0) === 0;
-  const spectatorFallback = adminRoom
-    ? sorted.find((colony) => colony.colonyId === watchedColonyId) ?? sorted[0]
+  const adminRoom = game?.roomKind === "admin";
+  const adminContext = game ? adminRoom : searchParams.get("from") === "admin";
+  const cockpitExitHref = adminContext
+    ? "/admin"
+    : game?.roomCode ? `/room/${game.roomCode}` : "/lobby";
+  const resultsHref = adminContext ? `/results/${id}?from=admin` : `/results/${id}`;
+  if (adminRoom && !defaultAdminColonyIdRef.current && sorted[0]) {
+    // Pin the initial choice: ranking changes must never silently switch which
+    // colony receives the admin's next command.
+    defaultAdminColonyIdRef.current = sorted[0].colonyId;
+  }
+  const selectedAdminColonyId = watchedColonyId ?? defaultAdminColonyIdRef.current;
+  const selectedAdminColony = adminRoom
+    ? sorted.find((colony) => colony.colonyId === selectedAdminColonyId) ?? sorted[0]
     : undefined;
-  const mine = ownColony ?? spectatorFallback;
-  const colonyFocusLabel = ownColony ? "Your colony" : adminRoom ? "Admin colony" : "Watched colony";
+  // Admin selection and player ownership are deliberately separate. A player
+  // can never use watchedColonyId to replace the colony linked to their wallet.
+  const mine = adminRoom ? selectedAdminColony : ownColony;
+  const colonyFocusLabel = adminRoom ? "Admin colony" : ownColony ? "Your colony" : "Watched colony";
   const myIdx = mine ? sorted.findIndex((c) => c.colonyId === mine.colonyId) : -1;
   const rank = myIdx >= 0 ? myIdx + 1 : 0;
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
@@ -347,10 +376,27 @@ function CockpitRun({ id }: { id: string }) {
       <CockpitLoadState
         loading={cockpitLoading || !cockpitError}
         error={cockpitError}
-        onBack={() => router.push("/lobby")}
+        backLabel={adminContext ? "Back to admin" : "Back to lobby"}
+        onBack={() => router.push(cockpitExitHref)}
         onRetry={() => window.location.reload()}
       />
     );
+  }
+
+  function selectAdminColony(colonyId: string): boolean {
+    if (!adminRoom || !game.colonies.some((colony) => colony.colonyId === colonyId)) return false;
+    if (colonyId === mine?.colonyId) {
+      worldLink.focusColony(colonyId);
+      return true;
+    }
+    if ((mobileAdminCommandDirty || desktopAdminCommandDirty)
+      && !window.confirm("Discard unsaved colony orders and control another colony?")) return false;
+    if (mine?.colonyId) discardColonyCommandDrafts(id, mine.colonyId);
+    setMobileAdminCommandDirty(false);
+    setDesktopAdminCommandDirty(false);
+    setWatchedColonyId(colonyId);
+    worldLink.focusColony(colonyId);
+    return true;
   }
 
   const colonyRail = sorted.length > 0 && (
@@ -361,8 +407,11 @@ function CockpitRun({ id }: { id: string }) {
           type="button"
           data-mine={colony.colonyId === mine?.colonyId}
           onClick={() => {
-            if (adminRoom) setWatchedColonyId(colony.colonyId);
-            worldLink.focusColony(colony.colonyId);
+            if (adminRoom) {
+              if (!selectAdminColony(colony.colonyId)) return;
+            } else {
+              worldLink.focusColony(colony.colonyId);
+            }
             setSheetOpen(false); // drop the sheet so you see the flight
           }}
         >
@@ -409,7 +458,7 @@ function CockpitRun({ id }: { id: string }) {
           onSelectSettled={setSelectedSettledId}
         />
       )}
-      {activeTab === "feed" && <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />}
+      {activeTab === "feed" && <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />}
     </>
   );
 
@@ -429,15 +478,14 @@ function CockpitRun({ id }: { id: string }) {
           { icon: "🍬", value: mine ? colonySugar(mine) : "—", title: "Sugar" },
         ]}
         nav={[
-          { icon: "🏟️", label: "Room", onClick: () => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby") },
-          { icon: "🏆", label: "Ranks", onClick: () => router.push(`/results/${id}`) },
+          { icon: adminRoom ? "👑" : "🏟️", label: adminRoom ? "Admin" : "Room", onClick: () => router.push(cockpitExitHref) },
+          { icon: "🏆", label: "Ranks", onClick: () => router.push(resultsHref) },
           {
-            icon: "🍬",
-            label: "Colony",
+            icon: adminRoom ? "👑" : "🍬",
+            label: adminRoom ? "Control" : "Colony",
             active: sheetOpen && mobileSheetView === "colony",
             disabled: !mine || (!ownColony && !adminRoom),
             onClick: () => {
-              if (adminRoom && mine) setWatchedColonyId(mine.colonyId);
               setMobileSheetView("colony");
               setSheetOpen(true);
             },
@@ -461,7 +509,7 @@ function CockpitRun({ id }: { id: string }) {
               : sheetOpen ? "⛰️ View the map" : openMarkets.length ? `🎯 Markets · ${openMarkets.length} live` : "📊 Decision board"}
           </button>
         }
-        sheetTitle={mobileSheetView === "colony" ? "Colony & Sugar" : "Decision board"}
+        sheetTitle={mobileSheetView === "colony" ? (adminRoom ? "Admin colony control" : "Your colony") : "Decision board"}
         open={sheetOpen}
         onOpenChange={(open) => {
           setSheetOpen(open);
@@ -470,13 +518,37 @@ function CockpitRun({ id }: { id: string }) {
         hint={selectedMarket ? undefined : RUNNING.has(status) ? "colony rings flash as your ants vote" : "drag to orbit · tap a mound"}
       >
         {mobileSheetView === "colony" && mine && (ownColony || adminRoom) ? (
-          <ColonyResourceCard colony={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
+          <div className="grid min-w-0 gap-3">
+            {adminRoom && (
+              <AdminColonySwitcher
+                compact
+                colonies={sorted}
+                colonyId={mine.colonyId}
+                onSelect={selectAdminColony}
+              />
+            )}
+            <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} />
+            <ColonyCommandPanel
+              gameId={id}
+              status={status}
+              colony={mine}
+              anonymousId={identity.anonymousId}
+              controlMode={adminRoom ? "admin" : "player"}
+              compactLayout
+              initialScope={adminRoom ? "colony" : "ants"}
+              expandedByDefault
+              onDirtyChange={adminRoom ? setMobileAdminCommandDirty : undefined}
+              onGameChange={setGame}
+            />
+          </div>
         ) : status === "created" ? (
           <div className="flex flex-col gap-3 text-center">
-            <p className="text-lg font-bold">Room is not live yet</p>
-            <p className="text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
-            <button className="btn btn-primary" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>
-              Back to room
+            <p className="text-lg font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</p>
+            <p className="text-sm text-ink-soft">
+              {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
+            </p>
+            <button className="btn btn-primary" onClick={() => router.push(cockpitExitHref)}>
+              {adminRoom ? "Back to admin" : "Back to room"}
             </button>
           </div>
         ) : (
@@ -506,7 +578,7 @@ function CockpitRun({ id }: { id: string }) {
     {mobileShell}
     <div className="flex min-h-[calc(100dvh-36px)] w-full flex-col gap-4 pb-6 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
       <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
-        <button className="icon-btn" aria-label="Back" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>←</button>
+        <button className="icon-btn" aria-label={adminRoom ? "Back to admin" : "Back"} onClick={() => router.push(cockpitExitHref)}>←</button>
         <div className="text-center">
           <h1 className="hud-title text-[13px]">Live cockpit</h1>
           <p className="text-xs text-ink-faint">{lastSyncAt ? `Synced ${formatClock(lastSyncAt)}` : "Syncing..."}</p>
@@ -516,6 +588,14 @@ function CockpitRun({ id }: { id: string }) {
           {streamState === "reconnecting" ? "reconnect" : status === "created" ? "not started" : status.replace("_", " ") || "live"}
         </span>
       </header>
+
+      {adminRoom && mine && (
+        <AdminColonySwitcher
+          colonies={sorted}
+          colonyId={mine.colonyId}
+          onSelect={selectAdminColony}
+        />
+      )}
 
       <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(520px,1.2fr)_minmax(360px,0.95fr)] 2xl:grid-cols-[360px_minmax(580px,1fr)_430px]">
         <aside className="grid min-w-0 content-start gap-4">
@@ -547,7 +627,7 @@ function CockpitRun({ id }: { id: string }) {
             </div>
           </section>
 
-          <ColonyResourceCard colony={mine} rank={rank} spectator={!ownColony && Boolean(spectatorFallback)} />
+          <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} />
           <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
         </aside>
 
@@ -555,10 +635,12 @@ function CockpitRun({ id }: { id: string }) {
           {status === "created" ? (
             <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:min-h-[360px] xl:justify-center">
               <p className="eyebrow">Simulation dashboard</p>
-              <h2 className="text-2xl font-bold">Room is not live yet</h2>
-              <p className="mx-auto max-w-md text-sm text-ink-soft">Start the match from the room once every player has a colony.</p>
-              <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(game?.roomCode ? `/room/${game.roomCode}` : "/lobby")}>
-                Back to room
+              <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
+              <p className="mx-auto max-w-md text-sm text-ink-soft">
+                {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
+              </p>
+              <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(cockpitExitHref)}>
+                {adminRoom ? "Back to admin" : "Back to room"}
               </button>
             </section>
           ) : (
@@ -611,7 +693,7 @@ function CockpitRun({ id }: { id: string }) {
               )}
 
               {activeTab === "feed" && (
-                <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(`/results/${id}`)} />
+                <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
               )}
 
             </section>
@@ -619,11 +701,25 @@ function CockpitRun({ id }: { id: string }) {
         </main>
 
         <aside className="grid min-w-0 content-start gap-4">
+          {mine && (ownColony || adminRoom) && (
+            <ColonyCommandPanel
+              gameId={id}
+              status={status}
+              colony={mine}
+              anonymousId={identity.anonymousId}
+              controlMode={adminRoom ? "admin" : "player"}
+              compactLayout
+              onDirtyChange={adminRoom ? setDesktopAdminCommandDirty : undefined}
+              onGameChange={setGame}
+              initialScope={adminRoom ? "colony" : "ants"}
+              expandedByDefault
+            />
+          )}
           <ColonyRoster
             colonies={sorted}
             activeColonyId={mine?.colonyId}
-            onOpenRanks={() => router.push(`/results/${id}`)}
-            onSelectColony={adminRoom ? setWatchedColonyId : undefined}
+            onOpenRanks={() => router.push(resultsHref)}
+            onSelectColony={adminRoom ? selectAdminColony : undefined}
           />
           <EventStreamCard feedRows={aggregatedFeed.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
         </aside>
@@ -637,7 +733,7 @@ function CockpitRun({ id }: { id: string }) {
               ? "Match interrupted"
               : streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}
         </span>
-        <button className="quiet-link" onClick={() => router.push(`/results/${id}`)}>
+        <button className="quiet-link" onClick={() => router.push(resultsHref)}>
           {status === "finished" ? "View final results" : "Ranks"}
         </button>
       </footer>
@@ -1230,11 +1326,13 @@ function DecisionCell({
 function CockpitLoadState({
   loading,
   error,
+  backLabel,
   onBack,
   onRetry,
 }: {
   loading: boolean;
   error: string;
+  backLabel: string;
   onBack: () => void;
   onRetry: () => void;
 }) {
@@ -1250,7 +1348,7 @@ function CockpitLoadState({
           </p>
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
-          <button type="button" className="btn btn-ghost" onClick={onBack}>Back to lobby</button>
+          <button type="button" className="btn btn-ghost" onClick={onBack}>{backLabel}</button>
           <button type="button" className="btn btn-primary" disabled={loading} onClick={onRetry}>Retry</button>
         </div>
       </section>
@@ -1379,7 +1477,7 @@ function ColonyRoster({
                   </div>
                   <p className="mt-1 truncate text-xs text-ink-faint">{labelize(colony.style)} temperament · fixed voters</p>
                 </div>
-                {active && <span className="status-pill">{onSelectColony ? "selected" : "active"}</span>}
+                {active && <span className="status-pill">{onSelectColony ? "controlled" : "active"}</span>}
               </div>
 
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">

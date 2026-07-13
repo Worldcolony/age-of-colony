@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Pixelify_Sans, Press_Start_2P, Silkscreen } from "next/font/google";
+import { Suspense } from "react";
 import "./globals.css";
 import WorldColonyBackdrop from "@/three/WorldColonyBackdrop";
 import { BottomNav } from "@/components/BottomNav";
@@ -34,7 +35,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="app-shell relative z-10 mx-auto flex min-h-dvh w-full max-w-[480px] flex-col gap-3 px-4 pb-[110px] pt-3">
             {children}
           </div>
-          <BottomNav />
+          <Suspense fallback={null}>
+            <BottomNav />
+          </Suspense>
           <QueenSync />
         </WalletProvider>
       </body>

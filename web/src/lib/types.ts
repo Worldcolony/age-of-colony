@@ -235,6 +235,7 @@ export interface TxLineValidation {
 
 export interface GameState {
   gameId: string;
+  roomKind?: "admin" | "player";
   roomCode?: string;
   fixtureId?: number | string;
   participant1?: string | null;

@@ -281,8 +281,193 @@ body {
   box-shadow: 2px 2px 0 rgba(74, 58, 30, 0.18);
   pointer-events: none;
 }
+.colony-command-panel {
+  container-name: colony-command;
+  container-type: inline-size;
+}
 .colony-command-disclosure { animation: command-unfold 160ms ease-out both; }
 .ant-order-editor { background: rgba(249, 243, 226, 0.58); }
+
+/* Strategy is a colony doctrine, not a settings form. The three cards make the
+   real 20-ant consensus rule visible before the player commits an order. */
+.doctrine-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.doctrine-card {
+  min-height: 78px;
+  padding: 10px;
+  border: 2px solid var(--brd-soft);
+  border-radius: var(--radius-glass);
+  background: rgba(255, 250, 236, 0.72);
+  color: var(--color-ink-soft);
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 0 0 rgba(74, 58, 30, 0);
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+.doctrine-card:hover:not(:disabled) { border-color: rgba(176, 126, 28, 0.68); }
+.doctrine-card:active:not(:disabled) { transform: translate(1px, 1px); }
+.doctrine-card:focus-visible {
+  outline: 3px solid rgba(176, 126, 28, 0.35);
+  outline-offset: 2px;
+}
+.doctrine-card:disabled { cursor: not-allowed; opacity: 0.5; }
+.doctrine-card[data-active="true"] {
+  transform: translateY(-2px);
+  border-color: var(--color-gold-deep);
+  background: linear-gradient(180deg, #fff7d9, #f2d889);
+  color: var(--color-ink);
+  box-shadow: var(--pixel-shadow), inset 0 2px 0 rgba(255, 253, 238, 0.72);
+}
+.doctrine-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+.doctrine-gate-number {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--color-gold-deep);
+  font-size: 11px;
+}
+.doctrine-card-kicker {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--color-ink-faint);
+}
+.consensus-gate {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 2px solid rgba(176, 126, 28, 0.36);
+  border-radius: var(--radius-glass);
+  background:
+    repeating-linear-gradient(90deg, rgba(176, 126, 28, 0.035) 0 1px, transparent 1px 12px),
+    rgba(255, 250, 236, 0.68);
+}
+.consensus-ant-track {
+  display: grid;
+  grid-template-columns: repeat(20, minmax(4px, 1fr));
+  gap: 3px;
+}
+.consensus-ant-track span {
+  height: 15px;
+  border: 1px solid rgba(74, 58, 30, 0.25);
+  border-radius: 3px;
+  background: rgba(74, 58, 30, 0.12);
+}
+.consensus-ant-track span[data-required="true"] {
+  border-color: #8c6416;
+  background: linear-gradient(180deg, #e7bc58, var(--color-gold));
+  box-shadow: inset 0 2px 0 rgba(255, 247, 210, 0.45);
+}
+.strategy-effect {
+  min-height: 54px;
+  padding: 10px 12px;
+  border-left: 4px solid var(--color-gold);
+  border-radius: 0 var(--radius-glass) var(--radius-glass) 0;
+  background: rgba(176, 126, 28, 0.08);
+}
+.strategy-advanced summary { list-style: none; }
+.strategy-advanced summary::-webkit-details-marker { display: none; }
+.strategy-advanced summary::after {
+  content: "+";
+  flex: none;
+  color: var(--color-gold-deep);
+  font-family: var(--font-mono);
+  font-size: 17px;
+}
+.strategy-advanced[open] summary::after { content: "−"; }
+
+@media (max-width: 420px) {
+  .doctrine-grid { grid-template-columns: 1fr; }
+  .doctrine-card { min-height: 62px; }
+}
+@container colony-command (max-width: 520px) {
+  .doctrine-grid { grid-template-columns: 1fr; }
+  .doctrine-card { min-height: 62px; }
+}
+
+/* Admin-only control baton: separates "who is controlled" from the live ranking. */
+.admin-colony-switcher {
+  background:
+    linear-gradient(90deg, rgba(176, 126, 28, 0.11), transparent 28%),
+    rgba(243, 235, 211, 0.96);
+}
+.admin-colony-switcher::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: repeating-linear-gradient(180deg, var(--color-gold-deep) 0 10px, #e1bb64 10px 16px);
+  pointer-events: none;
+}
+.admin-control-seal {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  flex: none;
+  place-content: center;
+  justify-items: center;
+  gap: 1px;
+  border: 2px solid var(--color-gold-deep);
+  border-radius: 10px;
+  background: linear-gradient(145deg, #f8e8b8, #c98e20);
+  box-shadow: var(--pixel-shadow), inset 2px 2px 0 rgba(255, 250, 230, 0.42);
+  color: #4a3510;
+}
+.admin-control-seal span:last-child {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.admin-colony-select,
+.admin-colony-step {
+  min-height: 48px;
+  border: 2px solid var(--brd-strong);
+  border-radius: 8px;
+  background: rgba(255, 250, 236, 0.94);
+  box-shadow: inset 2px 2px 0 rgba(74, 58, 30, 0.1);
+  color: var(--color-ink);
+}
+.admin-colony-select {
+  width: 100%;
+  padding: 0 38px 0 13px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.admin-colony-step {
+  display: grid;
+  width: 44px;
+  place-items: center;
+  color: var(--color-gold-deep);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background-color 0.12s ease;
+}
+.admin-colony-step:hover { border-color: var(--color-gold-deep); background: #f7ecc9; }
+.admin-colony-step:active { transform: translate(1px, 1px); }
+.admin-colony-select:focus-visible,
+.admin-colony-step:focus-visible {
+  outline: 3px solid rgba(176, 126, 28, 0.35);
+  outline-offset: 2px;
+}
 @keyframes command-unfold {
   from { opacity: 0; transform: translateY(-5px); }
   to { opacity: 1; transform: translateY(0); }
@@ -322,6 +507,8 @@ body {
   .live-dot { animation: none; }
   .blink { animation: none; }
   .colony-command-disclosure { animation: none; }
+  .doctrine-card { transition: none; }
+  .doctrine-card[data-active="true"] { transform: none; }
 }
 
 /* parchment bottom tab bar */

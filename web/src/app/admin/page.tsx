@@ -84,11 +84,10 @@ function gameColonyRosterKey(game: GameState): string {
 }
 
 function isPreparedAdminRoom(game: GameState): boolean {
-  return game.status === "created"
+  return game.roomKind === "admin"
+    && game.status === "created"
     && game.colonies.length > 0
-    && game.players.length === 0
-    && !game.owner?.anonymousId
-    && game.mode !== "live";
+    && game.players.length === 0;
 }
 
 function fixtureFromGame(game: GameState): ReplayFixture {
@@ -579,7 +578,7 @@ export default function AdminPage() {
       setPendingRoom(null);
       setPendingSetupKey("");
       clearLaunchRequestKey(requestKey);
-      router.push(`/cockpit/${started.gameId}`);
+      router.push(`/cockpit/${started.gameId}?from=admin`);
     } catch (error) {
       try {
         const currentRoom = await api.getGame(room.gameId);
@@ -590,7 +589,7 @@ export default function AdminPage() {
           setPendingRoom(null);
           setPendingSetupKey("");
           clearLaunchRequestKey(requestKey);
-          router.push(currentRoom.status === "finished" ? `/results/${currentRoom.gameId}` : `/cockpit/${currentRoom.gameId}`);
+          router.push(currentRoom.status === "finished" ? `/results/${currentRoom.gameId}?from=admin` : `/cockpit/${currentRoom.gameId}?from=admin`);
           return;
         }
       } catch {
@@ -616,7 +615,7 @@ export default function AdminPage() {
       });
       resetGame();
       setGame(game);
-      router.push(`/cockpit/${game.gameId}`);
+      router.push(`/cockpit/${game.gameId}?from=admin`);
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -646,7 +645,7 @@ export default function AdminPage() {
       setGame(started);
       setMatchFixture(fixture);
       clearLaunchRequestKey(requestKey);
-      router.push(`/cockpit/${started.gameId}`);
+      router.push(`/cockpit/${started.gameId}?from=admin`);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) clearLaunchRequestKey(requestKey);
       setMsg((e as Error).message);
@@ -662,7 +661,7 @@ export default function AdminPage() {
       const replay = await api.rerun(game.gameId, REPLAY_SPEED);
       resetGame();
       setGame(replay);
-      router.push(`/cockpit/${replay.gameId}`);
+      router.push(`/cockpit/${replay.gameId}?from=admin`);
     } catch (e) {
       setMsg((e as Error).message);
     } finally {
@@ -671,7 +670,7 @@ export default function AdminPage() {
   }
 
   function openRun(game: GameState) {
-    router.push(`/cockpit/${game.gameId}`);
+    router.push(`/cockpit/${game.gameId}?from=admin`);
   }
 
   async function runDemo() {
@@ -681,7 +680,7 @@ export default function AdminPage() {
       const game = await api.demoRun({});
       resetGame();
       setGame(game);
-      router.push(`/cockpit/${game.gameId}`);
+      router.push(`/cockpit/${game.gameId}?from=admin`);
     } catch (e) {
       setMsg((e as Error).message);
     } finally {

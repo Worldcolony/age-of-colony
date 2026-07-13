@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from .game.harness import PRIVATE_SNAPSHOT_KEY, RoomKind, room_kind_from_snapshot
 from .txline import load_dotenv
+
+
+_LATEST_FIXTURE_MAX_PAGES = 10
+_ADMIN_LIST_MAX_PAGES = 10
+_ADMIN_LIST_LEGACY_MIN_PAGE_SIZE = 50
+_ADMIN_EVENT_BATCH_SIZE = 100
 
 
 class SupabasePersistenceError(RuntimeError):
@@ -63,7 +70,9 @@ class SupabaseGameStore:
         if not self.configured:
             return {"stored": False, "reason": "supabase_not_configured"}
 
-        public_state = _json_safe(room.public_state())
+        persistence_state = getattr(room, "persistence_state", None)
+        snapshot = persistence_state() if callable(persistence_state) else room.public_state()
+        public_state = _json_safe(snapshot)
         row = {
             "game_id": str(room.game_id),
             "fixture_id": str(room.fixture_id),
@@ -139,6 +148,19 @@ class SupabaseGameStore:
             return state
 
         cleaned = urllib.parse.quote(game_id, safe="")
+        if not isinstance(state.get(PRIVATE_SNAPSHOT_KEY), dict):
+            existing_rows = self._request_json(
+                f"aoc_games?select=public_state&game_id=eq.{cleaned}&limit=1"
+            )
+            existing_state = (
+                existing_rows[0].get("public_state")
+                if isinstance(existing_rows, list) and existing_rows and isinstance(existing_rows[0], dict)
+                else None
+            )
+            if isinstance(existing_state, dict) and isinstance(
+                existing_state.get(PRIVATE_SNAPSHOT_KEY), dict
+            ):
+                state[PRIVATE_SNAPSHOT_KEY] = existing_state[PRIVATE_SNAPSHOT_KEY]
         rows = self._request_json(
             f"aoc_games?game_id=eq.{cleaned}&status=in.(running_replay,running_live)",
             method="PATCH",
@@ -203,7 +225,141 @@ class SupabaseGameStore:
             rows = self._request_json(f"aoc_games?select={legacy_fields}&order=updated_at.desc&limit={safe_limit}")
         return {"source": "supabase", "configured": True, "count": len(rows), "games": rows}
 
-    def latest_game_for_fixture(self, fixture_id: str | int, *, limit: int = 20, mode: str | None = None) -> dict[str, Any] | None:
+    def list_admin_games(self, *, limit: int = 50) -> dict[str, Any]:
+        """List only rooms backed by a durable admin marker.
+
+        Explicit ``roomKind=admin`` snapshots are fetched before LIMIT. For
+        transitional snapshots without that field, a bounded scan asks the
+        journal for ``game_created.data.roomKind=admin`` and selects only the
+        matching game ids. Event data itself is never read back, which avoids
+        exposing legacy identity fields while retaining a positive proof.
+        """
+
+        if not self.configured:
+            return {"source": "supabase", "configured": False, "count": 0, "games": []}
+
+        safe_limit = max(1, min(int(limit), 200))
+        fields = ",".join(
+            [
+                "game_id",
+                "fixture_id",
+                "participant1",
+                "participant2",
+                "owner_anonymous_id",
+                "owner_wallet",
+                "owner_name",
+                "status",
+                "mode",
+                "seed",
+                "event_index",
+                "agent_usage",
+                "created_at",
+                "updated_at",
+                "completed_at",
+                "public_state",
+            ]
+        )
+        legacy_fields = ",".join(
+            field
+            for field in fields.split(",")
+            if field not in {"owner_anonymous_id", "owner_wallet", "owner_name"}
+        )
+
+        def fetch(query: str) -> list[dict[str, Any]]:
+            try:
+                rows = self._request_json(query.format(fields=fields))
+            except SupabasePersistenceError as exc:
+                if not _missing_owner_columns(str(exc)):
+                    raise
+                rows = self._request_json(query.format(fields=legacy_fields))
+            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+        explicit_query = (
+            "aoc_games?select={fields}"
+            "&public_state->>roomKind=eq.admin"
+            "&order=updated_at.desc,game_id.desc"
+            f"&limit={safe_limit}"
+        )
+        explicit_rows = []
+        seen_ids: set[str] = set()
+        for row in fetch(explicit_query):
+            public_state = row.get("public_state")
+            snapshot = {**row, **public_state} if isinstance(public_state, dict) else row
+            game_id = _stored_game_id(row)
+            if not game_id or game_id in seen_ids or room_kind_from_snapshot(snapshot) != "admin":
+                continue
+            explicit_rows.append(row)
+            seen_ids.add(game_id)
+
+        legacy_rows: list[dict[str, Any]] = []
+        page_size = max(safe_limit, _ADMIN_LIST_LEGACY_MIN_PAGE_SIZE)
+        legacy_query = (
+            "aoc_games?select={fields}"
+            "&public_state->>roomKind=is.null"
+            "&order=updated_at.desc,game_id.desc"
+        )
+        for page in range(_ADMIN_LIST_MAX_PAGES):
+            offset = page * page_size
+            query = f"{legacy_query}&limit={page_size}"
+            if offset:
+                query = f"{query}&offset={offset}"
+            rows = fetch(query)
+            proven_admin_ids = self._legacy_admin_game_ids(rows)
+            for row in rows:
+                game_id = _stored_game_id(row)
+                if not game_id or game_id in seen_ids or game_id not in proven_admin_ids:
+                    continue
+                # This derived marker carries only the authorization result;
+                # journal data (including any legacy identities) is not exposed.
+                legacy_rows.append({**row, "room_kind": "admin"})
+                seen_ids.add(game_id)
+                if len(legacy_rows) >= safe_limit:
+                    break
+            if len(legacy_rows) >= safe_limit or len(rows) < page_size:
+                break
+
+        admin_rows = [*explicit_rows, *legacy_rows]
+        admin_rows.sort(key=_stored_row_recency_key, reverse=True)
+        games = admin_rows[:safe_limit]
+        return {"source": "supabase", "configured": True, "count": len(games), "games": games}
+
+    def _legacy_admin_game_ids(self, rows: list[dict[str, Any]]) -> set[str]:
+        """Return ids whose creation journal explicitly declares an admin room."""
+
+        game_ids = list(dict.fromkeys(filter(None, (_stored_game_id(row) for row in rows))))
+        proven: set[str] = set()
+        for start in range(0, len(game_ids), _ADMIN_EVENT_BATCH_SIZE):
+            batch = game_ids[start : start + _ADMIN_EVENT_BATCH_SIZE]
+            allowed = set(batch)
+            encoded_ids = ",".join(urllib.parse.quote(game_id, safe="_-") for game_id in batch)
+            # Select only game_id: legacy game_created data may contain bearer
+            # identifiers and must never enter the admin-list response.
+            events = self._request_json(
+                "aoc_game_events?select=game_id"
+                "&kind=eq.game_created"
+                "&data->>roomKind=eq.admin"
+                f"&game_id=in.({encoded_ids})"
+                f"&limit={len(batch)}"
+            )
+            if not isinstance(events, list):
+                continue
+            proven.update(
+                game_id
+                for event in events
+                if isinstance(event, dict)
+                for game_id in [str(event.get("game_id") or "")]
+                if game_id in allowed
+            )
+        return proven
+
+    def latest_game_for_fixture(
+        self,
+        fixture_id: str | int,
+        *,
+        limit: int = 20,
+        mode: str | None = None,
+        room_kind: RoomKind | None = None,
+    ) -> dict[str, Any] | None:
         if not self.configured:
             return None
         cleaned = urllib.parse.quote(str(fixture_id), safe="")
@@ -215,6 +371,7 @@ class SupabaseGameStore:
                 "participant1",
                 "participant2",
                 "owner_anonymous_id",
+                "owner_wallet",
                 "owner_name",
                 "status",
                 "mode",
@@ -226,13 +383,50 @@ class SupabaseGameStore:
                 "completed_at",
             ]
         )
-        rows = self._request_json(
-            f"aoc_games?select={fields}&fixture_id=eq.{cleaned}&order=updated_at.desc&limit={safe_limit}"
+        query = (
+            f"aoc_games?select={fields}&fixture_id=eq.{cleaned}"
+            "&status=not.in.(finished,error,stopped)"
+            "&order=updated_at.desc,game_id.desc"
         )
-        for row in rows:
-            if row.get("status") not in {"finished", "error", "stopped"}:
+        if room_kind is not None:
+            # New snapshots can be filtered before LIMIT. Missing roomKind must
+            # remain eligible so pre-migration snapshots still use the local,
+            # identity-aware legacy inference below.
+            room_kind_filter = (
+                f"(public_state->>roomKind.eq.{room_kind},"
+                "public_state->>roomKind.is.null)"
+            )
+            query = f"{query}&{urllib.parse.urlencode({'or': room_kind_filter})}"
+
+        for page in range(_LATEST_FIXTURE_MAX_PAGES):
+            offset = page * safe_limit
+            page_query = f"{query}&limit={safe_limit}"
+            if offset:
+                page_query = f"{page_query}&offset={offset}"
+            rows = self._request_json(page_query)
+            if not isinstance(rows, list) or not rows:
+                break
+
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("status") in {"finished", "error", "stopped"}:
+                    continue
+                public_state = row.get("public_state") or {}
+                if room_kind is not None:
+                    snapshot = {**row, **public_state} if isinstance(public_state, dict) else row
+                    if room_kind_from_snapshot(snapshot) != room_kind:
+                        continue
+                    if (
+                        room_kind == "player"
+                        and not _snapshot_has_explicit_room_kind(snapshot)
+                        and not _legacy_snapshot_has_player_identity(snapshot)
+                    ):
+                        # Ambiguous snapshots stay player for authorization,
+                        # but are unsafe for automatic public-room reuse: they
+                        # may be pre-migration admin simulations.
+                        continue
                 if mode is not None:
-                    public_state = row.get("public_state") or {}
                     row_mode = public_state.get("mode") if isinstance(public_state, dict) else None
                     row_mode = row_mode or row.get("mode")
                     owner = public_state.get("owner") if isinstance(public_state, dict) else None
@@ -245,6 +439,9 @@ class SupabaseGameStore:
                     if row_mode != mode and not legacy_public_live:
                         continue
                 return row
+
+            if len(rows) < safe_limit:
+                break
         return None
 
     def latest_game_for_room_code(self, room_code: str, *, limit: int = 200) -> dict[str, Any] | None:
@@ -394,3 +591,66 @@ def _env_bool(name: str, default: bool) -> bool:
 
 def _missing_owner_columns(detail: str) -> bool:
     return "owner_anonymous_id" in detail or "owner_wallet" in detail or "owner_name" in detail
+
+
+def _stored_game_id(row: dict[str, Any]) -> str:
+    public_state = row.get("public_state")
+    public_game_id = public_state.get("gameId") if isinstance(public_state, dict) else None
+    return str(row.get("game_id") or public_game_id or "").strip()
+
+
+def _stored_row_recency_key(row: dict[str, Any]) -> tuple[float, str]:
+    value = row.get("updated_at") or row.get("completed_at") or row.get("created_at")
+    timestamp = 0.0
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+    elif isinstance(value, str) and value.strip():
+        try:
+            timestamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    return timestamp, _stored_game_id(row)
+
+
+def _snapshot_has_explicit_room_kind(snapshot: dict[str, Any]) -> bool:
+    for key in ("roomKind", "room_kind"):
+        if snapshot.get(key) in {"admin", "player"}:
+            return True
+    nested = snapshot.get("public_state")
+    if isinstance(nested, dict):
+        return any(nested.get(key) in {"admin", "player"} for key in ("roomKind", "room_kind"))
+    return False
+
+
+def _legacy_snapshot_has_player_identity(snapshot: dict[str, Any]) -> bool:
+    owner = snapshot.get("owner")
+    if isinstance(owner, dict) and any(
+        owner.get(key) for key in ("wallet", "anonymousId", "anonymous_id", "name")
+    ):
+        return True
+    if any(
+        snapshot.get(key)
+        for key in ("owner_wallet", "ownerAnonymousId", "owner_anonymous_id", "owner_name")
+    ):
+        return True
+    players = snapshot.get("players")
+    if isinstance(players, list) and players:
+        return True
+    colonies = snapshot.get("colonies")
+    if not isinstance(colonies, list):
+        return False
+    return any(
+        isinstance(colony, dict)
+        and any(
+            colony.get(key)
+            for key in (
+                "playerId",
+                "playerWallet",
+                "playerAnonymousId",
+                "player_id",
+                "player_wallet",
+                "player_anonymous_id",
+            )
+        )
+        for colony in colonies
+    )

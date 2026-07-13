@@ -209,7 +209,12 @@ export const api = {
     }),
   rerun: (
     id: string,
-    opts?: { agentCallMode?: AgentCallMode; replayDelaySeconds?: number; replayTimeScale?: number },
+    opts?: {
+      anonymousId?: string;
+      agentCallMode?: AgentCallMode;
+      replayDelaySeconds?: number;
+      replayTimeScale?: number;
+    },
   ) =>
     req<GameState>(
       `/api/games/${id}/rerun`,
@@ -217,6 +222,7 @@ export const api = {
       {
         mode: "replay",
         source: "historical",
+        anonymousId: opts?.anonymousId,
         agentCallMode: opts?.agentCallMode,
         replayDelaySeconds: opts?.replayDelaySeconds,
         replayTimeScale: opts?.replayTimeScale,

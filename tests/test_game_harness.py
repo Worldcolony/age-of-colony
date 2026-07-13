@@ -32,6 +32,7 @@ from app.main import (
 )
 from app.game.harness import (
     BASELINE_MARKET_CONTEXTS,
+    PRIVATE_SNAPSHOT_KEY,
     GameHarness,
     GameManager,
     MARKET_RISK_SUGAR,
@@ -488,9 +489,10 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(public["sugarReserved"], 0)
         self.assertEqual(public["sugarAvailable"], STARTING_COLONY_SUGAR)
         self.assertEqual(public["economy"]["currency"], "sugar")
-        self.assertIn("cautious", archetypes)
-        self.assertIn("data_first", archetypes)
-        self.assertGreater(len(archetypes), 3)
+        self.assertEqual(
+            archetypes,
+            {"cautious", "balanced", "data_first", "opportunist", "momentum", "chaos"},
+        )
         self.assertTrue(any(ant.risk_appetite > 0.55 for ant in colony.ants))
 
     def test_sugar_v0_keeps_all_twenty_ants_active_without_wounds_or_deaths(self):
@@ -1322,6 +1324,7 @@ class GameHarnessTest(unittest.TestCase):
         public_state = {
             "gameId": game_id,
             "roomCode": room_code,
+            "roomKind": "admin",
             "fixtureId": "demo-sandbox-previous",
             "participant1": "Old Home",
             "participant2": "Old Away",
@@ -1374,6 +1377,7 @@ class GameHarnessTest(unittest.TestCase):
         public_state = {
             "gameId": game_id,
             "roomCode": room_code,
+            "roomKind": "admin",
             "fixtureId": "no-demo-for-this-fixture",
             "participant1": "Home",
             "participant2": "Away",
@@ -3240,23 +3244,45 @@ class DemoRunApiTest(unittest.TestCase):
         client = TestClient(app)
         created = client.post(
             "/api/games",
-            json={"fixtureId": 4242, "participant1": "Portugal", "participant2": "Brazil", "seed": 17},
+            json={
+                "fixtureId": 4242,
+                "participant1": "Portugal",
+                "participant2": "Brazil",
+                "seed": 17,
+                "anonymousId": "anon_room_setup_alice",
+            },
         ).json()
 
-        joined = client.post(f"/api/games/{created['gameId']}/players", json={"name": "Alice"})
+        anonymous_id = "anon_room_setup_alice"
+        joined = client.post(
+            f"/api/games/{created['gameId']}/players",
+            json={"name": "Alice", "anonymousId": anonymous_id},
+        )
         self.assertEqual(joined.status_code, 200)
         self.assertEqual(joined.json()["players"][0]["name"], "Alice")
 
         colony_response = client.post(
             f"/api/games/{created['gameId']}/colonies",
-            json={"name": "A", "size": 20, "style": "balanced", "favoriteContext": "momentum", "infoNeed": "medium"},
+            json={
+                "name": "A",
+                "size": 20,
+                "style": "balanced",
+                "favoriteContext": "momentum",
+                "infoNeed": "medium",
+                "anonymousId": anonymous_id,
+            },
         )
         self.assertEqual(colony_response.status_code, 200)
         colony_id = colony_response.json()["colonies"][0]["colonyId"]
 
         strategy_response = client.patch(
             f"/api/games/{created['gameId']}/colonies/{colony_id}/strategy",
-            json={"style": "cautious", "favoriteContext": "penalties", "infoNeed": "high"},
+            json={
+                "style": "cautious",
+                "favoriteContext": "penalties",
+                "infoNeed": "high",
+                "anonymousId": anonymous_id,
+            },
         )
         self.assertEqual(strategy_response.status_code, 200)
         game = strategy_response.json()
@@ -3269,7 +3295,13 @@ class DemoRunApiTest(unittest.TestCase):
         client = TestClient(app)
         created = client.post(
             "/api/games",
-            json={"fixtureId": 4243, "participant1": "Portugal", "participant2": "Brazil", "seed": 18},
+            json={
+                "fixtureId": 4243,
+                "participant1": "Portugal",
+                "participant2": "Brazil",
+                "seed": 18,
+                "anonymousId": "anon_owner_alice",
+            },
         ).json()
 
         joined = client.post(
@@ -3408,7 +3440,13 @@ class DemoRunApiTest(unittest.TestCase):
         client = TestClient(app)
         created = client.post(
             "/api/games",
-            json={"fixtureId": 4244, "participant1": "Japan", "participant2": "Brazil", "seed": 19},
+            json={
+                "fixtureId": 4244,
+                "participant1": "Japan",
+                "participant2": "Brazil",
+                "seed": 19,
+                "anonymousId": "anon_ant_orders_owner",
+            },
         ).json()
         anonymous_id = "anon_ant_orders_owner"
         client.post(
@@ -3479,7 +3517,13 @@ class DemoRunApiTest(unittest.TestCase):
         client = TestClient(app)
         created = client.post(
             "/api/games",
-            json={"fixtureId": 4245, "participant1": "France", "participant2": "Belgium", "seed": 20},
+            json={
+                "fixtureId": 4245,
+                "participant1": "France",
+                "participant2": "Belgium",
+                "seed": 20,
+                "anonymousId": "anon_ant_history_owner",
+            },
         ).json()
         anonymous_id = "anon_ant_history_owner"
         client.post(
@@ -3555,6 +3599,7 @@ class DemoRunApiTest(unittest.TestCase):
                 "startTime": 1782950400000,
                 "startTimeIso": "2026-07-02T00:00:00+00:00",
                 "seed": 3,
+                "anonymousId": "anon_alice",
             },
         ).json()
         room_code = created["roomCode"]
@@ -4211,7 +4256,7 @@ class DemoRunApiTest(unittest.TestCase):
             )
             self.assertEqual(public_colony.status_code, 200)
 
-            open_admin_colony = client.post(
+            blocked_ownerless_player_colony = client.post(
                 f"/api/games/{created['gameId']}/colonies",
                 json={
                     "name": "Admin Only Nest",
@@ -4221,7 +4266,7 @@ class DemoRunApiTest(unittest.TestCase):
                     "infoNeed": "medium",
                 },
             )
-            self.assertEqual(open_admin_colony.status_code, 200)
+            self.assertEqual(blocked_ownerless_player_colony.status_code, 401)
 
             with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")):
                 open_demo = client.post("/api/demo/run", json={"seed": 99})
@@ -4322,19 +4367,35 @@ class DemoRunApiTest(unittest.TestCase):
             "colonies": [{"colonyId": "col_1", "antsAlive": 17}],
             "activeOpportunities": [{"opportunityId": "opp_1", "status": "open"}],
         }
+        private_state = {
+            "version": 1,
+            "antProfiles": {"col_1": {"ant_0000": {"archetype": "balanced"}}},
+        }
 
         def fake_request(path, *, method="GET", body=None, prefer=""):
             calls.append({"path": path, "method": method, "body": body, "prefer": prefer})
+            if method == "GET":
+                return [
+                    {
+                        "public_state": {
+                            **public_state,
+                            PRIVATE_SNAPSHOT_KEY: private_state,
+                        }
+                    }
+                ]
             return [{"public_state": body["public_state"]}]
 
         store._request_json = fake_request
         stopped = store.mark_game_stopped(public_state)
 
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["method"], "PATCH")
-        self.assertIn("status=in.(running_replay,running_live)", calls[0]["path"])
-        self.assertEqual(calls[0]["prefer"], "return=representation")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["method"], "GET")
+        self.assertIn("select=public_state", calls[0]["path"])
+        self.assertEqual(calls[1]["method"], "PATCH")
+        self.assertIn("status=in.(running_replay,running_live)", calls[1]["path"])
+        self.assertEqual(calls[1]["prefer"], "return=representation")
         self.assertEqual(stopped["status"], "stopped")
+        self.assertEqual(stopped[PRIVATE_SNAPSHOT_KEY], private_state)
         for key in ("eventIndex", "logCount", "match", "colonies", "activeOpportunities"):
             self.assertEqual(stopped[key], public_state[key])
 
@@ -4354,6 +4415,7 @@ class DemoRunApiTest(unittest.TestCase):
                             "status": "finished",
                             "event_index": 18,
                             "public_state": {
+                                "roomKind": "admin",
                                 "participant1": "France",
                                 "participant2": "Japan",
                                 "colonies": [{"colonyId": "col_1", "name": "Stored Nest"}],
@@ -4390,6 +4452,7 @@ class DemoRunApiTest(unittest.TestCase):
             participant1="France",
             participant2="Japan",
             seed=91,
+            room_kind="admin",
         )
         room.mode = "replay"
         room.status = "finished"
@@ -4438,6 +4501,7 @@ class DemoRunApiTest(unittest.TestCase):
             participant1="France",
             participant2="Belgium",
             seed=90,
+            room_kind="admin",
         )
         room.mode = "replay"
         room.status = "running_replay"
@@ -4470,6 +4534,7 @@ class DemoRunApiTest(unittest.TestCase):
             participant1="Old",
             participant2="Memory",
             seed=96,
+            room_kind="admin",
         )
         room.mode = "replay"
         room.status = "finished"
@@ -4479,6 +4544,7 @@ class DemoRunApiTest(unittest.TestCase):
 
         stored_state = {
             "gameId": "game_newer_stored_admin",
+            "roomKind": "admin",
             "fixtureId": 919197,
             "participant1": "Newer",
             "participant2": "Stored",
@@ -4517,6 +4583,7 @@ class DemoRunApiTest(unittest.TestCase):
         room_code = "919192"
         public_state = {
             "gameId": game_id,
+            "roomKind": "admin",
             "roomCode": room_code,
             "fixtureId": 919192,
             "participant1": "Brazil",
@@ -4604,6 +4671,7 @@ class DemoRunApiTest(unittest.TestCase):
     def test_admin_games_keeps_stored_live_error_for_diagnosis(self):
         public_state = {
             "gameId": "game_admin_live_error",
+            "roomKind": "admin",
             "fixtureId": 919198,
             "status": "error",
             "mode": "live",
@@ -4704,6 +4772,7 @@ class DemoRunApiTest(unittest.TestCase):
         public_state = {
             "gameId": game_id,
             "roomCode": "919195",
+            "roomKind": "admin",
             "fixtureId": 919195,
             "participant1": "Japan",
             "participant2": "Ghana",
@@ -5091,6 +5160,8 @@ class DemoRunApiTest(unittest.TestCase):
                 "participant1": "North Colony FC",
                 "participant2": "South Colony FC",
                 "seed": 94,
+                "creatorName": "Batch Host",
+                "anonymousId": "anon_batch_host",
             },
         ).json()
         game_id = created["gameId"]
@@ -5106,6 +5177,7 @@ class DemoRunApiTest(unittest.TestCase):
                 "style": "balanced",
                 "favoriteContext": "momentum",
                 "infoNeed": "medium",
+                "anonymousId": "anon_batch_host",
             },
         )
 
@@ -5116,7 +5188,12 @@ class DemoRunApiTest(unittest.TestCase):
         ):
             response = client.post(
                 f"/api/games/{game_id}/start",
-                json={"mode": "replay", "source": "demo", "agentCallMode": "batch"},
+                json={
+                    "mode": "replay",
+                    "source": "demo",
+                    "agentCallMode": "batch",
+                    "anonymousId": "anon_batch_host",
+                },
             )
 
         self.assertEqual(response.status_code, 200)
@@ -5237,15 +5314,34 @@ class DemoRunApiTest(unittest.TestCase):
         with patch("app.main.game_manager.decision_agent", FakeDeepSeekAntAgent("yes")), patch("app.main.TxLineClient", FakeTxLineClient):
             created = client.post(
                 "/api/games",
-                json={"fixtureId": 777, "participant1": "Argentina", "participant2": "Morocco", "seed": 11},
+                json={
+                    "fixtureId": 777,
+                    "participant1": "Argentina",
+                    "participant2": "Morocco",
+                    "seed": 11,
+                    "creatorName": "Replay Host",
+                    "anonymousId": "anon_replay_host",
+                },
             ).json()
             client.post(
                 f"/api/games/{created['gameId']}/colonies",
-                json={"name": "A", "size": 50, "style": "cautious", "favoriteContext": "penalties", "infoNeed": "medium"},
+                json={
+                    "name": "A",
+                    "size": 50,
+                    "style": "cautious",
+                    "favoriteContext": "penalties",
+                    "infoNeed": "medium",
+                    "anonymousId": "anon_replay_host",
+                },
             )
             response = client.post(
                 f"/api/games/{created['gameId']}/rerun",
-                json={"mode": "replay", "source": "historical", "agentCallMode": "batch"},
+                json={
+                    "mode": "replay",
+                    "source": "historical",
+                    "agentCallMode": "batch",
+                    "anonymousId": "anon_replay_host",
+                },
             )
 
         self.assertEqual(response.status_code, 200)

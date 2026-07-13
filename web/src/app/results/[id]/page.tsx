@@ -1,33 +1,64 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { colonySugar } from "@/lib/sugar";
+import { legacyAnonymousIdForHost, usePlayerIdentity } from "@/lib/playerIdentity";
 import type { GameState } from "@/lib/types";
 
 export default function ResultsPage() {
-  const router = useRouter();
   const { id } = useParams<{ id: string }>();
+  return (
+    <Suspense fallback={<div className="grid min-h-[70dvh] place-items-center text-sm font-bold text-ink-faint">Loading rankings...</div>}>
+      <ResultsRun key={id} id={id} />
+    </Suspense>
+  );
+}
+
+function ResultsRun({ id }: { id: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const identity = usePlayerIdentity();
   const myColonyId = useStore((s) => s.myColonyId);
-  const [game, setLocal] = useState<GameState | null>(null);
+  const storedGame = useStore((s) => s.game);
+  const setStoredGame = useStore((s) => s.setGame);
+  const [game, setLocal] = useState<GameState | null>(
+    storedGame?.gameId === id ? storedGame : null,
+  );
+  const receiveGame = useCallback((next: GameState) => {
+    setLocal(next);
+    setStoredGame(next);
+  }, [setStoredGame]);
 
   useEffect(() => {
-    api.getGame(id).then(setLocal).catch(() => {});
-  }, [id]);
+    let cancelled = false;
+    api.getGame(id).then((next) => {
+      if (!cancelled) receiveGame(next);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [id, receiveGame]);
 
   const running = game ? ["running_replay", "running_live"].includes(game.status) : false;
-  useGameStream(id, { onState: setLocal }, running);
+  useGameStream(id, { onState: receiveGame }, running);
 
   const cols = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => colonySugar(b) - colonySugar(a)), [game]);
   const finished = game?.status === "finished";
+  const adminContext = game
+    ? game.roomKind === "admin"
+    : searchParams.get("from") === "admin";
+  const cockpitHref = adminContext ? `/cockpit/${id}?from=admin` : `/cockpit/${id}`;
 
   async function rerun() {
     try {
-      const g = await api.rerun(id);
-      setLocal(g);
-      router.push(`/cockpit/${g.gameId}`);
+      const g = await api.rerun(id, {
+        anonymousId: adminContext ? undefined : legacyAnonymousIdForHost(game, identity.snapshot),
+      });
+      receiveGame(g);
+      router.push(adminContext ? `/cockpit/${g.gameId}?from=admin` : `/cockpit/${g.gameId}`);
     } catch { /* */ }
   }
   async function share() {
@@ -46,7 +77,12 @@ export default function ResultsPage() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <button className="text-sm font-semibold text-ink-soft" onClick={() => router.back()}>← Back</button>
+        <button
+          className="text-sm font-semibold text-ink-soft"
+          onClick={() => adminContext ? router.push(cockpitHref) : router.back()}
+        >
+          ← Back
+        </button>
         {finished && (
           <div className="flex gap-2">
             <button className="btn btn-magenta !min-h-0 !w-auto px-3 py-1 text-sm" onClick={share}>Share</button>
@@ -101,7 +137,9 @@ export default function ResultsPage() {
         </div>
       </div>
 
-      <button className="btn btn-primary" onClick={() => router.push("/lobby")}>Play next match</button>
+      <button className="btn btn-primary" onClick={() => router.push(adminContext ? "/admin" : "/lobby")}>
+        {adminContext ? "Back to admin" : "Play next match"}
+      </button>
     </div>
   );
 }

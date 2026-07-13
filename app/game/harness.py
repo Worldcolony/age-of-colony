@@ -10,7 +10,7 @@ import time
 import uuid
 from collections import Counter, deque
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal, cast
 
 from .agents import ColonyAgentDecision, ColonyDecisionAgent
 
@@ -19,6 +19,8 @@ VALID_SIZES = {10, 20, 50}
 VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
+RoomKind = Literal["admin", "player"]
+VALID_ROOM_KINDS = {"admin", "player"}
 JOINABLE_STATUSES = {"created", "waiting_kickoff"}
 STRATEGY_EDITABLE_STATUSES = {"created", "waiting_kickoff", "running_replay", "running_live"}
 STARTING_COLONY_ANTS = 20
@@ -49,6 +51,49 @@ _PRIVATE_IDENTITY_KEYS = {
     "owner_anonymous_id",
     "player_anonymous_id",
 }
+PRIVATE_SNAPSHOT_KEY = "_private"
+_PRIVATE_RESPONSE_KEYS = {PRIVATE_SNAPSHOT_KEY, "antProfiles"}
+
+
+def room_kind_from_snapshot(value: Any, *, default: RoomKind = "player") -> RoomKind:
+    """Resolve a room kind without granting admin rights from missing identity.
+
+    ``roomKind`` is an authorization boundary, so structural guesses such as an
+    ownerless colony are deliberately insufficient.  A durable explicit marker
+    in the snapshot (or its ``game_created`` journal event) is accepted; every
+    pre-marker/ambiguous snapshot remains a player room.
+    """
+
+    if not isinstance(value, dict):
+        return default
+
+    for key in ("roomKind", "room_kind"):
+        candidate = value.get(key)
+        if candidate in VALID_ROOM_KINDS:
+            return cast(RoomKind, candidate)
+
+    nested_snapshot = value.get("public_state")
+    if isinstance(nested_snapshot, dict):
+        for key in ("roomKind", "room_kind"):
+            candidate = nested_snapshot.get(key)
+            if candidate in VALID_ROOM_KINDS:
+                return cast(RoomKind, candidate)
+
+    for collection_key in ("events", "log"):
+        events = value.get(collection_key)
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or event.get("kind") != "game_created":
+                continue
+            data = event.get("data")
+            if not isinstance(data, dict):
+                continue
+            for key in ("roomKind", "room_kind"):
+                candidate = data.get(key)
+                if candidate in VALID_ROOM_KINDS:
+                    return cast(RoomKind, candidate)
+    return default
 
 
 def redact_public_identity(value: Any) -> Any:
@@ -58,7 +103,7 @@ def redact_public_identity(value: Any) -> Any:
         return {
             key: redact_public_identity(item)
             for key, item in value.items()
-            if key not in _PRIVATE_IDENTITY_KEYS
+            if key not in _PRIVATE_IDENTITY_KEYS and key not in _PRIVATE_RESPONSE_KEYS
         }
     if isinstance(value, (list, tuple)):
         return [redact_public_identity(item) for item in value]
@@ -168,6 +213,7 @@ class AntState:
     loss_sensitivity: float
     momentum_bias: float
     chaos_bias: float
+    base_influence: float = 1.0
     influence: float = 1.0
     alive: bool = True
     wounded_until_event: int = 0
@@ -549,6 +595,7 @@ class GameRoom:
     owner_anonymous_id: str | None = None
     owner_wallet: str | None = None
     owner_name: str | None = None
+    room_kind: RoomKind = "player"
     seed: int = 7
     status: str = "created"
     mode: str | None = None
@@ -565,6 +612,8 @@ class GameRoom:
     log_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self.room_kind not in VALID_ROOM_KINDS:
+            raise ValueError("room_kind must be admin or player")
         self.match_state = MatchState(self.fixture_id, self.participant1, self.participant2)
 
     def add_log(self, kind: str, message: str, data: dict[str, Any] | None = None) -> None:
@@ -578,6 +627,7 @@ class GameRoom:
         state = {
             "gameId": self.game_id,
             "roomCode": self.room_code,
+            "roomKind": self.room_kind,
             "fixtureId": self.fixture_id,
             "participant1": self.participant1,
             "participant2": self.participant2,
@@ -613,11 +663,43 @@ class GameRoom:
             snapshot["status"] = self.status
             snapshot["mode"] = self.mode
             snapshot["agentCallMode"] = self.agent_call_mode
+            snapshot["roomKind"] = self.room_kind
             try:
                 snapshot["logCount"] = max(int(snapshot.get("logCount") or 0), len(self.log))
             except (TypeError, ValueError):
                 snapshot["logCount"] = len(self.log)
             return redact_public_identity(snapshot)
+        return state
+
+    def persistence_state(self) -> dict[str, Any]:
+        """Return a server-only snapshot with data required after a restart.
+
+        The private section is stored behind Supabase RLS and is always removed
+        by ``redact_public_identity`` before any API response leaves the server.
+        """
+
+        state = copy.deepcopy(self.public_state())
+        state[PRIVATE_SNAPSHOT_KEY] = {
+            "version": 1,
+            "ownerAnonymousId": self.owner_anonymous_id,
+            "playerAnonymousIds": {
+                player.player_id: player.anonymous_id
+                for player in self.players
+                if player.anonymous_id
+            },
+            "colonyAnonymousIds": {
+                colony.colony_id: colony.player_anonymous_id
+                for colony in self.colonies.values()
+                if colony.player_anonymous_id
+            },
+            "antProfiles": {
+                colony.colony_id: {
+                    ant.ant_id: ant_profile_state(ant)
+                    for ant in colony.ants[: colony.size]
+                }
+                for colony in self.colonies.values()
+            },
+        }
         return state
 
     def _player_colonies(self) -> dict[str, ColonyState]:
@@ -737,6 +819,8 @@ class GameHarness:
         return colony
 
     def join_player(self, name: str, anonymous_id: str | None = None, wallet: str | None = None) -> PlayerState:
+        if self.room.room_kind == "admin":
+            raise ValueError("admin simulation rooms do not accept players")
         if self.room.status not in JOINABLE_STATUSES:
             raise ValueError("room is closed; new players can no longer join")
         clean_name = name.strip()[:32] or f"Player {len(self.room.players) + 1}"
@@ -1808,6 +1892,7 @@ class GameManager:
         owner_anonymous_id: str | None = None,
         owner_wallet: str | None = None,
         owner_name: str | None = None,
+        room_kind: RoomKind = "player",
         room_code: str | None = None,
         competition: str | None = None,
         start_time: Any = None,
@@ -1829,6 +1914,7 @@ class GameManager:
             owner_anonymous_id=(owner_anonymous_id or "").strip()[:80] or None,
             owner_wallet=(owner_wallet or "").strip()[:80] or None,
             owner_name=(owner_name or "").strip()[:32] or None,
+            room_kind=room_kind,
             seed=seed if seed is not None else stable_seed(game_id, fixture_id) % 1_000_000,
         )
         room.add_log(
@@ -1841,6 +1927,7 @@ class GameManager:
                 "ownerAnonymousId": room.owner_anonymous_id,
                 "ownerWallet": room.owner_wallet,
                 "ownerName": room.owner_name,
+                "roomKind": room.room_kind,
             },
         )
         self.rooms[game_id] = room
@@ -1887,7 +1974,116 @@ def normalize_room_code(value: str | int | None) -> str:
 
 def generate_ants(colony: ColonyState) -> list[AntState]:
     rng = random.Random(colony.seed)
-    return [spawn_ant(colony, index, rng) for index in range(colony.size)]
+    # A colony must remain meaningfully diverse even for an unlucky seed. Give
+    # every base archetype one representative (when the roster is large enough),
+    # then use the configured weighted distribution for the remaining ants.
+    guaranteed_archetypes = list(archetype_weights(colony))
+    rng.shuffle(guaranteed_archetypes)
+    ants: list[AntState] = []
+    for index in range(colony.size):
+        if index < len(guaranteed_archetypes):
+            archetype = guaranteed_archetypes[index]
+            ants.append(
+                AntState(
+                    ant_id=f"ant_{index:04d}",
+                    archetype=archetype,
+                    **traits_for_archetype(archetype, colony, rng),
+                )
+            )
+        else:
+            ants.append(spawn_ant(colony, index, rng))
+    return ants
+
+
+def clone_ant_for_new_match(ant: AntState) -> AntState:
+    """Keep one ant's identity and standing orders, but reset match state.
+
+    Regenerating a roster is not equivalent to carrying it into another match:
+    ant generation depends on both a colony seed and its current global strategy.
+    Copy the stable profile explicitly so mutable memory or participation state can
+    never leak from the previous match.
+    """
+
+    return AntState(
+        ant_id=ant.ant_id,
+        archetype=ant.archetype,
+        risk_appetite=ant.risk_appetite,
+        info_hunger=ant.info_hunger,
+        favorite_context=ant.favorite_context,
+        confidence_threshold=ant.confidence_threshold,
+        loss_sensitivity=ant.loss_sensitivity,
+        momentum_bias=ant.momentum_bias,
+        chaos_bias=ant.chaos_bias,
+        base_influence=ant.base_influence,
+        influence=ant.base_influence,
+        style_override=ant.style_override,
+        favorite_context_override=ant.favorite_context_override,
+        info_need_override=ant.info_need_override,
+    )
+
+
+def ant_profile_state(ant: AntState) -> dict[str, Any]:
+    """Serialize only the durable identity/personality of an ant."""
+
+    return {
+        "antId": ant.ant_id,
+        "archetype": ant.archetype,
+        "riskAppetite": ant.risk_appetite,
+        "infoHunger": ant.info_hunger,
+        "naturalFocus": ant.favorite_context,
+        "confidenceThreshold": ant.confidence_threshold,
+        "lossSensitivity": ant.loss_sensitivity,
+        "momentumBias": ant.momentum_bias,
+        "chaosBias": ant.chaos_bias,
+        "baseInfluence": ant.base_influence,
+    }
+
+
+def restore_ant_profile(ant: AntState, profile: Any) -> AntState:
+    """Apply a stored static profile to a generated legacy fallback ant.
+
+    Invalid or partial values retain the safely generated fallback. Match state
+    such as influence changes, memory, wounds and engagements is intentionally
+    absent from the durable profile.
+    """
+
+    if not isinstance(profile, dict):
+        return ant
+    stored_ant_id = profile.get("antId")
+    if stored_ant_id is not None and str(stored_ant_id) != ant.ant_id:
+        return ant
+
+    archetype = str(profile.get("archetype") or "")
+    if archetype in {"cautious", "balanced", "data_first", "opportunist", "momentum", "chaos"}:
+        ant.archetype = archetype
+
+    natural_focus = str(profile.get("naturalFocus") or "")
+    if natural_focus in VALID_CONTEXTS:
+        ant.favorite_context = natural_focus
+
+    def stored_float(key: str, fallback: float, low: float, high: float) -> float:
+        value = profile.get(key)
+        if isinstance(value, bool):
+            return fallback
+        try:
+            candidate = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        if not math.isfinite(candidate) or not low <= candidate <= high:
+            return fallback
+        return candidate
+
+    ant.risk_appetite = stored_float("riskAppetite", ant.risk_appetite, 0.0, 1.0)
+    ant.info_hunger = stored_float("infoHunger", ant.info_hunger, 0.0, 1.0)
+    ant.confidence_threshold = stored_float(
+        "confidenceThreshold", ant.confidence_threshold, 0.0, 1.0
+    )
+    ant.loss_sensitivity = stored_float("lossSensitivity", ant.loss_sensitivity, 0.0, 1.0)
+    ant.momentum_bias = stored_float("momentumBias", ant.momentum_bias, 0.0, 1.0)
+    ant.chaos_bias = stored_float("chaosBias", ant.chaos_bias, 0.0, 1.0)
+    ant.base_influence = stored_float("baseInfluence", ant.base_influence, 0.35, 2.25)
+    ant.influence = ant.base_influence
+    return ant
 
 
 def ant_strategy_state(ant: AntState, colony: ColonyState) -> dict[str, Any]:

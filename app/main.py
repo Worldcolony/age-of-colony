@@ -21,6 +21,7 @@ from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
     MARKET_RISK_SUGAR,
+    PRIVATE_SNAPSHOT_KEY,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     ColonyState,
@@ -32,12 +33,16 @@ from .game.harness import (
     Prediction,
     ant_bet_history,
     ant_public_state,
+    ant_strategy_state,
     ant_strategy_history,
+    clone_ant_for_new_match,
     find_ant,
     generate_ants,
     normalize_room_code,
     opportunity_options,
     redact_public_identity,
+    restore_ant_profile,
+    room_kind_from_snapshot,
 )
 from .persistence import SupabaseGameStore, SupabasePersistenceError
 from .txline import (
@@ -385,6 +390,30 @@ def _require_wallet_for_wallet_room(room: GameRoom, wallet: str | None) -> None:
         )
 
 
+def _require_player_identity(
+    room: GameRoom,
+    wallet: str | None,
+    anonymous_id: str | None,
+    *,
+    action: str,
+) -> None:
+    """Keep ownerless access exclusive to explicit admin simulations.
+
+    The anonymous browser id remains a supported player identity for the
+    pre-wallet flow. A room merely lacking owner fields must never acquire
+    admin-like mutation rights.
+    """
+
+    if room.room_kind == "admin":
+        return
+    if wallet or (anonymous_id or "").strip():
+        return
+    raise HTTPException(
+        status_code=401,
+        detail=f"Connect a wallet or provide a browser identity to {action}.",
+    )
+
+
 @app.post("/api/auth/wallet/challenge")
 async def wallet_challenge(payload: WalletChallengeRequest, response: Response) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
@@ -491,6 +520,11 @@ async def health(request: Request) -> dict[str, Any]:
 @app.post("/api/games")
 async def create_game(payload: CreateGameRequest, request: Request) -> dict[str, Any]:
     wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    if not wallet and not anonymous_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Connect a wallet or provide a browser identity to create a player room.",
+        )
     room = await _get_or_create_public_match_room(
         payload,
         owner_wallet=wallet,
@@ -513,8 +547,7 @@ async def create_colony(game_id: str, payload: CreateColonyRequest, request: Req
     room = await _get_game_or_restore_404(game_id)
     wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
     _require_wallet_for_wallet_room(room, wallet)
-    if not wallet and not anonymous_id:
-        require_admin_tool(request)
+    _require_player_identity(room, wallet, anonymous_id, action="create a colony")
     try:
         game_manager.harness(game_id).add_colony(
             name=payload.name,
@@ -537,6 +570,7 @@ async def join_game_room(game_id: str, payload: JoinRoomRequest, request: Reques
     room = await _get_game_or_restore_404(game_id)
     wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
     _require_wallet_for_wallet_room(room, wallet)
+    _require_player_identity(room, wallet, anonymous_id, action="join this player room")
     try:
         game_manager.harness(game_id).join_player(
             payload.name,
@@ -561,6 +595,7 @@ async def join_room_by_code(room_code: str, payload: JoinRoomRequest, request: R
     room = await _get_room_by_code_or_restore_404(room_code)
     wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
     _require_wallet_for_wallet_room(room, wallet)
+    _require_player_identity(room, wallet, anonymous_id, action="join this player room")
     try:
         game_manager.harness(room.game_id).join_player(
             payload.name,
@@ -605,6 +640,7 @@ async def _get_or_create_public_match_room(
         owner_anonymous_id=owner_anonymous_id,
         owner_wallet=owner_wallet,
         owner_name=payload.creatorName,
+        room_kind="player",
     )
     room.mode = "live"
     room.agent_call_mode = "per_ant"
@@ -613,6 +649,8 @@ async def _get_or_create_public_match_room(
 
 def _active_public_room_for_fixture(fixture_id: int | str) -> GameRoom | None:
     for room in game_manager.rooms.values():
+        if room.room_kind != "player":
+            continue
         if str(room.fixture_id) != str(fixture_id):
             continue
         if room.status in {"finished", "error", "stopped"}:
@@ -630,7 +668,12 @@ def _active_public_room_for_fixture(fixture_id: int | str) -> GameRoom | None:
 async def _stored_public_room_for_fixture_or_none(fixture_id: int | str) -> dict[str, Any] | None:
     if not supabase_store.configured:
         return None
-    return await asyncio.to_thread(supabase_store.latest_game_for_fixture, fixture_id, mode="live")
+    return await asyncio.to_thread(
+        supabase_store.latest_game_for_fixture,
+        fixture_id,
+        mode="live",
+        room_kind="player",
+    )
 
 
 def _merge_public_fixture_metadata(room: GameRoom, payload: CreateGameRequest) -> None:
@@ -919,16 +962,15 @@ async def update_ant_strategy(
 
 @app.post("/api/games/{game_id}/start")
 async def start_game(game_id: str, payload: StartGameRequest, request: Request) -> dict[str, Any]:
-    room = _get_game_or_404(game_id)
+    room = await _get_game_or_restore_404(game_id)
     _ensure_deepseek_agent()
     mode = payload.mode.strip().casefold()
     if mode not in {"replay", "live"}:
         raise HTTPException(status_code=422, detail="mode must be replay or live")
     if mode == "replay":
         require_admin_tool(request)
-        if room.owner_wallet or room.owner_anonymous_id:
-            wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
-            _ensure_live_host(room, anonymous_id, wallet=wallet, action="start this replay")
+        wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+        _ensure_live_host(room, anonymous_id, wallet=wallet, action="start this replay")
     if not room.colonies:
         raise HTTPException(status_code=422, detail="Add at least one colony before starting the match.")
     if room.status in {"running_replay", "running_live"}:
@@ -994,12 +1036,17 @@ def _ensure_live_host(
     wallet: str | None = None,
     action: str = "start the game",
 ) -> None:
+    if room.room_kind == "admin":
+        return
     if room.owner_wallet:
         if wallet != room.owner_wallet:
             raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
         return
-    if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
-        raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
+    if room.owner_anonymous_id:
+        if (anonymous_id or "").strip() != room.owner_anonymous_id:
+            raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
+        return
+    raise HTTPException(status_code=403, detail=f"Only an identified room host can {action}.")
 
 
 def _ensure_colony_owner(
@@ -1018,11 +1065,9 @@ def _ensure_colony_owner(
             return
         raise HTTPException(status_code=403, detail=f"Only the colony owner can {action}.")
     if not colony.player_id and not colony.player_anonymous_id:
-        if room.owner_wallet and wallet != room.owner_wallet:
-            raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
-        if room.owner_anonymous_id and (anonymous_id or "").strip() != room.owner_anonymous_id:
-            raise HTTPException(status_code=403, detail=f"Only the room host can {action}.")
-        return
+        if room.room_kind == "admin":
+            return
+        raise HTTPException(status_code=403, detail=f"Only an identified colony owner can {action}.")
     clean_anonymous_id = (anonymous_id or "").strip()
     if clean_anonymous_id and clean_anonymous_id == colony.player_anonymous_id:
         return
@@ -1147,7 +1192,9 @@ async def _start_live_room_now(room: GameRoom) -> None:
 async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) -> dict[str, Any]:
     require_admin_tool(request)
     _ensure_deepseek_agent()
-    old_room = _get_game_or_404(game_id)
+    old_room = await _get_game_or_restore_404(game_id)
+    wallet, anonymous_id = _request_player_identity(request, payload.anonymousId)
+    _ensure_live_host(old_room, anonymous_id, wallet=wallet, action="rerun this replay")
     if old_room.status in {"running_replay", "running_live"}:
         raise HTTPException(status_code=409, detail="Wait for the simulation to finish before rerunning.")
     if not old_room.colonies:
@@ -1159,17 +1206,21 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
         fixture_id=old_room.fixture_id,
         participant1=old_room.participant1,
         participant2=old_room.participant2,
+        competition=old_room.competition,
+        start_time=old_room.start_time,
+        start_time_iso=old_room.start_time_iso,
         seed=old_room.seed,
         owner_anonymous_id=old_room.owner_anonymous_id,
         owner_wallet=old_room.owner_wallet,
         owner_name=old_room.owner_name,
+        room_kind=old_room.room_kind,
         txline_validation=old_room.txline_validation,
     )
     harness = game_manager.harness(room.game_id)
     for player in old_room.players:
         harness.join_player(player.name, anonymous_id=player.anonymous_id, wallet=player.wallet)
     for colony in old_room.colonies.values():
-        harness.add_colony(
+        cloned_colony = harness.add_colony(
             colony.name,
             colony.size,
             colony.style,
@@ -1179,6 +1230,41 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
             wallet=colony.player_wallet,
             player_id=colony.player_id,
         )
+        cloned_colony.strategy_revision = colony.strategy_revision
+        cloned_colony.seed = colony.seed
+        cloned_colony.ants = [
+            clone_ant_for_new_match(ant)
+            for ant in colony.ants[: colony.size]
+        ]
+        carried_ant_ids: list[str] = []
+        for ant in cloned_colony.ants:
+            if not any((ant.style_override, ant.favorite_context_override, ant.info_need_override)):
+                continue
+            carried_ant_ids.append(ant.ant_id)
+            room.add_log(
+                "ant_strategy_updated",
+                f"{cloned_colony.name} carries {ant.ant_id}'s custom orders into the rerun.",
+                {
+                    "colonyId": cloned_colony.colony_id,
+                    "antId": ant.ant_id,
+                    "strategy": ant_strategy_state(ant, cloned_colony),
+                    "strategyRevision": cloned_colony.strategy_revision,
+                    "carriedForward": True,
+                    "sourceGameId": old_room.game_id,
+                    "sourceColonyId": colony.colony_id,
+                },
+            )
+        if carried_ant_ids:
+            room.add_log(
+                "strategy_carried_forward",
+                f"{cloned_colony.name} keeps {len(carried_ant_ids)} individual ant strategies for the rerun.",
+                {
+                    "colonyId": cloned_colony.colony_id,
+                    "antIds": carried_ant_ids,
+                    "strategyRevision": cloned_colony.strategy_revision,
+                    "sourceGameId": old_room.game_id,
+                },
+            )
     room.mode = "replay"
     room.agent_call_mode = payload.agentCallMode
     return await _start_replay_room(room, payload)
@@ -1233,6 +1319,7 @@ def _build_admin_room(payload: AdminRoomRequest) -> GameRoom:
         start_time_iso=payload.startTimeIso,
         txline_validation=_txline_validation_cache.get(str(payload.fixtureId)),
         seed=payload.seed,
+        room_kind="admin",
     )
     harness = game_manager.harness(room.game_id)
     try:
@@ -1465,6 +1552,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) 
             participant1=fixture.get("participant1"),
             participant2=fixture.get("participant2"),
             seed=payload.seed,
+            room_kind="admin",
         )
         harness = game_manager.harness(room.game_id)
         _add_run_previous_colonies(harness, payload.colonies)
@@ -1506,7 +1594,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) 
             )
             return room.public_state()
 
-        harness.process_events(timeline["events"])
+        await asyncio.to_thread(harness.process_events, timeline["events"])
         await _sync_room_to_supabase_async(room)
         return room.public_state()
 
@@ -1536,6 +1624,7 @@ async def demo_run(payload: DemoRunRequest, request: Request) -> dict[str, Any]:
         participant1=fixture["participant1"],
         participant2=fixture["participant2"],
         seed=payload.seed,
+        room_kind="admin",
     )
     harness = game_manager.harness(room.game_id)
     _add_autorun_colonies(harness)
@@ -1547,7 +1636,7 @@ async def demo_run(payload: DemoRunRequest, request: Request) -> dict[str, Any]:
         f"Demo run started on {fixture['participant1']} - {fixture['participant2']} with {len(events)} events.",
         {"mode": "replay", "source": "demo", "rawCount": len(events)},
     )
-    harness.process_events(events)
+    await asyncio.to_thread(harness.process_events, events)
     await _sync_room_to_supabase_async(room)
     return room.public_state()
 
@@ -1556,7 +1645,11 @@ async def demo_run(payload: DemoRunRequest, request: Request) -> dict[str, Any]:
 async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     require_admin_tool(request)
     if not supabase_store.configured:
-        games = [room.public_state() for room in game_manager.rooms.values()]
+        games = [
+            room.public_state()
+            for room in game_manager.rooms.values()
+            if room.room_kind == "admin"
+        ]
         games.sort(key=lambda item: item.get("eventIndex", 0), reverse=True)
         return {
             "source": "memory",
@@ -1565,7 +1658,9 @@ async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=
             "games": games[:limit],
             "hint": "Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to persist admin games.",
         }
-    stored_payload = await asyncio.to_thread(supabase_store.list_games, limit=limit)
+    list_admin_games = getattr(supabase_store, "list_admin_games", None)
+    list_stored_games = list_admin_games if callable(list_admin_games) else supabase_store.list_games
+    stored_payload = await asyncio.to_thread(list_stored_games, limit=limit)
     payload = stored_payload if isinstance(stored_payload, dict) else {}
     stored_games = payload.get("games")
     if not isinstance(stored_games, list):
@@ -1573,14 +1668,18 @@ async def admin_games(request: Request, limit: int = Query(default=50, ge=1, le=
     games: list[dict[str, Any]] = []
     stored_timestamps: dict[str, float] = {}
     for index, row in enumerate(stored_games):
-        game = _admin_game_public_state(row)
+        game = _admin_game_public_state(row, admin_only=True)
         if not game:
             continue
         games.append(game)
         stored_timestamps[game["gameId"]] = _admin_row_timestamp(row, fallback=-float(index))
     games = await _stop_orphaned_admin_runs(games)
 
-    memory_rooms = dict(game_manager.rooms)
+    memory_rooms = {
+        game_id: room
+        for game_id, room in game_manager.rooms.items()
+        if room.room_kind == "admin"
+    }
     merged_entries: list[tuple[float, dict[str, Any]]] = []
     seen_game_ids: set[str] = set()
     for stored_game in games:
@@ -1610,10 +1709,14 @@ async def _stop_orphaned_admin_runs(stored_games: list[dict[str, Any]]) -> list[
     """Stop persisted workers with no task in this single-worker process."""
     updated_games: list[dict[str, Any]] = []
     for stored_game in stored_games:
+        if room_kind_from_snapshot(stored_game) != "admin":
+            continue
         status = stored_game.get("status")
         is_orphan_candidate = status in {"running_replay", "running_live"}
         game_id = str(stored_game.get("gameId") or "")
-        if not is_orphan_candidate or not game_id or game_manager.get_room(game_id):
+        memory_room = game_manager.get_room(game_id) if game_id else None
+        has_admin_worker = memory_room is not None and memory_room.room_kind == "admin"
+        if not is_orphan_candidate or not game_id or has_admin_worker:
             updated_games.append(stored_game)
             continue
         try:
@@ -1623,7 +1726,7 @@ async def _stop_orphaned_admin_runs(stored_games: list[dict[str, Any]]) -> list[
         if not stopped:
             updated_games.append(stored_game)
             continue
-        updated_games.append(stopped)
+        updated_games.append(redact_public_identity(stopped))
     return updated_games
 
 
@@ -1645,7 +1748,7 @@ def _admin_room_timestamp(room: GameRoom) -> float:
     return float(room.log[-1].created_at) if room.log else 0.0
 
 
-def _admin_game_public_state(row: Any) -> dict[str, Any] | None:
+def _admin_game_public_state(row: Any, *, admin_only: bool = False) -> dict[str, Any] | None:
     """Flatten a persisted Supabase row into the public GameState contract."""
     if not isinstance(row, dict):
         return None
@@ -1669,6 +1772,9 @@ def _admin_game_public_state(row: Any) -> dict[str, Any] | None:
             state[public_key] = row[stored_key]
 
     state["gameId"] = str(game_id)
+    state["roomKind"] = room_kind_from_snapshot({**row, **state})
+    if admin_only and state["roomKind"] != "admin":
+        return None
     state["status"] = str(state.get("status") or "created")
     try:
         state["eventIndex"] = int(state.get("eventIndex") or 0)
@@ -1690,7 +1796,11 @@ def _stored_game_has_orphaned_worker(stored_game: dict[str, Any]) -> bool:
     return stored_game.get("status") in {"running_replay", "running_live"}
 
 
-async def _mark_orphaned_stored_game(stored_game: dict[str, Any]) -> dict[str, Any]:
+async def _mark_orphaned_stored_game(
+    stored_game: dict[str, Any],
+    *,
+    public: bool = True,
+) -> dict[str, Any]:
     stopped_state = dict(stored_game)
     stopped_state["status"] = "stopped"
     try:
@@ -1698,7 +1808,7 @@ async def _mark_orphaned_stored_game(stored_game: dict[str, Any]) -> dict[str, A
     except (AttributeError, SupabasePersistenceError):
         persisted = None
     state = persisted if isinstance(persisted, dict) else stopped_state
-    return redact_public_identity(state)
+    return redact_public_identity(state) if public else state
 
 
 @app.get("/api/games/{game_id}")
@@ -2225,7 +2335,7 @@ async def _get_room_by_code_or_restore_404(room_code: str):
     if stored:
         stored_state = _admin_game_public_state(stored)
         if stored_state and _stored_game_has_orphaned_worker(stored_state):
-            stored_state = await _mark_orphaned_stored_game(stored_state)
+            stored_state = await _mark_orphaned_stored_game(stored_state, public=False)
             stored = {**stored, "public_state": stored_state}
         room = _restore_room_from_stored_row(stored)
         await _ensure_room_log_hydrated(room)
@@ -2242,7 +2352,7 @@ async def _get_game_or_restore_404(game_id: str):
         stored_row = (replay.get("stored") or {}).get("game") or {}
         stored_state = replay.get("game") or stored_row.get("public_state") or stored_row
         if _stored_game_has_orphaned_worker(stored_state):
-            stored_state = await _mark_orphaned_stored_game(stored_state)
+            stored_state = await _mark_orphaned_stored_game(stored_state, public=False)
         room = _restore_room_from_stored_row(
             {**stored_row, "public_state": stored_state},
             events=replay.get("events") or [],
@@ -2265,6 +2375,18 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
         return existing
 
     owner = public_state.get("owner") or {}
+    private_state = public_state.get(PRIVATE_SNAPSHOT_KEY)
+    if not isinstance(private_state, dict):
+        private_state = {}
+    private_player_anonymous_ids = private_state.get("playerAnonymousIds")
+    if not isinstance(private_player_anonymous_ids, dict):
+        private_player_anonymous_ids = {}
+    private_colony_anonymous_ids = private_state.get("colonyAnonymousIds")
+    if not isinstance(private_colony_anonymous_ids, dict):
+        private_colony_anonymous_ids = {}
+    private_ant_profiles = private_state.get("antProfiles")
+    if not isinstance(private_ant_profiles, dict):
+        private_ant_profiles = {}
     seed = row.get("seed")
     try:
         clean_seed = int(seed) if seed is not None else 7
@@ -2284,9 +2406,12 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
         start_time=public_state.get("startTime") or row.get("start_time"),
         start_time_iso=public_state.get("startTimeIso") or row.get("start_time_iso"),
         txline_validation=public_state.get("txlineValidation") if isinstance(public_state.get("txlineValidation"), dict) else None,
-        owner_anonymous_id=(owner.get("anonymousId") if isinstance(owner, dict) else None) or row.get("owner_anonymous_id"),
+        owner_anonymous_id=(owner.get("anonymousId") if isinstance(owner, dict) else None)
+        or private_state.get("ownerAnonymousId")
+        or row.get("owner_anonymous_id"),
         owner_wallet=(owner.get("wallet") if isinstance(owner, dict) else None) or row.get("owner_wallet"),
         owner_name=owner.get("name") if isinstance(owner, dict) else None,
+        room_kind=room_kind_from_snapshot({**row, **public_state, "events": events or []}),
         seed=clean_seed,
     )
     room.status = public_state.get("status") or row.get("status") or "created"
@@ -2308,11 +2433,16 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
     for player in public_state.get("players") or []:
         if not isinstance(player, dict):
             continue
+        player_id = str(player.get("playerId") or f"player_{len(room.players) + 1}")
         room.players.append(
             PlayerState(
-                player_id=str(player.get("playerId") or f"player_{len(room.players) + 1}"),
+                player_id=player_id,
                 name=str(player.get("name") or f"Player {len(room.players) + 1}")[:32],
-                anonymous_id=str(player.get("anonymousId"))[:80] if player.get("anonymousId") else None,
+                anonymous_id=(
+                    str(player.get("anonymousId") or private_player_anonymous_ids.get(player_id))[:80]
+                    if player.get("anonymousId") or private_player_anonymous_ids.get(player_id)
+                    else None
+                ),
                 wallet=str(player.get("wallet"))[:80] if player.get("wallet") else None,
             )
         )
@@ -2344,7 +2474,15 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             info_need=str(colony_state.get("infoNeed") or "medium"),
             seed=_safe_int(colony_state.get("simulationSeed")) or clean_seed,
             player_id=str(colony_state.get("playerId"))[:80] if colony_state.get("playerId") else None,
-            player_anonymous_id=str(colony_state.get("playerAnonymousId"))[:80] if colony_state.get("playerAnonymousId") else None,
+            player_anonymous_id=(
+                str(
+                    colony_state.get("playerAnonymousId")
+                    or private_colony_anonymous_ids.get(colony_id)
+                )[:80]
+                if colony_state.get("playerAnonymousId")
+                or private_colony_anonymous_ids.get(colony_id)
+                else None
+            ),
             player_wallet=str(colony_state.get("playerWallet"))[:80] if colony_state.get("playerWallet") else None,
             food=food,
             food_reserved=food_reserved,
@@ -2353,6 +2491,14 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             strategy_revision=max(0, _safe_int(colony_state.get("strategyRevision")) or 0),
         )
         colony.ants = generate_ants(colony)
+        ant_profiles = private_ant_profiles.get(colony_id)
+        if not isinstance(ant_profiles, dict):
+            # Transitional snapshots briefly stored profiles alongside the
+            # public colony state. Read them, but never expose them again.
+            ant_profiles = colony_state.get("antProfiles") or {}
+        if isinstance(ant_profiles, dict):
+            for ant in colony.ants:
+                restore_ant_profile(ant, ant_profiles.get(ant.ant_id))
         colony.memory.food_net = (
             _safe_int(colony_state.get("sugarNet"))
             or _safe_int(colony_state.get("foodNet"))
