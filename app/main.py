@@ -1211,6 +1211,16 @@ async def _ensure_waiting_room_progress(room: GameRoom) -> None:
 
 async def _ensure_room_progress(room: GameRoom) -> None:
     await _ensure_waiting_room_progress(room)
+    if _global_live_room_can_restart(room):
+        previous_status = room.status
+        _clear_restored_terminal_snapshot(room)
+        room.status = "running_live"
+        room.add_log(
+            "live_sync",
+            "Public live room recovered after a server restart.",
+            {"mode": "live", "recovered": True, "previousStatus": previous_status},
+        )
+        await _sync_room_to_supabase_async(room)
     if room.status == "error" and room.mode == "live":
         if getattr(room, "_aoc_restored_terminal", False):
             return
@@ -1879,11 +1889,53 @@ def _admin_game_public_state(row: Any, *, admin_only: bool = False) -> dict[str,
 
 
 def _stored_game_can_resume_live(stored_game: dict[str, Any]) -> bool:
-    return stored_game.get("status") == "waiting_kickoff"
+    if stored_game.get("status") == "waiting_kickoff":
+        return True
+    if stored_game.get("status") not in {"running_live", "stopped", "error"}:
+        return False
+    if stored_game.get("mode") != "live":
+        return False
+    if room_kind_from_snapshot(stored_game) != "player":
+        return False
+    if room_scope_from_snapshot(stored_game) != "global":
+        return False
+    if not stored_game.get("colonies"):
+        return False
+    return _live_match_snapshot_in_progress(stored_game.get("match"))
 
 
 def _stored_game_has_orphaned_worker(stored_game: dict[str, Any]) -> bool:
-    return stored_game.get("status") in {"running_replay", "running_live"}
+    return (
+        stored_game.get("status") in {"running_replay", "running_live"}
+        and not _stored_game_can_resume_live(stored_game)
+    )
+
+
+def _live_match_snapshot_in_progress(match: Any) -> bool:
+    if not isinstance(match, dict):
+        return False
+    state = _normalize_live_game_state(match.get("gameState"))
+    status_id = _safe_int(match.get("statusId"))
+    if state in LIVE_FINAL_GAME_STATES or status_id in LIVE_FINAL_STATUS_IDS:
+        return False
+    if state in LIVE_WAITING_GAME_STATES or status_id in LIVE_WAITING_STATUS_IDS:
+        return False
+    return bool(state or status_id is not None)
+
+
+def _global_live_room_can_restart(room: GameRoom) -> bool:
+    if room.status not in {"stopped", "error"}:
+        return False
+    if room.room_kind != "player" or room.room_scope != "global" or room.mode != "live":
+        return False
+    if not room.colonies or not room.match_state:
+        return False
+    return _live_match_snapshot_in_progress(
+        {
+            "gameState": room.match_state.game_state,
+            "statusId": room.match_state.status_id,
+        }
+    )
 
 
 async def _mark_orphaned_stored_game(
@@ -1913,7 +1965,7 @@ async def game_state(game_id: str) -> dict[str, Any]:
         stored_status = stored_game.get("status")
         if _stored_game_has_orphaned_worker(stored_game):
             return await _mark_orphaned_stored_game(stored_game)
-        can_restore = stored_status not in {"finished", "stopped", "error"}
+        can_restore = _stored_game_can_resume_live(stored_game) or stored_status not in {"finished", "stopped", "error"}
         if can_restore:
             room = _restore_room_from_stored_row(
                 {**((replay.get("stored") or {}).get("game") or {}), "public_state": stored_game},
@@ -3294,7 +3346,23 @@ async def _run_live_game(game_id: str) -> None:
             first_batch = False
             await asyncio.sleep(LIVE_SCORE_POLL_SECONDS)
     except asyncio.CancelledError:
-        room.status = "stopped"
+        if (
+            room.room_kind == "player"
+            and room.room_scope == "global"
+            and room.mode == "live"
+            and room.status == "running_live"
+            and room.match_state
+            and _live_match_snapshot_in_progress(
+                {"gameState": room.match_state.game_state, "statusId": room.match_state.status_id}
+            )
+        ):
+            room.add_log(
+                "live_sync",
+                "Public live polling paused for a server restart.",
+                {"mode": "live", "restartPending": True},
+            )
+        else:
+            room.status = "stopped"
     except Exception as exc:
         _sync_room_agent_usage(game_id)
         room.status = "error"

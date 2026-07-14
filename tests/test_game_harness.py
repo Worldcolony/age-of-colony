@@ -25,6 +25,7 @@ from app.main import (
     _process_live_events,
     _replay_delay_after_event,
     _restore_room_from_stored_row,
+    _run_live_game,
     _start_replay_room,
     _stored_game_can_resume_live,
     _sync_live_match_state_from_timeline,
@@ -3992,12 +3993,150 @@ class DemoRunApiTest(unittest.TestCase):
         live_task.assert_called_once()
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("recovered") for event in room.log))
 
-    def test_only_waiting_stored_live_game_can_resume(self):
+    def test_active_global_live_game_can_resume_after_a_restart(self):
+        active_global = {
+            "status": "stopped",
+            "mode": "live",
+            "roomKind": "player",
+            "roomScope": "global",
+            "colonies": [{"colonyId": "col_resume"}],
+            "match": {"gameState": "inplay", "statusId": 2},
+        }
         self.assertTrue(_stored_game_can_resume_live({"status": "waiting_kickoff"}))
-        self.assertFalse(_stored_game_can_resume_live({"status": "running_live"}))
+        self.assertTrue(_stored_game_can_resume_live(active_global))
+        self.assertTrue(_stored_game_can_resume_live({**active_global, "status": "running_live"}))
+        self.assertTrue(_stored_game_can_resume_live({**active_global, "status": "error"}))
+        self.assertFalse(_stored_game_can_resume_live({**active_global, "roomScope": "private"}))
+        self.assertFalse(_stored_game_can_resume_live({**active_global, "roomKind": "admin"}))
+        self.assertFalse(
+            _stored_game_can_resume_live(
+                {**active_global, "match": {"gameState": "finished", "statusId": 13}}
+            )
+        )
         self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "live"}))
         self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "replay"}))
         self.assertFalse(_stored_game_can_resume_live({"status": "finished", "mode": "live"}))
+
+    def test_stopped_global_room_is_restored_and_live_polling_restarts(self):
+        game_id = "game_public_restart"
+        room_code = "919199"
+        public_state = {
+            "gameId": game_id,
+            "roomCode": room_code,
+            "roomKind": "player",
+            "roomScope": "global",
+            "fixtureId": 919199,
+            "participant1": "France",
+            "participant2": "Spain",
+            "status": "stopped",
+            "mode": "live",
+            "eventIndex": 137,
+            "players": [],
+            "colonies": [
+                {
+                    "colonyId": "col_public_restart",
+                    "name": "Restart Nest",
+                    "style": "balanced",
+                    "favoriteContext": "balanced",
+                    "infoNeed": "medium",
+                    "sugar": 20,
+                }
+            ],
+            "activeOpportunities": [],
+            "match": {
+                "score": {"participant1": 0, "participant2": 0},
+                "gameState": "inplay",
+                "statusId": 2,
+            },
+            "logCount": 1,
+        }
+        stored_row = {
+            "game_id": game_id,
+            "fixture_id": str(public_state["fixtureId"]),
+            "status": "stopped",
+            "mode": "live",
+            "seed": 99,
+            "event_index": public_state["eventIndex"],
+            "public_state": public_state,
+        }
+
+        class RestartStore:
+            configured = True
+
+            def game_replay(self, requested_game_id):
+                if requested_game_id != game_id:
+                    return None
+                return {
+                    "game": public_state,
+                    "events": [],
+                    "stored": {"source": "supabase", "game": stored_row, "eventCount": 0},
+                }
+
+        synced_statuses = []
+
+        async def fake_sync(room):
+            synced_statuses.append(room.status)
+            return {"stored": True}
+
+        self.addCleanup(game_manager.rooms.pop, game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room_code, None)
+        self.addCleanup(game_manager.live_tasks.pop, game_id, None)
+        with (
+            patch("app.main.supabase_store", RestartStore()),
+            patch("app.main._sync_room_to_supabase_async", fake_sync),
+            patch("app.main._ensure_live_task") as live_task,
+        ):
+            response = TestClient(app).get(f"/api/games/{game_id}/replay")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["game"]["status"], "running_live")
+        room = game_manager.get_room(game_id)
+        self.assertIsNotNone(room)
+        self.assertFalse(hasattr(room, "_aoc_restored_terminal"))
+        self.assertEqual(synced_statuses, ["running_live"])
+        live_task.assert_called_once_with(room)
+        self.assertTrue(any(event.kind == "live_sync" and event.data.get("recovered") for event in room.log))
+
+    def test_global_live_cancellation_keeps_room_resumable(self):
+        room = game_manager.create_room(
+            fixture_id=919200,
+            participant1="France",
+            participant2="Spain",
+            seed=100,
+            room_scope="global",
+        )
+        game_manager.harness(room.game_id).add_colony(
+            "Restart Nest",
+            20,
+            "balanced",
+            "balanced",
+            "medium",
+        )
+        room.mode = "live"
+        room.status = "running_live"
+        room.match_state.game_state = "inplay"
+        room.match_state.status_id = 2
+        synced_statuses = []
+
+        async def cancelled_timeline(_client, _room):
+            raise asyncio.CancelledError
+
+        async def fake_sync(target_room):
+            synced_statuses.append(target_room.status)
+            return {"stored": True}
+
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+        self.addCleanup(game_manager.live_tasks.pop, room.game_id, None)
+        with (
+            patch("app.main._live_score_timeline", cancelled_timeline),
+            patch("app.main._sync_room_to_supabase_async", fake_sync),
+        ):
+            asyncio.run(_run_live_game(room.game_id))
+
+        self.assertEqual(room.status, "running_live")
+        self.assertEqual(synced_statuses, ["running_live"])
+        self.assertTrue(any(event.data.get("restartPending") for event in room.log if event.kind == "live_sync"))
 
     def test_live_catchup_does_not_create_retroactive_markets(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
