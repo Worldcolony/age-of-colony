@@ -1796,6 +1796,20 @@ class GameHarness:
         if opportunity.context != "penalties" and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS:
             return False
 
+        # A player-facing live room should not sit empty after its last market
+        # resolves. The polling loop may immediately request a synthetic
+        # replacement before the regular five-minute cadence has elapsed. Let
+        # that single replacement claim the now-empty standard slot; normal
+        # event-driven markets and additional concurrent markets still obey the
+        # cooldown below.
+        replace_empty_live_slot = (
+            self.room.room_kind == "player"
+            and self.room.mode == "live"
+            and not self._open_standard_market_contexts()
+            and truthy(opportunity.source_event.get("synthetic"))
+            and opportunity.source_event.get("reason") == "live_baseline"
+        )
+
         # TXLine can emit an award, a VAR confirmation and a result record for
         # the same penalty. A shared penalty key plus a five-minute match-clock
         # cooldown lets the award create one market while confirmations are
@@ -1805,7 +1819,7 @@ class GameHarness:
         if clock is not None:
             last_clock = self.room.last_opportunity_clock_by_key.get(cadence_key)
             cooldown = MARKET_COOLDOWN_SECONDS[opportunity.context]
-            if last_clock is not None and clock - last_clock < cooldown:
+            if last_clock is not None and clock - last_clock < cooldown and not replace_empty_live_slot:
                 return False
             self.room.last_opportunity_clock_by_key[cadence_key] = clock
             self.room.last_opportunity_event_index_by_key[cadence_key] = self.room.event_index

@@ -4265,12 +4265,13 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 1)
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("source") == "baseline" for event in room.log))
 
-    def test_live_baseline_market_rearms_on_the_next_five_minute_wave(self):
+    def test_live_baseline_replaces_an_empty_board_then_resumes_five_minute_waves(self):
         def first_available_vote(_ant, context):
             return context["market"]["availableVotes"][0]["vote"]
 
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent(first_available_vote))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        room.mode = "live"
         harness = manager.harness(room.game_id)
         harness.add_colony("Live Nest", 20, "balanced", "momentum", "medium")
         first_wave = [
@@ -4286,29 +4287,41 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(_open_live_baseline_markets(harness, first_wave), 1)
         for prediction in room.predictions.values():
             prediction.resolved = True
+        room.event_index += 1
         harness._clear_old_opportunities()
 
-        event_index_before_wait = room.event_index
+        event_index_before_replacement = room.event_index
         self.assertEqual(
             _open_live_baseline_markets(
                 harness,
                 [{**first_wave[0], "seq": 2, "minute": 9, "clockSeconds": 599}],
             ),
-            0,
+            1,
         )
-        self.assertEqual(room.event_index, event_index_before_wait)
+        self.assertEqual(room.event_index, event_index_before_replacement + 1)
+        self.assertEqual(
+            {opportunity.context for opportunity in room.opportunities.values()},
+            {"next_card"},
+        )
 
         self.assertEqual(
             _open_live_baseline_markets(
                 harness,
                 [{**first_wave[0], "seq": 3, "minute": 10, "clockSeconds": 600}],
             ),
+            0,
+        )
+        self.assertEqual(
+            _open_live_baseline_markets(
+                harness,
+                [{**first_wave[0], "seq": 4, "minute": 14, "clockSeconds": 899}],
+            ),
             1,
         )
         self.assertTrue(any(not prediction.resolved for prediction in room.predictions.values()))
         self.assertEqual(
             {opportunity.context for opportunity in room.opportunities.values()},
-            {"next_substitution"},
+            {"next_card", "next_substitution"},
         )
 
     def test_live_baseline_adds_a_new_wave_while_an_earlier_market_is_open(self):

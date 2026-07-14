@@ -3618,7 +3618,16 @@ def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, An
 
 
 def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | None) -> bool:
-    """Return whether the next five-minute live market wave may be opened."""
+    """Return whether a replacement or five-minute market wave may open."""
+
+    # Keep a player room actionable: once its final standard market settles (or
+    # closes without an entry), replace it on the next live poll instead of
+    # showing an empty board until the next five-minute boundary.
+    if room.room_kind == "player" and room.mode == "live" and not any(
+        opportunity.context != "penalties"
+        for opportunity in room.opportunities.values()
+    ):
+        return True
 
     cadence_key = "standard_market_arrival"
     last_clock = room.last_opportunity_clock_by_key.get(cadence_key)
