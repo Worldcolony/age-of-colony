@@ -22,6 +22,7 @@ from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
     MARKET_RISK_SUGAR,
     PRIVATE_SNAPSHOT_KEY,
+    STANDARD_MARKET_INTERVAL_SECONDS,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     ColonyState,
@@ -3233,7 +3234,6 @@ async def _run_live_game(game_id: str) -> None:
     harness = game_manager.harness(game_id)
     seen_event_keys: set[tuple[Any, ...]] = set()
     first_batch = True
-    baseline_opened = False
     waiting_logged = False
     poll_failures = 0
     try:
@@ -3263,7 +3263,6 @@ async def _run_live_game(game_id: str) -> None:
                 baseline_count = 0
                 if _live_timeline_active(timeline):
                     baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
-                    baseline_opened = baseline_opened or bool(baseline_count)
                 elif not waiting_logged:
                     _log_live_waiting_for_kickoff(room, timeline)
                     waiting_logged = True
@@ -3288,9 +3287,8 @@ async def _run_live_game(game_id: str) -> None:
                 await _finish_live_game_with_txline(harness, client)
                 await _sync_room_to_supabase_async(room)
                 break
-            if not baseline_opened and _live_timeline_active(timeline):
+            if _live_timeline_active(timeline):
                 baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
-                baseline_opened = baseline_opened or bool(baseline_count)
                 if baseline_count:
                     await _sync_room_to_supabase_async(room)
             first_batch = False
@@ -3537,6 +3535,8 @@ def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, An
     if any(not prediction.resolved for prediction in room.predictions.values()):
         return 0
     latest_event = _latest_fixture_event(room, timeline_events or [])
+    if not _live_standard_market_due(room, latest_event):
+        return 0
     try:
         opened = harness.open_baseline_markets(latest_event, reason="live_baseline")
     except Exception as exc:
@@ -3549,6 +3549,20 @@ def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, An
             {"fixtureId": room.fixture_id, "processedAsMarkets": True, "source": "baseline"},
         )
     return opened
+
+
+def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | None) -> bool:
+    """Return whether the next five-minute live market wave may be opened."""
+
+    cadence_key = "standard_market_arrival"
+    last_clock = room.last_opportunity_clock_by_key.get(cadence_key)
+    if last_clock is None:
+        return True
+    current_clock = _event_clock_seconds(latest_event or {})
+    if current_clock is not None:
+        return current_clock - last_clock >= STANDARD_MARKET_INTERVAL_SECONDS
+    last_event_index = room.last_opportunity_event_index_by_key.get(cadence_key, -10_000)
+    return room.event_index - last_event_index >= 24
 
 
 def _latest_fixture_event(room: GameRoom, events: list[dict[str, Any]]) -> dict[str, Any] | None:

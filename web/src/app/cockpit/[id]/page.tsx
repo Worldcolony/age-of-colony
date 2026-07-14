@@ -923,8 +923,8 @@ function LiveTab({
         </>
       ) : (
         <EmptyState
-          title={waitingForKickoff ? "Waiting for kickoff" : "No market open"}
-          body={waitingForKickoff ? `TXLine reports ${matchStateLabel}. Markets open once the match is live.` : "The next prediction window will appear here."}
+          title={waitingForKickoff ? "Waiting for kickoff" : "Next market wave loading"}
+          body={waitingForKickoff ? `TXLine reports ${matchStateLabel}. Markets open once the match is live.` : "Markets rotate automatically on the five-minute match cadence. Stay here — the next window will open by itself."}
         />
       )}
 
