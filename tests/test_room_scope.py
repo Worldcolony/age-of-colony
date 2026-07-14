@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.game.harness import room_scope_from_snapshot
 from app.main import _restore_room_from_stored_row, app, game_manager
-from app.persistence import SupabaseGameStore, SupabasePersistenceSettings
+from app.persistence import SupabaseGameStore, SupabasePersistenceError, SupabasePersistenceSettings
 
 
 class PlayerRoomScopeTest(unittest.TestCase):
@@ -215,6 +215,59 @@ class PlayerRoomScopeTest(unittest.TestCase):
         query = urllib.parse.parse_qs(calls[0].partition("?")[2])
         self.assertEqual(
             query["and"],
+            [
+                "(or(public_state->>roomKind.eq.player,public_state->>roomKind.is.null),"
+                "or(public_state->>roomScope.eq.global,public_state->>roomScope.is.null))"
+            ],
+        )
+
+    def test_supabase_global_lookup_falls_back_when_owner_columns_are_missing(self):
+        store = SupabaseGameStore(
+            SupabasePersistenceSettings(url="https://example.supabase.co", key="test-key")
+        )
+        global_row = {
+            "game_id": "game_legacy_schema_global",
+            "fixture_id": "legacy-schema-fixture",
+            "status": "created",
+            "mode": "live",
+            "public_state": {
+                "gameId": "game_legacy_schema_global",
+                "roomKind": "player",
+                "roomScope": "global",
+                "status": "created",
+                "mode": "live",
+                "players": [],
+                "colonies": [],
+            },
+        }
+        calls: list[str] = []
+
+        def fake_request(path, **_kwargs):
+            calls.append(path)
+            selected = urllib.parse.parse_qs(path.partition("?")[2])["select"][0]
+            if "owner_anonymous_id" in selected:
+                raise SupabasePersistenceError(
+                    'Supabase GET failed with HTTP 400: {"code":"42703",'
+                    '"message":"column aoc_games.owner_anonymous_id does not exist"}'
+                )
+            return [global_row]
+
+        with patch.object(store, "_request_json", side_effect=fake_request):
+            found = store.latest_game_for_fixture(
+                "legacy-schema-fixture",
+                mode="live",
+                room_kind="player",
+                room_scope="global",
+            )
+
+        self.assertEqual(found, global_row)
+        self.assertEqual(len(calls), 2)
+        first_select = urllib.parse.parse_qs(calls[0].partition("?")[2])["select"][0]
+        fallback_query = urllib.parse.parse_qs(calls[1].partition("?")[2])
+        self.assertIn("owner_anonymous_id", first_select)
+        self.assertNotIn("owner_anonymous_id", fallback_query["select"][0])
+        self.assertEqual(
+            fallback_query["and"],
             [
                 "(or(public_state->>roomKind.eq.player,public_state->>roomKind.is.null),"
                 "or(public_state->>roomScope.eq.global,public_state->>roomScope.is.null))"

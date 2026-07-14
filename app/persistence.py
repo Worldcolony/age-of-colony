@@ -390,6 +390,11 @@ class SupabaseGameStore:
                 "completed_at",
             ]
         )
+        legacy_fields = ",".join(
+            field
+            for field in fields.split(",")
+            if field not in {"owner_anonymous_id", "owner_wallet", "owner_name"}
+        )
         query = (
             f"aoc_games?select={fields}&fixture_id=eq.{cleaned}"
             "&status=not.in.(finished,error,stopped)"
@@ -424,12 +429,24 @@ class SupabaseGameStore:
         if room_scope == "private":
             query = f"{query}&public_state->>roomScope=eq.private"
 
+        legacy_query = query.replace(f"select={fields}", f"select={legacy_fields}", 1)
+        use_legacy_fields = False
         for page in range(_LATEST_FIXTURE_MAX_PAGES):
             offset = page * safe_limit
-            page_query = f"{query}&limit={safe_limit}"
+            active_query = legacy_query if use_legacy_fields else query
+            page_query = f"{active_query}&limit={safe_limit}"
             if offset:
                 page_query = f"{page_query}&offset={offset}"
-            rows = self._request_json(page_query)
+            try:
+                rows = self._request_json(page_query)
+            except SupabasePersistenceError as exc:
+                if use_legacy_fields or not _missing_owner_columns(str(exc)):
+                    raise
+                use_legacy_fields = True
+                page_query = f"{legacy_query}&limit={safe_limit}"
+                if offset:
+                    page_query = f"{page_query}&offset={offset}"
+                rows = self._request_json(page_query)
             if not isinstance(rows, list) or not rows:
                 break
 
