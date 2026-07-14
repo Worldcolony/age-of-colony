@@ -1597,7 +1597,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(settlement.data.get("reason"), "expired")
         self.assertFalse(settlement.data.get("win"))
 
-    def test_unentered_markets_log_closure_and_do_not_block_a_later_slot(self):
+    def test_unentered_markets_stay_live_until_the_matching_event(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Multi Market Nest", 20, "balanced", "momentum", "medium")
         corner_event = {
@@ -1638,7 +1638,33 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(len(room.public_state()["activeOpportunities"]), 2)
 
         room.event_index = 2
-        harness._clear_old_opportunities()
+        harness._clear_old_opportunities(
+            {
+                **corner_event,
+                "seq": 3,
+                "action": "possession",
+                "highlights": [],
+                "minute": 7,
+                "clockSeconds": 420,
+                "description": "Possession - France",
+            }
+        )
+
+        self.assertEqual(len(room.public_state()["activeOpportunities"]), 2)
+        self.assertFalse([event for event in room.log if event.kind == "market_closed"])
+
+        room.event_index = 3
+        harness._clear_old_opportunities(
+            {
+                **corner_event,
+                "seq": 4,
+                "action": "corner",
+                "highlights": ["corner"],
+                "minute": 8,
+                "clockSeconds": 480,
+                "description": "Corner - France",
+            }
+        )
 
         self.assertEqual(
             {item["opportunityId"] for item in room.public_state()["activeOpportunities"]},
@@ -1654,11 +1680,12 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(all(event.data.get("reason") == "no_entries" for event in closures))
         self.assertTrue(all(event.data.get("positionCount") == 0 for event in closures))
         self.assertTrue(all(event.data.get("market", {}).get("opportunityId") for event in closures))
+        self.assertEqual(closures[0].data.get("resolvedOutcome", {}).get("target"), "corner")
 
-        room.event_index = 3
+        room.event_index = 4
         replacement = build_opportunities(
-            {**corner_event, "seq": 3, "minute": 11, "clockSeconds": 660},
-            3,
+            {**corner_event, "seq": 5, "minute": 11, "clockSeconds": 660},
+            4,
             room.match_state,
         )[0]
         self.assertTrue(harness._claim_opportunity_slot(replacement))
@@ -1732,6 +1759,7 @@ class GameHarnessTest(unittest.TestCase):
             if prediction.opportunity_id == opportunities[0].opportunity_id
         )
         harness._void_prediction(first_prediction, opportunities[0], reason="test")
+        harness._clear_old_opportunities()
         self.assertTrue(harness._claim_opportunity_slot(opportunities[3]))
 
     def test_precision_market_resolves_on_next_goal_team(self):
@@ -4076,6 +4104,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(_open_live_baseline_markets(harness, first_wave), 1)
         for prediction in room.predictions.values():
             prediction.resolved = True
+        harness._clear_old_opportunities()
 
         event_index_before_wait = room.event_index
         self.assertEqual(
@@ -4099,6 +4128,38 @@ class DemoRunApiTest(unittest.TestCase):
             {opportunity.context for opportunity in room.opportunities.values()},
             {"next_substitution"},
         )
+
+    def test_live_baseline_adds_a_new_wave_while_an_earlier_market_is_open(self):
+        def first_available_vote(_ant, context):
+            return context["market"]["availableVotes"][0]["vote"]
+
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent(first_available_vote))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Live Nest", 20, "balanced", "momentum", "medium")
+        source = {
+            "fixtureId": 42,
+            "seq": 1,
+            "action": "clock",
+            "minute": 5,
+            "clockSeconds": 300,
+            "description": "Clock tick",
+        }
+
+        self.assertEqual(_open_live_baseline_markets(harness, [source]), 1)
+        self.assertEqual(
+            _open_live_baseline_markets(
+                harness,
+                [{**source, "seq": 2, "minute": 10, "clockSeconds": 600}],
+            ),
+            1,
+        )
+
+        self.assertEqual(
+            {opportunity.context for opportunity in room.opportunities.values()},
+            {"next_card", "next_substitution"},
+        )
+        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 2)
 
     def test_scheduled_txline_state_waits_before_live_markets(self):
         scheduled_timeline = {

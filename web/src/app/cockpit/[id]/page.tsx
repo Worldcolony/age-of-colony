@@ -1735,6 +1735,16 @@ function marketOutcomeSummary(market: MarketModel): MarketOutcome {
   const inferred = inferOutcomeFromSettlements(market);
   if (inferred) return inferred;
 
+  const closedOutcomes = recordedMarketOutcomes(market.closures);
+  if (closedOutcomes.length === 1) {
+    return {
+      label: cleanOutcomeLabel(closedOutcomes[0].label),
+      detail: `${closedOutcomes[0].detail || "Resolved from the live match event."} No colony entered, so no Sugar was at risk.`,
+      badge: "closed",
+      tone: "muted",
+    };
+  }
+
   if (market.closures.length && !market.settlements.length && !market.voids.length) {
     return {
       label: "No colony entered",

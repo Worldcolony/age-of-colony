@@ -3532,8 +3532,6 @@ def _safe_int(value: Any) -> int | None:
 
 def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, Any]] | None = None) -> int:
     room = harness.room
-    if any(not prediction.resolved for prediction in room.predictions.values()):
-        return 0
     latest_event = _latest_fixture_event(room, timeline_events or [])
     if not _live_standard_market_due(room, latest_event):
         return 0

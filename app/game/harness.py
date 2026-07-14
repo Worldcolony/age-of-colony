@@ -1397,7 +1397,7 @@ class GameHarness:
                     food_budget=available_food // remaining_windows,
                 )
 
-        self._clear_old_opportunities()
+        self._clear_old_opportunities(event)
 
     def _decide_for_colony(
         self,
@@ -1783,7 +1783,7 @@ class GameHarness:
 
     def _claim_opportunity_slot(self, opportunity: Opportunity) -> bool:
         key = self._opportunity_slot_key(opportunity)
-        if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_slot_prediction(key):
+        if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_market_slot(key):
             return False
         if opportunity.context != "penalties" and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS:
             return False
@@ -1822,24 +1822,18 @@ class GameHarness:
         self.room.last_opportunity_event_index_by_key[cadence_key] = self.room.event_index
         return True
 
-    def _has_open_slot_prediction(self, key: str) -> bool:
-        for prediction in self.room.predictions.values():
-            if prediction.resolved:
-                continue
-            opportunity = self.room.opportunities.get(prediction.opportunity_id)
-            if opportunity and self._opportunity_slot_key(opportunity) == key:
+    def _has_open_market_slot(self, key: str) -> bool:
+        for opportunity in self.room.opportunities.values():
+            if self._opportunity_slot_key(opportunity) == key:
                 return True
         return False
 
     def _open_standard_market_contexts(self) -> set[str]:
-        contexts: set[str] = set()
-        for prediction in self.room.predictions.values():
-            if prediction.resolved:
-                continue
-            opportunity = self.room.opportunities.get(prediction.opportunity_id)
-            if opportunity and opportunity.context != "penalties":
-                contexts.add(opportunity.context)
-        return contexts
+        return {
+            opportunity.context
+            for opportunity in self.room.opportunities.values()
+            if opportunity.context != "penalties"
+        }
 
     def _opportunity_slot_key(self, opportunity: Opportunity) -> str:
         team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
@@ -2037,7 +2031,7 @@ class GameHarness:
             },
         )
 
-    def _clear_old_opportunities(self) -> None:
+    def _clear_old_opportunities(self, event: dict[str, Any] | None = None) -> None:
         for opportunity_id, opportunity in list(self.room.opportunities.items()):
             opportunity_predictions = [
                 prediction
@@ -2045,19 +2039,28 @@ class GameHarness:
                 if prediction.opportunity_id == opportunity_id
             ]
             has_open_prediction = any(not prediction.resolved for prediction in opportunity_predictions)
-            if not has_open_prediction and self.room.event_index > opportunity.created_event_index:
-                if not opportunity_predictions:
-                    self.room.add_log(
-                        "market_closed",
-                        f"Market closed without a position: {opportunity.label}",
-                        {
-                            "opportunityId": opportunity_id,
-                            "reason": "no_entries",
-                            "positionCount": 0,
-                            "market": opportunity.public_state(),
-                        },
-                    )
+            if has_open_prediction or self.room.event_index <= opportunity.created_event_index:
+                continue
+            if opportunity_predictions:
                 self.room.opportunities.pop(opportunity_id, None)
+                continue
+            # An abstained market is still a live market. Keep it visible until
+            # the matching football event occurs instead of removing it on the
+            # very next (often unrelated) TXLine update.
+            if event is None or not opportunity_resolved_by_event(opportunity, event):
+                continue
+            self.room.add_log(
+                "market_closed",
+                f"Market resolved without a position: {opportunity.label}",
+                {
+                    "opportunityId": opportunity_id,
+                    "reason": "no_entries",
+                    "positionCount": 0,
+                    "market": opportunity.public_state(),
+                    "resolvedOutcome": resolved_market_outcome(opportunity, event, reason="resolved"),
+                },
+            )
+            self.room.opportunities.pop(opportunity_id, None)
 
 
 class GameManager:
@@ -3706,6 +3709,31 @@ def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, 
     if targets.intersection({"goal", "miss", "saved", "cancel", "card", "yellow_card", "confirmed"}):
         return False
     return None
+
+
+def opportunity_resolved_by_event(opportunity: Opportunity, event: dict[str, Any]) -> bool:
+    """Return whether an event supplies the outcome for an unentered market."""
+
+    if event.get("confirmed") is not None and not truthy(event.get("confirmed")) and not _event_has_text(event, "action_discarded"):
+        return False
+    targets = event_targets(event)
+    target_by_context = {
+        "penalties": {"goal", "miss", "saved", "cancel"},
+        "goal_next_10": {"goal"},
+        "next_goal_team": {"goal"},
+        "next_corner": {"corner"},
+        "next_card": {"card"},
+        "next_substitution": {"substitution"},
+        "next_free_kick": {"free_kick"},
+        "next_yellow_card": {"yellow_card"},
+        "next_foul": {"foul"},
+    }
+    expected_targets = target_by_context.get(opportunity.context, set())
+    if not targets.intersection(expected_targets):
+        return False
+    if opportunity.context == "penalties" and "cancel" not in targets:
+        return event_matches_team_scope("same_team", event, opportunity)
+    return True
 
 
 def penalty_cancelled_for_opportunity(opportunity: Opportunity, event: dict[str, Any]) -> bool:
