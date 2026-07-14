@@ -1514,13 +1514,31 @@ async def validate_admin_fixture_with_txline(
     participant2: str | None = Query(default=None),
 ) -> dict[str, Any]:
     require_admin_tool(request)
-    settings = TxLineSettings.from_env()
+    try:
+        result = await _txline_fixture_validation(
+            fixture_id,
+            participant1=participant1,
+            participant2=participant2,
+        )
+    except TxLineOnChainValidationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    _remember_txline_validation(fixture_id, result)
+    return result
+
+
+async def _txline_fixture_validation(
+    fixture_id: int,
+    *,
+    participant1: str | None = None,
+    participant2: str | None = None,
+    client: TxLineClient | None = None,
+) -> dict[str, Any]:
+    settings = client.settings if client is not None else TxLineSettings.from_env()
     network = txline_network(settings.base_url)
-    client = TxLineClient(settings)
+    client = client or TxLineClient(settings)
     records = await client.score_historical(fixture_id)
     finalized = find_finalized_score_record(records)
     if finalized is None:
-        _txline_validation_cache.pop(str(fixture_id), None)
         return {
             "status": "pending",
             "verified": False,
@@ -1536,22 +1554,19 @@ async def validate_admin_fixture_with_txline(
     try:
         seq = int(raw_seq)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="The final TxLINE score record has no valid sequence number.") from exc
+        raise TxLineOnChainValidationError("The final TxLINE score record has no valid sequence number.") from exc
 
     proof = await client.score_stat_validation(fixture_id, seq, (1, 2))
     if not proof:
-        raise HTTPException(status_code=502, detail="TxLINE returned no stat-validation proof for the final score.")
-    try:
-        onchain = await validate_txline_proof_onchain(proof, network=network)
-    except TxLineOnChainValidationError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise TxLineOnChainValidationError("TxLINE returned no stat-validation proof for the final score.")
+    onchain = await validate_txline_proof_onchain(proof, network=network)
 
     stats = onchain.get("stats") if isinstance(onchain.get("stats"), list) else proof.get("statsToProve", [])
     score = final_score_from_stats(stats)
     winner = winner_from_score(score)
     winner_label = participant1 if winner == "participant1" else participant2 if winner == "participant2" else "Draw" if winner == "draw" else None
     verified = bool(onchain.get("verified"))
-    result = {
+    return {
         "status": "verified" if verified else "failed",
         "verified": verified,
         "fixtureId": fixture_id,
@@ -1574,11 +1589,13 @@ async def validate_admin_fixture_with_txline(
         "method": "validateStatV2",
         "mode": "read-only simulation",
     }
-    if verified:
+
+
+def _remember_txline_validation(fixture_id: int | str, result: dict[str, Any]) -> None:
+    if result.get("verified"):
         _txline_validation_cache[str(fixture_id)] = dict(result)
     else:
         _txline_validation_cache.pop(str(fixture_id), None)
-    return result
 
 
 @app.post("/api/games/run-previous")
@@ -3227,7 +3244,7 @@ async def _run_live_game(game_id: str) -> None:
                 if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
                     if catchup_count:
                         await _sync_room_to_supabase_async(room)
-                    await asyncio.to_thread(_finish_live_game, harness)
+                    await _finish_live_game_with_txline(harness, client)
                     await _sync_room_to_supabase_async(room)
                     break
                 baseline_count = 0
@@ -3255,7 +3272,7 @@ async def _run_live_game(game_id: str) -> None:
             elif room.match_state:
                 _sync_live_match_state_from_timeline(room, timeline)
             if _live_timeline_finished(timeline) or _live_auto_finish_reached(room):
-                await asyncio.to_thread(_finish_live_game, harness)
+                await _finish_live_game_with_txline(harness, client)
                 await _sync_room_to_supabase_async(room)
                 break
             if not baseline_opened and _live_timeline_active(timeline):
@@ -3582,6 +3599,93 @@ def _live_event_error_data(exc: Exception, event: dict[str, Any]) -> dict[str, A
 
 def _finish_live_game(harness: Any) -> None:
     harness.finish_game(mode="live")
+
+
+async def _finish_live_game_with_txline(
+    harness: Any,
+    client: TxLineClient,
+    *,
+    attempts: int | None = None,
+    retry_seconds: float | None = None,
+) -> None:
+    """Verify the final TXLine score, persist the proof, then close the live room.
+
+    Verification is deliberately read-only and never blocks the game from
+    finishing permanently: an unavailable or invalid proof is stored as a
+    visible status instead of turning the room into an error.
+    """
+
+    room = harness.room
+    max_attempts = max(
+        1,
+        attempts
+        if attempts is not None
+        else int(_env_float("TXLINE_AUTO_VALIDATION_ATTEMPTS", 3)),
+    )
+    delay = max(
+        0.0,
+        retry_seconds
+        if retry_seconds is not None
+        else _env_float("TXLINE_AUTO_VALIDATION_RETRY_SECONDS", 2.0),
+    )
+    base_result: dict[str, Any] = {
+        "status": "pending",
+        "verified": False,
+        "fixtureId": room.fixture_id,
+        "network": txline_network(client.settings.base_url),
+        "participant1": room.participant1,
+        "participant2": room.participant2,
+        "reason": "Waiting for the finalized TxLINE score proof.",
+    }
+    room.txline_validation = dict(base_result)
+    room.add_log(
+        "txline_validation",
+        "Match ended. Verifying the final score with TxLINE and Solana.",
+        dict(base_result),
+    )
+    await _sync_room_to_supabase_async(room)
+
+    result = _txline_validation_cache.get(str(room.fixture_id))
+    if not result or not result.get("verified"):
+        result = None
+        try:
+            fixture_id = int(room.fixture_id)
+            for attempt in range(1, max_attempts + 1):
+                result = await _txline_fixture_validation(
+                    fixture_id,
+                    participant1=room.participant1,
+                    participant2=room.participant2,
+                    client=client,
+                )
+                if result.get("status") != "pending" or attempt == max_attempts:
+                    break
+                if delay:
+                    await asyncio.sleep(delay)
+        except Exception as exc:
+            result = {
+                **base_result,
+                "status": "failed",
+                "reason": str(exc) or exc.__class__.__name__,
+            }
+
+    result = dict(result or base_result)
+    room.txline_validation = result
+    _remember_txline_validation(room.fixture_id, result)
+    if result.get("verified") and room.match_state and isinstance(result.get("score"), dict):
+        room.match_state.score = dict(result["score"])
+
+    if result.get("verified"):
+        score = result.get("score") or {}
+        message = (
+            "TxLINE verified the final score against its on-chain Solana root: "
+            f"{score.get('participant1', '—')}-{score.get('participant2', '—')}."
+        )
+    elif result.get("status") == "pending":
+        message = "The match is finished, but the final TxLINE proof is not available yet."
+    else:
+        message = f"The match is finished, but TxLINE verification failed: {result.get('reason') or 'unknown error'}."
+    room.add_log("txline_validation", message, result)
+    await asyncio.to_thread(_finish_live_game, harness)
 
 
 def _live_auto_finish_reached(room: GameRoom) -> bool:

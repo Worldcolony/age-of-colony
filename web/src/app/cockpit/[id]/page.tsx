@@ -604,14 +604,30 @@ function CockpitRun({ id }: { id: string }) {
       <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(520px,1.2fr)_minmax(360px,0.95fr)] 2xl:grid-cols-[360px_minmax(580px,1fr)_430px]">
         <aside className="grid min-w-0 content-start gap-4">
           <section className="glass match-card-media flex min-w-0 flex-col gap-3 p-4">
-            {txlineProof?.verified && (
+            {txlineProof && (
               <div
-                className="flex min-w-0 items-center justify-between gap-3 rounded-md border border-lime/40 bg-lime/10 px-3 py-2"
-                title={txlineProof.dailyScoresPda || undefined}
+                className={`flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2 ${
+                  txlineProof.verified
+                    ? "border-lime/40 bg-lime/10"
+                    : txlineProof.status === "pending"
+                      ? "border-gold/40 bg-gold/10"
+                      : "border-red-500/40 bg-red-500/10"
+                }`}
+                title={txlineProof.dailyScoresPda || txlineProof.reason || undefined}
               >
-                <span className="text-xs font-bold text-lime">✓ TxLINE final score verified</span>
+                <span className={`text-xs font-bold ${
+                  txlineProof.verified
+                    ? "text-lime"
+                    : txlineProof.status === "pending" ? "text-gold-deep" : "text-red-700"
+                }`}>
+                  {txlineProof.verified
+                    ? "✓ TxLINE final score verified"
+                    : txlineProof.status === "pending"
+                      ? "⏳ TxLINE proof pending"
+                      : "⚠ TxLINE verification unavailable"}
+                </span>
                 <span className="truncate font-mono text-[9px] uppercase tracking-wide text-ink-faint">
-                  seq {txlineProof.seq ?? "—"} · {txlineProof.network}
+                  {txlineProof.verified ? `seq ${txlineProof.seq ?? "—"} · ${txlineProof.network}` : txlineProof.network}
                 </span>
               </div>
             )}

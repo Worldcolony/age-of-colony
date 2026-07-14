@@ -47,6 +47,7 @@ function ResultsRun({ id }: { id: string }) {
 
   const cols = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => colonySugar(b) - colonySugar(a)), [game]);
   const finished = game?.status === "finished";
+  const txlineProof = game?.txlineValidation;
   const adminContext = game
     ? game.roomKind === "admin"
     : searchParams.get("from") === "admin";
@@ -96,6 +97,30 @@ function ResultsRun({ id }: { id: string }) {
         <h1 className="hud-title text-[13px]">{finished ? "Final Sugar standings" : "Live Sugar rankings"}</h1>
         <p className="mt-1 text-sm text-ink-faint">Colonies are ranked by Sugar. Most Sugar wins.</p>
       </div>
+
+      {finished && txlineProof && (
+        <div className={`glass flex items-start gap-3 p-4 ${
+          txlineProof.verified
+            ? "!border-lime/60"
+            : txlineProof.status === "pending" ? "!border-gold/60" : "!border-red-500/60"
+        }`}>
+          <span className="text-xl" aria-hidden>{txlineProof.verified ? "✓" : txlineProof.status === "pending" ? "⏳" : "⚠"}</span>
+          <div className="min-w-0 flex-1">
+            <p className="font-bold">
+              {txlineProof.verified
+                ? "Final score verified by TxLINE"
+                : txlineProof.status === "pending"
+                  ? "TxLINE proof pending"
+                  : "TxLINE verification unavailable"}
+            </p>
+            <p className="mt-1 text-xs text-ink-faint">
+              {txlineProof.verified
+                ? `Read-only Solana verification · seq ${txlineProof.seq ?? "—"} · ${txlineProof.network}`
+                : txlineProof.reason || "The match result remains available without blocking the game."}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="glass p-4">
         <div className="mb-3 flex items-end justify-center gap-2.5">

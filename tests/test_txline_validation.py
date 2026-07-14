@@ -3,7 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from app.main import _txline_validation_cache, app
+from app.game.harness import GameManager
+from app.main import _finish_live_game_with_txline, _txline_validation_cache, app
+from app.txline import TxLineSettings
 from app.txline_validation import (
     final_score_from_stats,
     find_finalized_score_record,
@@ -151,6 +153,110 @@ class TxLineValidationApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["txlineValidation"], proof)
+
+
+class TxLineAutomaticValidationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_live_finish_verifies_and_uses_the_proven_score(self):
+        manager = GameManager()
+        room = manager.create_room(fixture_id=7001, participant1="France", participant2="Spain")
+        room.status = "running_live"
+        room.mode = "live"
+        harness = manager.harness(room.game_id)
+        client = _FinalizedTxLineClient(7001)
+        onchain = {
+            "verified": True,
+            "programId": "oracle-program",
+            "dailyScoresPda": "daily-root",
+            "rootAccountExists": True,
+            "rootAccountOwner": "oracle-program",
+            "epochDay": 20644,
+            "stats": [
+                {"key": 1, "value": 3, "period": 100},
+                {"key": 2, "value": 2, "period": 100},
+            ],
+        }
+        self.addCleanup(_txline_validation_cache.pop, "7001", None)
+
+        with (
+            patch("app.main.validate_txline_proof_onchain", AsyncMock(return_value=onchain)),
+            patch("app.main._sync_room_to_supabase_async", AsyncMock(return_value={"stored": True})),
+        ):
+            await _finish_live_game_with_txline(harness, client, attempts=1, retry_seconds=0)
+
+        self.assertEqual(room.status, "finished")
+        self.assertTrue(room.txline_validation["verified"])
+        self.assertEqual(room.txline_validation["score"], {"participant1": 3, "participant2": 2})
+        self.assertEqual(room.match_state.score, {"participant1": 3, "participant2": 2})
+        self.assertTrue(any(event.kind == "txline_validation" for event in room.log))
+        self.assertTrue(any(event.kind == "game_finished" for event in room.log))
+
+    async def test_live_finish_retries_a_pending_proof_without_blocking_completion(self):
+        manager = GameManager()
+        room = manager.create_room(fixture_id=7002, participant1="France", participant2="Spain")
+        room.status = "running_live"
+        room.mode = "live"
+        harness = manager.harness(room.game_id)
+        client = _PendingTxLineClient()
+
+        with patch("app.main._sync_room_to_supabase_async", AsyncMock(return_value={"stored": True})):
+            await _finish_live_game_with_txline(harness, client, attempts=2, retry_seconds=0)
+
+        self.assertEqual(room.status, "finished")
+        self.assertEqual(room.txline_validation["status"], "pending")
+        self.assertFalse(room.txline_validation["verified"])
+        self.assertEqual(client.history_calls, 2)
+
+    async def test_live_finish_records_validation_failure_without_failing_the_room(self):
+        manager = GameManager()
+        room = manager.create_room(fixture_id="invalid-fixture", participant1="France", participant2="Spain")
+        room.status = "running_live"
+        room.mode = "live"
+        harness = manager.harness(room.game_id)
+        client = _PendingTxLineClient()
+
+        with patch("app.main._sync_room_to_supabase_async", AsyncMock(return_value={"stored": True})):
+            await _finish_live_game_with_txline(harness, client, attempts=1, retry_seconds=0)
+
+        self.assertEqual(room.status, "finished")
+        self.assertEqual(room.txline_validation["status"], "failed")
+        self.assertFalse(room.txline_validation["verified"])
+        self.assertIn("invalid literal", room.txline_validation["reason"])
+
+
+class _FinalizedTxLineClient:
+    def __init__(self, fixture_id: int):
+        self.fixture_id = fixture_id
+        self.settings = TxLineSettings(jwt="jwt", api_token="token")
+
+    async def score_historical(self, fixture_id):
+        return [
+            {
+                "FixtureId": fixture_id,
+                "Action": "game_finalised",
+                "StatusId": 100,
+                "Seq": 99,
+                "Ts": 1783717433523,
+            }
+        ]
+
+    async def score_stat_validation(self, fixture_id, seq, stat_keys):
+        return {
+            "summary": {"fixtureId": fixture_id},
+            "statsToProve": [
+                {"key": 1, "value": 3, "period": 100},
+                {"key": 2, "value": 2, "period": 100},
+            ],
+        }
+
+
+class _PendingTxLineClient:
+    def __init__(self):
+        self.settings = TxLineSettings(jwt="jwt", api_token="token")
+        self.history_calls = 0
+
+    async def score_historical(self, fixture_id):
+        self.history_calls += 1
+        return []
 
 
 if __name__ == "__main__":

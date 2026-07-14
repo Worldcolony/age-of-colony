@@ -57,10 +57,13 @@ The default session lasts one hour. `WALLET_SESSION_TTL_SECONDS` and
 is absent, development still works with a process-local secret, but wallet
 sessions are invalidated when the backend restarts.
 
-The admin dashboard can validate a finalized score against TxLINE's Solana
-Merkle root. The backend fetches the V2 stat proof, then runs
-`validateStatV2` as a read-only simulation: it does not submit a transaction
-or spend SOL. The current bridge supports mainnet proofs.
+Every completed live match is automatically validated against TxLINE's Solana
+Merkle root before the final room state is persisted. The backend fetches the
+V2 stat proof, then runs `validateStatV2` as a read-only simulation: it does
+not submit a transaction or spend SOL. A pending or failed proof remains
+visible but never prevents the match from finishing. The admin dashboard can
+also run the same validation manually for a previous fixture. The current
+bridge supports mainnet proofs.
 
 OpenRouter colony agent:
 
