@@ -4089,6 +4089,11 @@ class DemoRunApiTest(unittest.TestCase):
                 {**active_global, "match": {"gameState": "finished", "statusId": 13}}
             )
         )
+        self.assertFalse(
+            _stored_game_can_resume_live(
+                {**active_global, "match": {"gameState": "inplay", "statusId": 100}}
+            )
+        )
         self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "live"}))
         self.assertFalse(_stored_game_can_resume_live({"status": "error", "mode": "replay"}))
         self.assertFalse(_stored_game_can_resume_live({"status": "finished", "mode": "live"}))
@@ -4470,9 +4475,9 @@ class DemoRunApiTest(unittest.TestCase):
         status_id_timeline = {
             "latestState": {
                 "fixtureId": 42,
-                "gameState": "finished",
-                "statusId": 13,
-                "action": "score_update",
+                "gameState": "inplay",
+                "statusId": 100,
+                "action": "game_finalised",
             },
             "events": [],
         }

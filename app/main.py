@@ -105,7 +105,10 @@ AUTORUN_COLONIES = (
     ("Black Rush", 50, "aggressive", "chaos", "low"),
 )
 LIVE_SCORE_POLL_SECONDS = 2.5
-LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17}
+# TXLine uses 100 for its authoritative ``game_finalised`` score record. Some
+# feeds keep the previous textual gameState (for example ``inplay``) on that
+# record, so the numeric status must take precedence.
+LIVE_FINAL_STATUS_IDS = {13, 14, 15, 16, 17, 100}
 LIVE_FINAL_GAME_STATES = {
     "finished",
     "complete",
