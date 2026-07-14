@@ -1793,9 +1793,23 @@ class GameHarness:
 
     def _claim_opportunity_slot(self, opportunity: Opportunity) -> bool:
         key = self._opportunity_slot_key(opportunity)
+        synthetic_player_live_market = (
+            self.room.room_kind == "player"
+            and self.room.mode == "live"
+            and truthy(opportunity.source_event.get("synthetic"))
+            and opportunity.source_event.get("reason") == "live_baseline"
+        )
+        prioritized_core_market = (
+            synthetic_player_live_market
+            and opportunity.context in CORE_LIVE_MARKET_CONTEXTS
+        )
         if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_market_slot(key):
             return False
-        if opportunity.context != "penalties" and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS:
+        if (
+            opportunity.context != "penalties"
+            and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS
+            and not prioritized_core_market
+        ):
             return False
 
         # A player-facing live room should not sit empty after a market resolves.
@@ -1803,12 +1817,6 @@ class GameHarness:
         # the two core goal markets before the regular five-minute cadence. A
         # single synthetic wave may also fill the rotating third slot; normal
         # event-driven markets and later waves still obey the cooldown below.
-        synthetic_player_live_market = (
-            self.room.room_kind == "player"
-            and self.room.mode == "live"
-            and truthy(opportunity.source_event.get("synthetic"))
-            and opportunity.source_event.get("reason") == "live_baseline"
-        )
         replace_empty_live_slot = synthetic_player_live_market and not self._open_standard_market_contexts()
         replace_missing_core_market = (
             synthetic_player_live_market

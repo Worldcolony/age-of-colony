@@ -4410,6 +4410,35 @@ class DemoRunApiTest(unittest.TestCase):
         )
         self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 3)
 
+    def test_live_baseline_prioritizes_a_missing_core_market_during_deployment_transition(self):
+        def first_available_vote(_ant, context):
+            return context["market"]["availableVotes"][0]["vote"]
+
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent(first_available_vote))
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
+        room.mode = "live"
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Live Nest", 20, "balanced", "momentum", "medium")
+        source = {
+            "fixtureId": 42,
+            "seq": 1,
+            "action": "clock",
+            "minute": 60,
+            "clockSeconds": 3600,
+            "description": "Clock tick",
+        }
+        for event_index, context in enumerate(("next_card", "next_substitution", "goal_next_10"), start=1):
+            opportunity = build_opportunity_for_context(source, event_index, context, room.match_state)
+            room.opportunities[opportunity.opportunity_id] = opportunity
+        room.last_opportunity_clock_by_key["standard_market_arrival"] = 3600
+
+        self.assertEqual(_open_live_baseline_markets(harness, [source]), 1)
+        self.assertEqual(
+            {opportunity.context for opportunity in room.opportunities.values()},
+            {"goal_next_10", "next_goal_team", "next_card", "next_substitution"},
+        )
+        self.assertEqual(len(room.opportunities), 4)
+
     def test_scheduled_txline_state_waits_before_live_markets(self):
         scheduled_timeline = {
             "events": [
