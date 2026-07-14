@@ -217,8 +217,10 @@ FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
 BASELINE_MARKET_CONTEXTS = ("next_corner", "next_card", "next_substitution", "next_goal_team")
-LEGACY_MARKET_CONTEXTS = {"goal_next_10", "next_free_kick", "next_yellow_card", "next_foul"}
-ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(LEGACY_MARKET_CONTEXTS)
+CORE_LIVE_MARKET_CONTEXTS = ("goal_next_10", "next_goal_team")
+ROTATING_LIVE_MARKET_CONTEXTS = ("next_corner", "next_card", "next_substitution")
+LEGACY_MARKET_CONTEXTS = {"next_free_kick", "next_yellow_card", "next_foul"}
+ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(CORE_LIVE_MARKET_CONTEXTS, LEGACY_MARKET_CONTEXTS)
 NO_DEADLINE_CONTEXTS = {"penalties", *ROLLING_WINDOW_CONTEXTS} - {"goal_next_10"}
 STANDARD_MARKET_INTERVAL_SECONDS = 5 * 60
 MAX_OPEN_STANDARD_MARKETS = 3
@@ -1796,18 +1798,21 @@ class GameHarness:
         if opportunity.context != "penalties" and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS:
             return False
 
-        # A player-facing live room should not sit empty after its last market
-        # resolves. The polling loop may immediately request a synthetic
-        # replacement before the regular five-minute cadence has elapsed. Let
-        # that single replacement claim the now-empty standard slot; normal
-        # event-driven markets and additional concurrent markets still obey the
-        # cooldown below.
-        replace_empty_live_slot = (
+        # A player-facing live room should not sit empty after a market resolves.
+        # The polling loop may immediately request synthetic replacements for
+        # the two core goal markets before the regular five-minute cadence. A
+        # single synthetic wave may also fill the rotating third slot; normal
+        # event-driven markets and later waves still obey the cooldown below.
+        synthetic_player_live_market = (
             self.room.room_kind == "player"
             and self.room.mode == "live"
-            and not self._open_standard_market_contexts()
             and truthy(opportunity.source_event.get("synthetic"))
             and opportunity.source_event.get("reason") == "live_baseline"
+        )
+        replace_empty_live_slot = synthetic_player_live_market and not self._open_standard_market_contexts()
+        replace_missing_core_market = (
+            synthetic_player_live_market
+            and opportunity.context in CORE_LIVE_MARKET_CONTEXTS
         )
 
         # TXLine can emit an award, a VAR confirmation and a result record for
@@ -1818,8 +1823,18 @@ class GameHarness:
         clock = opportunity_clock_seconds(opportunity)
         if clock is not None:
             last_clock = self.room.last_opportunity_clock_by_key.get(cadence_key)
+            same_market_wave = (
+                self.room.last_opportunity_event_index_by_key.get(cadence_key)
+                == self.room.event_index
+            )
             cooldown = MARKET_COOLDOWN_SECONDS[opportunity.context]
-            if last_clock is not None and clock - last_clock < cooldown and not replace_empty_live_slot:
+            if (
+                last_clock is not None
+                and clock - last_clock < cooldown
+                and not replace_empty_live_slot
+                and not replace_missing_core_market
+                and not same_market_wave
+            ):
                 return False
             self.room.last_opportunity_clock_by_key[cadence_key] = clock
             self.room.last_opportunity_event_index_by_key[cadence_key] = self.room.event_index
@@ -2067,19 +2082,36 @@ class GameHarness:
                 self.room.opportunities.pop(opportunity_id, None)
                 continue
             # An abstained market is still a live market. Keep it visible until
-            # the matching football event occurs instead of removing it on the
-            # very next (often unrelated) TXLine update.
-            if event is None or not opportunity_resolved_by_event(opportunity, event):
+            # its football outcome or explicit deadline instead of removing it
+            # on the very next unrelated TXLine update.
+            clock = event_clock_seconds(event or {})
+            expired_by_clock = (
+                clock is not None
+                and opportunity.deadline_clock is not None
+                and clock >= opportunity.deadline_clock
+            )
+            expired_by_events = (
+                opportunity.deadline_clock is None
+                and opportunity.deadline_event_index is not None
+                and self.room.event_index >= opportunity.deadline_event_index
+            )
+            resolved_by_event = event is not None and opportunity_resolved_by_event(opportunity, event)
+            if not (resolved_by_event or expired_by_clock or expired_by_events):
                 continue
+            reason = "expired" if expired_by_clock or expired_by_events else "no_entries"
             self.room.add_log(
                 "market_closed",
-                f"Market resolved without a position: {opportunity.label}",
+                f"Market {'expired' if reason == 'expired' else 'resolved'} without a position: {opportunity.label}",
                 {
                     "opportunityId": opportunity_id,
-                    "reason": "no_entries",
+                    "reason": reason,
                     "positionCount": 0,
                     "market": opportunity.public_state(),
-                    "resolvedOutcome": resolved_market_outcome(opportunity, event, reason="resolved"),
+                    "resolvedOutcome": resolved_market_outcome(
+                        opportunity,
+                        None if reason == "expired" else event,
+                        reason=reason,
+                    ),
                 },
             )
             self.room.opportunities.pop(opportunity_id, None)
@@ -2782,7 +2814,7 @@ def event_context(event: dict[str, Any]) -> str | None:
 def event_contexts(event: dict[str, Any]) -> list[str]:
     flags = set(event.get("highlights") or [])
     if event.get("synthetic") and (_event_token(event.get("action")) == "market_tick" or "market_tick" in flags):
-        return cadence_market_contexts(event)
+        return live_baseline_market_contexts(event)
     if _event_is_penalty_award(event):
         targets = event_targets(event)
         if targets.intersection({"goal", "miss", "saved", "cancel"}):
@@ -2805,6 +2837,17 @@ def cadence_market_contexts(event: dict[str, Any]) -> list[str]:
     clock = event_clock_seconds(event) or 0
     context_index = (clock // STANDARD_MARKET_INTERVAL_SECONDS) % len(BASELINE_MARKET_CONTEXTS)
     return [BASELINE_MARKET_CONTEXTS[context_index]]
+
+
+def live_baseline_market_contexts(event: dict[str, Any]) -> list[str]:
+    """Keep two goal markets open plus one rotating event market."""
+
+    clock = event_clock_seconds(event) or 0
+    rotating_index = (clock // STANDARD_MARKET_INTERVAL_SECONDS) % len(ROTATING_LIVE_MARKET_CONTEXTS)
+    return [
+        *CORE_LIVE_MARKET_CONTEXTS,
+        ROTATING_LIVE_MARKET_CONTEXTS[rotating_index],
+    ]
 
 
 def _event_is_penalty_award(event: dict[str, Any]) -> bool:

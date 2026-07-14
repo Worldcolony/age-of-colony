@@ -20,6 +20,7 @@ from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
+    CORE_LIVE_MARKET_CONTEXTS,
     MARKET_RISK_SUGAR,
     PRIVATE_SNAPSHOT_KEY,
     STANDARD_MARKET_INTERVAL_SECONDS,
@@ -3620,14 +3621,19 @@ def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, An
 def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | None) -> bool:
     """Return whether a replacement or five-minute market wave may open."""
 
-    # Keep a player room actionable: once its final standard market settles (or
-    # closes without an entry), replace it on the next live poll instead of
-    # showing an empty board until the next five-minute boundary.
-    if room.room_kind == "player" and room.mode == "live" and not any(
-        opportunity.context != "penalties"
-        for opportunity in room.opportunities.values()
-    ):
-        return True
+    # Keep a player room actionable: replace either core goal market on the
+    # next live poll instead of waiting for the next five-minute boundary.
+    if room.room_kind == "player" and room.mode == "live":
+        open_contexts = {
+            opportunity.context
+            for opportunity in room.opportunities.values()
+            if opportunity.context != "penalties"
+        }
+        if not open_contexts or any(
+            context not in open_contexts
+            for context in CORE_LIVE_MARKET_CONTEXTS
+        ):
+            return True
 
     cadence_key = "standard_market_arrival"
     last_clock = room.last_opportunity_clock_by_key.get(cadence_key)
