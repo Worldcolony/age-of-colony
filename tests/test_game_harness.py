@@ -44,6 +44,7 @@ from app.game.harness import (
     ant_bet_history,
     build_info_packet,
     build_opportunity,
+    build_opportunity_for_context,
     build_opportunities,
     create_prediction,
     info_cost_for_colony,
@@ -162,11 +163,11 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(opportunity.info_cost, 3)
         rewards = {option.label: option.reward_sugar for option in opportunity.options}
         self.assertEqual(rewards["yes, penalty scored"], 1)
-        self.assertEqual(rewards["no, missed or saved"], 5)
+        self.assertEqual(rewards["no, missed or saved"], 4)
         self.assertTrue(all(option.risk_sugar == MARKET_RISK_SUGAR for option in opportunity.options))
         public_options = opportunity.public_state()["options"]
         self.assertTrue(all(option["riskSugar"] == MARKET_RISK_SUGAR for option in public_options))
-        self.assertEqual([option["rewardSugar"] for option in public_options], [1, 5])
+        self.assertEqual([option["rewardSugar"] for option in public_options], [1, 4])
 
     def test_unconfirmed_penalty_does_not_create_penalty_market(self):
         opportunity = build_opportunity(penalty_event(confirmed=False, description="Penalty - pending confirmation"), 1)
@@ -174,17 +175,19 @@ class GameHarnessTest(unittest.TestCase):
         self.assertIsNone(opportunity)
 
     def test_penalty_result_does_not_open_new_penalty_market(self):
-        opportunity = build_opportunity(
-            penalty_event(
-                action="penalty_scored",
-                highlights=["penalty"],
-                description="Penalty scored",
-                confirmed=True,
-            ),
-            1,
-        )
+        for action in ("penalty_scored", "penalty_outcome", "penalty_result", "penalty_shootout_outcome"):
+            with self.subTest(action=action):
+                opportunity = build_opportunity(
+                    penalty_event(
+                        action=action,
+                        highlights=["penalty"],
+                        description="Penalty result",
+                        confirmed=True,
+                    ),
+                    1,
+                )
 
-        self.assertIsNone(opportunity)
+                self.assertIsNone(opportunity)
 
     def test_confirmed_var_penalty_creates_penalty_market(self):
         opportunity = build_opportunity(
@@ -316,6 +319,33 @@ class GameHarnessTest(unittest.TestCase):
             {"Norway penalty missed or saved"},
         )
 
+    def test_penalty_confirmation_is_deduplicated_without_a_colony_position(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("abstain"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Penalty Observer", 20, "balanced", "penalties", "medium")
+
+        harness.process_event(
+            penalty_event(seq=1, minute=40, clockSeconds=2400, description="Penalty awarded")
+        )
+        harness.process_event(
+            penalty_event(
+                seq=2,
+                action="penalty_confirmed",
+                minute=41,
+                clockSeconds=2460,
+                description="VAR confirms the same penalty",
+            )
+        )
+
+        penalty_logs = [
+            event
+            for event in room.log
+            if event.kind == "opportunity"
+            and event.data.get("opportunity", {}).get("context") == "penalties"
+        ]
+        self.assertEqual(len(penalty_logs), 1)
+
     def test_cancelled_penalty_voids_market_without_reward_or_penalty(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
         room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
@@ -378,7 +408,7 @@ class GameHarnessTest(unittest.TestCase):
             ]
         )
 
-    def test_pressure_event_creates_safe_precision_and_chaos_markets(self):
+    def test_pressure_event_creates_one_concrete_binary_market(self):
         room, _ = self.make_room()
         opportunities = build_opportunities(
             {
@@ -397,50 +427,39 @@ class GameHarnessTest(unittest.TestCase):
             room.match_state,
         )
 
-        self.assertEqual([opportunity.context for opportunity in opportunities], list(BASELINE_MARKET_CONTEXTS))
-        goal_market = opportunities[0]
-        precision_market = opportunities[1]
-        corner_market = opportunities[2]
-        free_kick_market = opportunities[3]
-        yellow_card_market = opportunities[4]
-        self.assertEqual([option.option_id for option in goal_market.options], [
-            "goal_next_10_yes",
-            "goal_next_10_no",
+        self.assertEqual([opportunity.context for opportunity in opportunities], ["next_substitution"])
+        market = opportunities[0]
+        self.assertEqual([option.option_id for option in market.options], [
+            "next_substitution_p1",
+            "next_substitution_p2",
         ])
-        self.assertEqual(goal_market.options[0].label, "yes, goal in the next 10 min")
-        self.assertEqual(goal_market.options[1].label, "no goal in the next 10 min")
-        self.assertEqual([option.option_id for option in precision_market.options], [
-            "next_goal_p1",
-            "next_goal_p2",
-            "next_goal_none",
-        ])
-        self.assertEqual(precision_market.options[0].label, "France scores the next goal")
-        self.assertEqual(precision_market.options[1].label, "Belgium scores the next goal")
-        self.assertEqual(precision_market.options[2].label, "no goal before full time")
-        self.assertEqual([option.option_id for option in corner_market.options], [
-            "next_corner_p1",
-            "next_corner_p2",
-            "next_corner_none",
-        ])
-        self.assertEqual(corner_market.options[0].label, "France wins the next corner")
-        self.assertEqual(corner_market.options[1].label, "Belgium wins the next corner")
-        self.assertEqual(corner_market.options[2].label, "no corner before full time")
-        self.assertEqual([option.option_id for option in free_kick_market.options], [
-            "next_free_kick_p1",
-            "next_free_kick_p2",
-            "next_free_kick_none",
-        ])
-        self.assertEqual(free_kick_market.options[0].label, "France wins the next free kick")
-        self.assertEqual(free_kick_market.options[1].label, "Belgium wins the next free kick")
-        self.assertEqual(free_kick_market.options[2].label, "no free kick before full time")
-        self.assertEqual([option.option_id for option in yellow_card_market.options], [
-            "next_yellow_card_p1",
-            "next_yellow_card_p2",
-            "next_yellow_card_none",
-        ])
-        self.assertEqual(yellow_card_market.options[0].label, "France gets the next yellow card")
-        self.assertEqual(yellow_card_market.options[1].label, "Belgium gets the next yellow card")
-        self.assertEqual(yellow_card_market.options[2].label, "no yellow card before full time")
+        self.assertEqual(market.options[0].label, "France makes the next substitution")
+        self.assertEqual(market.options[1].label, "Belgium makes the next substitution")
+
+    def test_concrete_market_rotates_every_five_match_minutes(self):
+        room, _ = self.make_room()
+        expected = {
+            1: "next_corner",
+            6: "next_card",
+            11: "next_substitution",
+            16: "next_goal_team",
+            21: "next_corner",
+        }
+        for minute, secondary in expected.items():
+            with self.subTest(minute=minute):
+                opportunities = build_opportunities(
+                    {
+                        "fixtureId": 42,
+                        "seq": minute,
+                        "action": "high_danger_possession",
+                        "minute": minute,
+                        "clockSeconds": minute * 60,
+                        "description": "High danger possession",
+                    },
+                    minute,
+                    room.match_state,
+                )
+                self.assertEqual([item.context for item in opportunities], [secondary])
 
     def test_penalty_area_pressure_does_not_create_penalty_market(self):
         room, _ = self.make_room()
@@ -463,7 +482,8 @@ class GameHarnessTest(unittest.TestCase):
             room.match_state,
         )
 
-        self.assertEqual([opportunity.context for opportunity in opportunities], list(BASELINE_MARKET_CONTEXTS))
+        self.assertEqual([opportunity.context for opportunity in opportunities], ["next_substitution"])
+        self.assertNotIn("penalties", {opportunity.context for opportunity in opportunities})
 
     def test_user_config_creates_diverse_ant_distribution(self):
         _, harness = self.make_room()
@@ -529,30 +549,29 @@ class GameHarnessTest(unittest.TestCase):
         harness = manager.harness(room.game_id)
         colony = harness.add_colony("Multi Market Nest", 20, "balanced", "momentum", "medium")
 
-        harness.process_event(
-            {
+        for seq, minute in ((1, 1), (2, 6)):
+            harness.process_event({
                 "fixtureId": 42,
-                "seq": 1,
+                "seq": seq,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 10,
-                "clockSeconds": 600,
+                "minute": minute,
+                "clockSeconds": minute * 60,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
                 "possessionLabel": "France",
                 "description": "High danger possession - France",
-            }
-        )
+            })
 
         predictions = [prediction for prediction in room.predictions.values() if prediction.colony_id == colony.colony_id]
-        self.assertEqual(len(predictions), 5)
+        self.assertEqual(len(predictions), 2)
         ant_usage = Counter(ant_id for prediction in predictions for ant_id in prediction.ant_ids)
         self.assertTrue(any(count > 1 for count in ant_usage.values()))
         self.assertTrue(all(prediction.reserved_food == MARKET_RISK_SUGAR for prediction in predictions))
-        self.assertEqual(colony.food_reserved, MAX_RESERVED_SUGAR)
+        self.assertEqual(colony.food_reserved, 2 * MARKET_RISK_SUGAR)
         prediction_logs = [event for event in room.log if event.kind == "prediction"]
-        self.assertEqual(len(prediction_logs), 5)
+        self.assertEqual(len(prediction_logs), 2)
         self.assertTrue(all(event.data["riskSugar"] == MARKET_RISK_SUGAR for event in prediction_logs))
         self.assertTrue(all(event.data["entryThreshold"] == STYLE_ENTRY_THRESHOLDS["balanced"] for event in prediction_logs))
         self.assertTrue(all(event.data["consensus"] == 1.0 for event in prediction_logs))
@@ -592,8 +611,8 @@ class GameHarnessTest(unittest.TestCase):
                 "fixtureId": 42,
                 "seq": 1,
                 "action": "high_danger_possession",
-                "minute": 10,
-                "clockSeconds": 600,
+                "minute": 15,
+                "clockSeconds": 900,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -653,22 +672,26 @@ class GameHarnessTest(unittest.TestCase):
     def test_market_entry_reserves_two_sugar_caps_at_ten_and_void_releases(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Five Markets", 20, "balanced", "momentum", "medium")
-        opportunities = build_opportunities(
-            {
-                "fixtureId": 42,
-                "seq": 1,
-                "action": "high_danger_possession",
-                "minute": 10,
-                "clockSeconds": 600,
-                "participant": 1,
-                "participantLabel": "France",
-                "possession": 1,
-                "possessionLabel": "France",
-                "description": "High danger possession - France",
-            },
-            1,
-            room.match_state,
-        )
+        opportunities_by_context = {}
+        for event_index, minute in enumerate((1, 6, 11, 16), start=1):
+            for opportunity in build_opportunities(
+                {
+                    "fixtureId": 42,
+                    "seq": event_index,
+                    "action": "high_danger_possession",
+                    "minute": minute,
+                    "clockSeconds": minute * 60,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "description": "High danger possession - France",
+                },
+                event_index,
+                room.match_state,
+            ):
+                opportunities_by_context.setdefault(opportunity.context, opportunity)
+        opportunities = list(opportunities_by_context.values())
+        self.assertEqual(set(opportunities_by_context), set(BASELINE_MARKET_CONTEXTS))
+        opportunities.append(build_opportunity(penalty_event(seq=5), 5, room.match_state))
 
         opened = []
         for opportunity in opportunities:
@@ -691,7 +714,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(colony.public_state(1)["sugarAvailable"], 10)
         self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 5)
 
-        extra_opportunity = build_opportunity(penalty_event(seq=2), 2, room.match_state)
+        extra_opportunity = build_opportunity(penalty_event(seq=6, minute=69, clockSeconds=4140), 6, room.match_state)
         blocked = create_prediction(
             colony,
             extra_opportunity,
@@ -756,8 +779,8 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual([len(prediction.ant_ids) for prediction in winner_predictions], [12, 20])
         for prediction in winner_predictions:
             harness._apply_settlement(prediction, opportunity, win=True, reason="test")
-        self.assertEqual([colony.food for colony in winners], [24, 24])
-        self.assertEqual([colony.public_state(1)["score"] for colony in winners], [24, 24])
+        self.assertEqual([colony.food for colony in winners], [22, 22])
+        self.assertEqual([colony.public_state(1)["score"] for colony in winners], [22, 22])
 
         losers = [
             harness.add_colony("Twelve Losers", 20, "balanced", "momentum", "medium"),
@@ -781,15 +804,16 @@ class GameHarnessTest(unittest.TestCase):
 
     def test_market_reward_sugar_table_is_integer_and_risk_is_fixed(self):
         expected = {
-            "penalties": {"penalty_goal": 1, "penalty_no_goal": 5},
-            "goal_next_10": {"goal_next_10_yes": 4, "goal_next_10_no": 1},
-            "next_goal_team": {"next_goal_p1": 4, "next_goal_p2": 4, "next_goal_none": 1},
-            "next_corner": {"next_corner_p1": 2, "next_corner_p2": 2, "next_corner_none": 1},
-            "next_free_kick": {"next_free_kick_p1": 2, "next_free_kick_p2": 2, "next_free_kick_none": 1},
+            "penalties": {"penalty_goal": 1, "penalty_no_goal": 4},
+            "goal_next_10": {"goal_next_10_yes": 5, "goal_next_10_no": 1},
+            "next_goal_team": {"next_goal_p1": 2, "next_goal_p2": 2},
+            "next_corner": {"next_corner_p1": 2, "next_corner_p2": 2},
+            "next_card": {"next_card_p1": 2, "next_card_p2": 2},
+            "next_substitution": {"next_substitution_p1": 2, "next_substitution_p2": 2},
+            "next_free_kick": {"next_free_kick_p1": 2, "next_free_kick_p2": 2},
             "next_yellow_card": {
-                "next_yellow_card_p1": 3,
-                "next_yellow_card_p2": 3,
-                "next_yellow_card_none": 1,
+                "next_yellow_card_p1": 2,
+                "next_yellow_card_p2": 2,
             },
             "next_foul": {"next_foul_p1": 2, "next_foul_p2": 2},
         }
@@ -901,7 +925,8 @@ class GameHarnessTest(unittest.TestCase):
             penalty_event(
                 id=2,
                 seq=2,
-                minute=64,
+                minute=69,
+                clockSeconds=4140,
                 participant=2,
                 participantLabel="Belgium",
                 possession=2,
@@ -1409,10 +1434,9 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(hasattr(room, "_aoc_restored_public_state"))
         self.assertEqual(room.public_state()["match"], public_state["match"])
 
-    def test_late_pressure_event_can_create_goal_next_ten_market_for_stoppage_time(self):
+    def test_legacy_goal_next_ten_market_keeps_its_stoppage_time_deadline(self):
         room, _ = self.make_room()
-        opportunity = build_opportunity(
-            {
+        source_event = {
                 "fixtureId": 42,
                 "seq": 1,
                 "action": "high_danger_possession",
@@ -1423,10 +1447,8 @@ class GameHarnessTest(unittest.TestCase):
                 "possession": 1,
                 "possessionLabel": "France",
                 "description": "High danger possession - France",
-            },
-            1,
-            room.match_state,
-        )
+            }
+        opportunity = build_opportunity_for_context(source_event, 1, "goal_next_10", room.match_state)
 
         self.assertIsNotNone(opportunity)
         self.assertEqual(opportunity.context, "goal_next_10")
@@ -1434,35 +1456,28 @@ class GameHarnessTest(unittest.TestCase):
 
     def test_next_event_markets_have_no_deadline(self):
         room, _ = self.make_room()
-        opportunities = build_opportunities(
-            {
-                "fixtureId": 42,
-                "seq": 1,
-                "action": "high_danger_possession",
-                "minute": 75,
-                "clockSeconds": 4500,
-                "participant": 1,
-                "participantLabel": "France",
-                "possession": 1,
-                "possessionLabel": "France",
-                "description": "High danger possession - France",
-            },
-            1,
-            room.match_state,
-        )
-        goal_opportunity = next(opportunity for opportunity in opportunities if opportunity.context == "next_goal_team")
-        corner_opportunity = next(opportunity for opportunity in opportunities if opportunity.context == "next_corner")
-        free_kick_opportunity = next(opportunity for opportunity in opportunities if opportunity.context == "next_free_kick")
-        yellow_card_opportunity = next(opportunity for opportunity in opportunities if opportunity.context == "next_yellow_card")
-
-        self.assertIsNone(goal_opportunity.deadline_clock)
-        self.assertIsNone(goal_opportunity.deadline_event_index)
-        self.assertIsNone(corner_opportunity.deadline_clock)
-        self.assertIsNone(corner_opportunity.deadline_event_index)
-        self.assertIsNone(free_kick_opportunity.deadline_clock)
-        self.assertIsNone(free_kick_opportunity.deadline_event_index)
-        self.assertIsNone(yellow_card_opportunity.deadline_clock)
-        self.assertIsNone(yellow_card_opportunity.deadline_event_index)
+        for minute, context in (
+            (1, "next_corner"),
+            (6, "next_card"),
+            (11, "next_substitution"),
+            (16, "next_goal_team"),
+        ):
+            with self.subTest(context=context):
+                opportunities = build_opportunities(
+                    {
+                        "fixtureId": 42,
+                        "seq": minute,
+                        "action": "high_danger_possession",
+                        "minute": minute,
+                        "clockSeconds": minute * 60,
+                        "description": "High danger possession - France",
+                    },
+                    minute,
+                    room.match_state,
+                )
+                opportunity = next(item for item in opportunities if item.context == context)
+                self.assertIsNone(opportunity.deadline_clock)
+                self.assertIsNone(opportunity.deadline_event_index)
 
     def test_goal_next_ten_expires_before_boundary_goal_but_next_goal_still_resolves(self):
         for goal_clock, expected_window_reason, expected_window_win in (
@@ -1486,9 +1501,8 @@ class GameHarnessTest(unittest.TestCase):
                     "possessionLabel": "France",
                     "description": "High danger possession - France",
                 }
-                opportunities = build_opportunities(source_event, 1, room.match_state)
-                goal_window = next(item for item in opportunities if item.context == "goal_next_10")
-                next_goal = next(item for item in opportunities if item.context == "next_goal_team")
+                goal_window = build_opportunity_for_context(source_event, 1, "goal_next_10", room.match_state)
+                next_goal = build_opportunity_for_context(source_event, 1, "next_goal_team", room.match_state)
                 room.event_index = 1
 
                 predictions = {}
@@ -1541,18 +1555,13 @@ class GameHarnessTest(unittest.TestCase):
             "seq": 1,
             "action": "high_danger_possession",
             "highlights": [],
-            "minute": 10,
             "participant": 1,
             "participantLabel": "France",
             "possession": 1,
             "possessionLabel": "France",
             "description": "High danger possession - France",
         }
-        goal_window = next(
-            item
-            for item in build_opportunities(source_event, 1, room.match_state)
-            if item.context == "goal_next_10"
-        )
+        goal_window = build_opportunity_for_context(source_event, 1, "goal_next_10", room.match_state)
         room.opportunities[goal_window.opportunity_id] = goal_window
         prediction = create_prediction(
             colony,
@@ -1591,32 +1600,32 @@ class GameHarnessTest(unittest.TestCase):
     def test_unentered_markets_log_closure_and_do_not_block_a_later_slot(self):
         room, harness = self.make_room()
         colony = harness.add_colony("Multi Market Nest", 20, "balanced", "momentum", "medium")
-        source_event = {
+        corner_event = {
             "fixtureId": 42,
             "seq": 1,
             "action": "high_danger_possession",
             "highlights": [],
-            "minute": 10,
-            "clockSeconds": 600,
+            "minute": 1,
+            "clockSeconds": 60,
             "participant": 1,
             "participantLabel": "France",
             "possession": 1,
             "possessionLabel": "France",
             "description": "High danger possession - France",
         }
-        opportunities = build_opportunities(source_event, 1, room.match_state)
+        card_event = {**corner_event, "seq": 2, "minute": 6, "clockSeconds": 360}
         selected = {
-            opportunity.context: opportunity
-            for opportunity in opportunities
-            if opportunity.context in {"goal_next_10", "next_goal_team", "next_corner"}
+            "next_corner": build_opportunities(corner_event, 1, room.match_state)[0],
+            "next_card": build_opportunities(card_event, 2, room.match_state)[0],
         }
         room.event_index = 1
-        for opportunity in selected.values():
+        for index, opportunity in enumerate(selected.values(), start=1):
+            room.event_index = index
             self.assertTrue(harness._claim_opportunity_slot(opportunity))
             room.opportunities[opportunity.opportunity_id] = opportunity
             room.add_log("opportunity", opportunity.label, {"opportunity": opportunity.public_state()})
 
-        backed_market = selected["next_goal_team"]
+        backed_market = selected["next_card"]
         backed_prediction = create_prediction(
             colony,
             backed_market,
@@ -1626,7 +1635,7 @@ class GameHarnessTest(unittest.TestCase):
         )
         self.assertIsNotNone(backed_prediction)
         room.predictions[backed_prediction.prediction_id] = backed_prediction
-        self.assertEqual(len(room.public_state()["activeOpportunities"]), 3)
+        self.assertEqual(len(room.public_state()["activeOpportunities"]), 2)
 
         room.event_index = 2
         harness._clear_old_opportunities()
@@ -1639,7 +1648,6 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(
             {event.data.get("opportunityId") for event in closures},
             {
-                selected["goal_next_10"].opportunity_id,
                 selected["next_corner"].opportunity_id,
             },
         )
@@ -1647,16 +1655,87 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(all(event.data.get("positionCount") == 0 for event in closures))
         self.assertTrue(all(event.data.get("market", {}).get("opportunityId") for event in closures))
 
-        room.event_index = 25
-        replacement = next(
-            item
-            for item in build_opportunities({**source_event, "seq": 25, "clockSeconds": 1200}, 25, room.match_state)
-            if item.context == "goal_next_10"
-        )
+        room.event_index = 3
+        replacement = build_opportunities(
+            {**corner_event, "seq": 3, "minute": 11, "clockSeconds": 660},
+            3,
+            room.match_state,
+        )[0]
         self.assertTrue(harness._claim_opportunity_slot(replacement))
 
+    def test_standard_market_cooldown_uses_match_clock_not_event_volume(self):
+        room, harness = self.make_room()
+        source = {
+            "fixtureId": 42,
+            "action": "high_danger_possession",
+            "minute": 1,
+            "clockSeconds": 60,
+            "description": "High danger possession",
+        }
+        first = build_opportunities(source, 1, room.match_state)[0]
+        room.event_index = 1
+        self.assertTrue(harness._claim_opportunity_slot(first))
+
+        before_boundary = build_opportunities(
+            {**source, "minute": 5, "clockSeconds": 359}, 999, room.match_state
+        )[0]
+        room.event_index = 999
+        self.assertFalse(harness._claim_opportunity_slot(before_boundary))
+
+        at_boundary = build_opportunities(
+            {**source, "minute": 6, "clockSeconds": 360}, 1000, room.match_state
+        )[0]
+        room.event_index = 1000
+        self.assertTrue(harness._claim_opportunity_slot(at_boundary))
+
+    def test_at_most_three_standard_markets_stay_open_at_once(self):
+        room, harness = self.make_room()
+        colony = harness.add_colony("Three Market Nest", 20, "balanced", "momentum", "medium")
+        opportunities = []
+        for event_index, minute in enumerate((1, 6, 11, 16), start=1):
+            opportunity = build_opportunities(
+                {
+                    "fixtureId": 42,
+                    "seq": event_index,
+                    "action": "high_danger_possession",
+                    "minute": minute,
+                    "clockSeconds": minute * 60,
+                    "participant": 1,
+                    "participantLabel": "France",
+                    "description": "High danger possession - France",
+                },
+                event_index,
+                room.match_state,
+            )[0]
+            opportunities.append(opportunity)
+
+        for event_index, opportunity in enumerate(opportunities[:3], start=1):
+            room.event_index = event_index
+            self.assertTrue(harness._claim_opportunity_slot(opportunity))
+            prediction = create_prediction(
+                colony,
+                opportunity,
+                vote_for_option(colony, opportunity, support_count=12),
+                event_index,
+                bought_info=False,
+            )
+            room.opportunities[opportunity.opportunity_id] = opportunity
+            room.predictions[prediction.prediction_id] = prediction
+
+        room.event_index = 4
+        self.assertFalse(harness._claim_opportunity_slot(opportunities[3]))
+        self.assertEqual(len(harness._open_standard_market_contexts()), 3)
+
+        first_prediction = next(
+            prediction
+            for prediction in room.predictions.values()
+            if prediction.opportunity_id == opportunities[0].opportunity_id
+        )
+        harness._void_prediction(first_prediction, opportunities[0], reason="test")
+        self.assertTrue(harness._claim_opportunity_slot(opportunities[3]))
+
     def test_precision_market_resolves_on_next_goal_team(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_b"))
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
         colony = harness.add_colony("Precision Nest", 20, "balanced", "momentum", "medium")
@@ -1667,8 +1746,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 60,
-                "clockSeconds": 3600,
+                "minute": 75,
+                "clockSeconds": 4500,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -1689,8 +1768,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 2,
                 "action": "goal",
                 "highlights": ["goal"],
-                "minute": 63,
-                "clockSeconds": 3780,
+                "minute": 78,
+                "clockSeconds": 4680,
                 "participant": 2,
                 "participantLabel": "Belgium",
                 "score": {"participant1": 0, "participant2": 1},
@@ -1711,7 +1790,7 @@ class GameHarnessTest(unittest.TestCase):
         )
 
     def test_next_goal_losing_colony_still_records_actual_outcome(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
         harness = manager.harness(room.game_id)
         harness.add_colony("Outcome Watch", 20, "balanced", "momentum", "medium")
@@ -1722,8 +1801,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 87,
-                "clockSeconds": 5220,
+                "minute": 76,
+                "clockSeconds": 4560,
                 "participant": 1,
                 "participantLabel": "Brazil",
                 "possession": 1,
@@ -1731,12 +1810,12 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - Brazil",
             }
         )
-        no_goal_predictions = [
+        brazil_predictions = [
             prediction
             for prediction in room.predictions.values()
-            if prediction.option.option_id == "next_goal_none"
+            if prediction.option.option_id == "next_goal_p1"
         ]
-        self.assertTrue(no_goal_predictions)
+        self.assertTrue(brazil_predictions)
 
         harness.process_event(
             {
@@ -1744,8 +1823,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 2,
                 "action": "goal",
                 "highlights": ["goal"],
-                "minute": 88,
-                "clockSeconds": 5280,
+                "minute": 77,
+                "clockSeconds": 4620,
                 "participant": 2,
                 "participantLabel": "Norway",
                 "score": {"participant1": 0, "participant2": 1},
@@ -1757,7 +1836,7 @@ class GameHarnessTest(unittest.TestCase):
             event
             for event in room.log
             if event.kind == "settlement"
-            and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in no_goal_predictions}
+            and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in brazil_predictions}
         ]
 
         self.assertTrue(settlement_events)
@@ -1765,7 +1844,10 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual({event.data.get("resolvedOutcome", {}).get("label") for event in settlement_events}, {"Norway scored"})
 
     def test_next_goal_market_waits_until_full_time_without_goal(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
+        def vote_only_on_next_goal(_ant, context):
+            return "yes" if context["market"]["context"] == "next_goal_team" else "abstain"
+
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent(vote_only_on_next_goal))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
         harness.add_colony("Full Time Watch", 20, "balanced", "momentum", "medium")
@@ -1776,8 +1858,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 75,
-                "clockSeconds": 4500,
+                "minute": 76,
+                "clockSeconds": 4560,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -1785,12 +1867,12 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - France",
             }
         )
-        no_goal_predictions = [
+        next_goal_predictions = [
             prediction
             for prediction in room.predictions.values()
-            if prediction.option.option_id == "next_goal_none"
+            if room.opportunities[prediction.opportunity_id].context == "next_goal_team"
         ]
-        self.assertTrue(no_goal_predictions)
+        self.assertTrue(next_goal_predictions)
 
         harness.process_event(
             {
@@ -1804,24 +1886,22 @@ class GameHarnessTest(unittest.TestCase):
             }
         )
 
-        self.assertTrue(all(not prediction.resolved for prediction in no_goal_predictions))
+        self.assertTrue(all(not prediction.resolved for prediction in next_goal_predictions))
 
         harness.finish_game()
 
-        self.assertTrue(all(prediction.resolved for prediction in no_goal_predictions))
+        self.assertTrue(all(prediction.resolved for prediction in next_goal_predictions))
         self.assertTrue(
             [
                 event
                 for event in room.log
-                if event.kind == "settlement"
+                if event.kind == "void"
                 and event.data.get("reason") == "full_time"
-                and event.data.get("win")
-                and event.data.get("resolvedOutcome", {}).get("label") == "No goal before full time"
-                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in no_goal_predictions}
+                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in next_goal_predictions}
             ]
         )
 
-    def test_overturned_goal_does_not_resolve_goal_market(self):
+    def test_overturned_goal_does_not_resolve_next_goal_market(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Norway", seed=123)
         harness = manager.harness(room.game_id)
@@ -1833,8 +1913,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 1,
-                "clockSeconds": 60,
+                "minute": 15,
+                "clockSeconds": 900,
                 "participant": 2,
                 "participantLabel": "Norway",
                 "possession": 2,
@@ -1845,7 +1925,7 @@ class GameHarnessTest(unittest.TestCase):
         goal_predictions = [
             prediction
             for prediction in room.predictions.values()
-            if prediction.option.option_id == "goal_next_10_yes"
+            if prediction.option.option_id == "next_goal_p1"
         ]
         self.assertTrue(goal_predictions)
 
@@ -1890,11 +1970,11 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertEqual(room.match_state.score, {"participant1": 1, "participant2": 1})
 
-    def test_next_free_kick_market_resolves_on_first_free_kick_team(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_b"))
+    def test_next_substitution_market_resolves_on_first_substitution_team(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
-        colony = harness.add_colony("Free Kick Nest", 20, "balanced", "chaos", "medium")
+        colony = harness.add_colony("Substitution Nest", 20, "balanced", "momentum", "medium")
 
         harness.process_event(
             {
@@ -1902,8 +1982,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 60,
-                "clockSeconds": 3600,
+                "minute": 31,
+                "clockSeconds": 1860,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -1914,7 +1994,7 @@ class GameHarnessTest(unittest.TestCase):
         free_kick_predictions = [
             prediction
             for prediction in room.predictions.values()
-            if prediction.option.option_id == "next_free_kick_p2"
+            if prediction.option.option_id == "next_substitution_p2"
         ]
         self.assertTrue(free_kick_predictions)
 
@@ -1922,13 +2002,13 @@ class GameHarnessTest(unittest.TestCase):
             {
                 "fixtureId": 42,
                 "seq": 2,
-                "action": "free_kick",
-                "highlights": ["free_kick"],
-                "minute": 61,
-                "clockSeconds": 3660,
+                "action": "substitution",
+                "highlights": ["substitution"],
+                "minute": 32,
+                "clockSeconds": 1920,
                 "participant": 2,
                 "participantLabel": "Belgium",
-                "description": "Free kick - Belgium",
+                "description": "Substitution - Belgium",
             }
         )
 
@@ -1937,7 +2017,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(any(event.kind == "settlement" and event.data.get("win") for event in room.log))
 
     def test_next_corner_market_resolves_on_first_corner_team(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_a"))
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
         colony = harness.add_colony("Corner Nest", 20, "balanced", "corners", "medium")
@@ -1948,8 +2028,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 60,
-                "clockSeconds": 3600,
+                "minute": 20,
+                "clockSeconds": 1200,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -1970,8 +2050,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 2,
                 "action": "corner",
                 "highlights": ["corner"],
-                "minute": 61,
-                "clockSeconds": 3660,
+                "minute": 21,
+                "clockSeconds": 1260,
                 "participant": 1,
                 "participantLabel": "France",
                 "description": "Corner - France",
@@ -1982,8 +2062,8 @@ class GameHarnessTest(unittest.TestCase):
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("resolvedOutcome", {}).get("target") == "corner" for event in room.log))
 
-    def test_next_yellow_card_market_only_resolves_on_yellow_card(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_a"))
+    def test_next_card_market_resolves_on_red_or_yellow_card(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
         colony = harness.add_colony("Card Nest", 20, "balanced", "chaos", "medium")
@@ -1994,8 +2074,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 60,
-                "clockSeconds": 3600,
+                "minute": 6,
+                "clockSeconds": 360,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2003,12 +2083,12 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - France",
             }
         )
-        yellow_card_predictions = [
+        card_predictions = [
             prediction
             for prediction in room.predictions.values()
-            if prediction.option.option_id == "next_yellow_card_p1"
+            if prediction.option.option_id == "next_card_p1"
         ]
-        self.assertTrue(yellow_card_predictions)
+        self.assertTrue(card_predictions)
 
         harness.process_event(
             {
@@ -2016,38 +2096,25 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 2,
                 "action": "red_card",
                 "highlights": ["red_card"],
-                "minute": 61,
-                "clockSeconds": 3660,
+                "minute": 47,
+                "clockSeconds": 2820,
                 "participant": 1,
                 "participantLabel": "France",
                 "description": "Red card - France",
             }
         )
-        self.assertFalse(yellow_card_predictions[0].resolved)
-
-        harness.process_event(
-            {
-                "fixtureId": 42,
-                "seq": 3,
-                "action": "yellow_card",
-                "highlights": ["yellow_card"],
-                "minute": 62,
-                "clockSeconds": 3720,
-                "participant": 1,
-                "participantLabel": "France",
-                "description": "Yellow card - France",
-            }
-        )
-
-        self.assertTrue(yellow_card_predictions[0].resolved)
+        self.assertTrue(card_predictions[0].resolved)
         self.assertGreaterEqual(colony.memory.wins, 1)
-        self.assertTrue(any(event.kind == "settlement" and event.data.get("resolvedOutcome", {}).get("target") == "yellow_card" for event in room.log))
+        self.assertTrue(any(event.kind == "settlement" and event.data.get("resolvedOutcome", {}).get("target") == "card" for event in room.log))
 
-    def test_next_free_kick_market_waits_until_full_time_without_free_kick(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
+    def test_next_substitution_market_waits_until_full_time_without_substitution(self):
+        def vote_only_on_substitution(_ant, context):
+            return "yes" if context["market"]["context"] == "next_substitution" else "abstain"
+
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent(vote_only_on_substitution))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
-        harness.add_colony("Long Free Kick Watch", 20, "balanced", "chaos", "medium")
+        harness.add_colony("Long Substitution Watch", 20, "balanced", "momentum", "medium")
 
         harness.process_event(
             {
@@ -2055,8 +2122,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 75,
-                "clockSeconds": 4500,
+                "minute": 11,
+                "clockSeconds": 660,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2064,12 +2131,12 @@ class GameHarnessTest(unittest.TestCase):
                 "description": "High danger possession - France",
             }
         )
-        free_kick_predictions = [
+        substitution_predictions = [
             prediction
             for prediction in room.predictions.values()
-            if room.opportunities[prediction.opportunity_id].context == "next_free_kick"
+            if room.opportunities[prediction.opportunity_id].context == "next_substitution"
         ]
-        self.assertTrue(free_kick_predictions)
+        self.assertTrue(substitution_predictions)
 
         harness.process_event(
             {
@@ -2083,28 +2150,26 @@ class GameHarnessTest(unittest.TestCase):
             }
         )
 
-        self.assertTrue(all(not prediction.resolved for prediction in free_kick_predictions))
+        self.assertTrue(all(not prediction.resolved for prediction in substitution_predictions))
 
         harness.finish_game()
 
-        self.assertTrue(all(prediction.resolved for prediction in free_kick_predictions))
+        self.assertTrue(all(prediction.resolved for prediction in substitution_predictions))
         self.assertTrue(
             [
                 event
                 for event in room.log
-                if event.kind == "settlement"
+                if event.kind == "void"
                 and event.data.get("reason") == "full_time"
-                and event.data.get("win")
-                and event.data.get("resolvedOutcome", {}).get("target") == "no_free_kick"
-                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in free_kick_predictions}
+                and event.data.get("opportunityId") in {prediction.opportunity_id for prediction in substitution_predictions}
             ]
         )
 
-    def test_next_free_kick_market_stays_unique_while_window_open(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_a"))
+    def test_next_substitution_market_stays_unique_while_window_open(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
-        harness.add_colony("Free Kick Guard", 20, "balanced", "chaos", "medium")
+        harness.add_colony("Substitution Guard", 20, "balanced", "momentum", "medium")
 
         def pressure_event(seq: int) -> dict:
             return {
@@ -2112,8 +2177,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": seq,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 75 if seq == 1 else 77,
-                "clockSeconds": 4500 if seq == 1 else 4620,
+                "minute": 11 if seq == 1 else 13,
+                "clockSeconds": 660 if seq == 1 else 780,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2122,31 +2187,31 @@ class GameHarnessTest(unittest.TestCase):
             }
 
         harness.process_event(pressure_event(1))
-        first_free_kick_opportunities = [
+        first_substitution_opportunities = [
             opportunity
             for opportunity in room.opportunities.values()
-            if opportunity.context == "next_free_kick"
+            if opportunity.context == "next_substitution"
         ]
-        self.assertEqual(len(first_free_kick_opportunities), 1)
-        first_free_kick_id = first_free_kick_opportunities[0].opportunity_id
+        self.assertEqual(len(first_substitution_opportunities), 1)
+        first_substitution_id = first_substitution_opportunities[0].opportunity_id
 
         for seq in range(2, 24):
             harness.process_event(pressure_event(seq))
 
-        free_kick_opportunities = [
+        substitution_opportunities = [
             opportunity
             for opportunity in room.opportunities.values()
-            if opportunity.context == "next_free_kick"
+            if opportunity.context == "next_substitution"
         ]
-        open_free_kick_predictions = [
+        open_substitution_predictions = [
             prediction
             for prediction in room.predictions.values()
             if not prediction.resolved
-            and room.opportunities[prediction.opportunity_id].context == "next_free_kick"
+            and room.opportunities[prediction.opportunity_id].context == "next_substitution"
         ]
 
-        self.assertEqual([opportunity.opportunity_id for opportunity in free_kick_opportunities], [first_free_kick_id])
-        self.assertTrue(open_free_kick_predictions)
+        self.assertEqual([opportunity.opportunity_id for opportunity in substitution_opportunities], [first_substitution_id])
+        self.assertTrue(open_substitution_predictions)
 
     def test_successful_prediction_adds_fixed_sugar_reward_only(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
@@ -2166,8 +2231,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 10,
-                "clockSeconds": 600,
+                "minute": 15,
+                "clockSeconds": 900,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2182,8 +2247,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 2,
                 "action": "goal",
                 "highlights": ["goal"],
-                "minute": 11,
-                "clockSeconds": 650,
+                "minute": 16,
+                "clockSeconds": 960,
                 "participant": 1,
                 "participantLabel": "France",
                 "score": {"participant1": 1, "participant2": 0},
@@ -2194,21 +2259,24 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertGreaterEqual(colony.memory.attempts, 1)
         self.assertEqual(starting_sugar, STARTING_COLONY_SUGAR)
-        self.assertEqual(colony.food, STARTING_COLONY_SUGAR + 4)
-        self.assertEqual(colony.public_state(room.event_index)["sugar"], STARTING_COLONY_SUGAR + 4)
-        self.assertEqual(colony.public_state(room.event_index)["score"], STARTING_COLONY_SUGAR + 4)
+        self.assertEqual(colony.food, STARTING_COLONY_SUGAR + 2)
+        self.assertEqual(colony.public_state(room.event_index)["sugar"], STARTING_COLONY_SUGAR + 2)
+        self.assertEqual(colony.public_state(room.event_index)["score"], STARTING_COLONY_SUGAR + 2)
         self.assertEqual(colony.larvae, 0)
         settlement = next(event for event in room.log if event.kind == "settlement")
         self.assertTrue(settlement.data.get("win"))
-        self.assertEqual(settlement.data.get("resourceDelta"), 4)
-        self.assertEqual(settlement.data.get("sugarDelta"), 4)
-        self.assertEqual(settlement.data.get("rewardSugar"), 4)
+        self.assertEqual(settlement.data.get("resourceDelta"), 2)
+        self.assertEqual(settlement.data.get("sugarDelta"), 2)
+        self.assertEqual(settlement.data.get("rewardSugar"), 2)
         self.assertEqual(settlement.data.get("riskSugar"), MARKET_RISK_SUGAR)
         self.assertNotIn("dead", settlement.data)
         self.assertNotIn("wounded", settlement.data)
 
     def test_losing_prediction_removes_fixed_market_risk_only(self):
-        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("option_c"))
+        def vote_only_against_goal(_ant, context):
+            return "no" if context["market"]["context"] == "next_goal_team" else "abstain"
+
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent(vote_only_against_goal))
         room = manager.create_room(fixture_id=42, participant1="France", participant2="Belgium", seed=123)
         harness = manager.harness(room.game_id)
         colony = harness.add_colony(
@@ -2225,8 +2293,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 10,
-                "clockSeconds": 600,
+                "minute": 15,
+                "clockSeconds": 900,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2285,8 +2353,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 10,
-                "clockSeconds": 600,
+                "minute": 15,
+                "clockSeconds": 900,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2327,27 +2395,31 @@ class GameHarnessTest(unittest.TestCase):
             info_need="low",
         )
 
-        harness.process_event(
-            {
-                "fixtureId": 42,
-                "seq": 1,
-                "action": "high_danger_possession",
-                "highlights": [],
-                "minute": 10,
-                "clockSeconds": 600,
-                "participant": 1,
-                "participantLabel": "France",
-                "possession": 1,
-                "possessionLabel": "France",
-                "description": "High danger possession - France",
-            }
+        source_event = {
+            "fixtureId": 42,
+            "seq": 1,
+            "action": "high_danger_possession",
+            "highlights": [],
+            "minute": 10,
+            "clockSeconds": 600,
+            "participant": 1,
+            "participantLabel": "France",
+            "possession": 1,
+            "possessionLabel": "France",
+            "description": "High danger possession - France",
+        }
+        opportunity = build_opportunity_for_context(source_event, 1, "goal_next_10", room.match_state)
+        room.event_index = 1
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        prediction = create_prediction(
+            room.colonies[next(iter(room.colonies))],
+            opportunity,
+            vote_for_option(room.colonies[next(iter(room.colonies))], opportunity, option_index=1, support_count=12),
+            1,
+            bought_info=False,
         )
-        goal_predictions = [
-            prediction
-            for prediction in room.predictions.values()
-            if prediction.opportunity_id.endswith("_goal_next_10")
-        ]
-        self.assertTrue(goal_predictions)
+        room.predictions[prediction.prediction_id] = prediction
+        goal_predictions = [prediction]
 
         for offset in range(60):
             clock_seconds = 605 + offset * 5
@@ -2427,9 +2499,7 @@ class GameHarnessTest(unittest.TestCase):
 
     def test_replay_finishes_with_two_and_three_colonies(self):
         def vote_for_market(ant, context):
-            if context["market"]["context"] in {"next_goal_team", "next_corner", "next_free_kick", "next_yellow_card"}:
-                return "option_a"
-            return "yes"
+            return context["market"]["availableVotes"][0]["vote"]
 
         colony_configs = [
             ("A", 10, "balanced", "momentum", "medium"),
@@ -2442,8 +2512,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 1,
                 "action": "high_danger_possession",
                 "highlights": [],
-                "minute": 10,
-                "clockSeconds": 600,
+                "minute": 15,
+                "clockSeconds": 900,
                 "participant": 1,
                 "participantLabel": "France",
                 "possession": 1,
@@ -2455,8 +2525,8 @@ class GameHarnessTest(unittest.TestCase):
                 "seq": 2,
                 "action": "goal",
                 "highlights": ["goal"],
-                "minute": 11,
-                "clockSeconds": 660,
+                "minute": 16,
+                "clockSeconds": 960,
                 "participant": 1,
                 "participantLabel": "France",
                 "score": {"participant1": 1, "participant2": 0},
@@ -2490,9 +2560,9 @@ class GameHarnessTest(unittest.TestCase):
                 self.assertEqual(room.status, "finished")
                 self.assertEqual(len(room.public_state()["colonies"]), colony_count)
                 self.assertFalse([prediction for prediction in room.predictions.values() if not prediction.resolved])
-                self.assertEqual(len(agent.calls), colony_count * len(BASELINE_MARKET_CONTEXTS))
-                self.assertEqual(len([event for event in room.log if event.kind == "ant_agent_vote"]), colony_count * len(BASELINE_MARKET_CONTEXTS))
-                self.assertEqual(len([event for event in room.log if event.kind == "settlement"]), colony_count * len(BASELINE_MARKET_CONTEXTS))
+                self.assertEqual(len(agent.calls), colony_count)
+                self.assertEqual(len([event for event in room.log if event.kind == "ant_agent_vote"]), colony_count)
+                self.assertEqual(len([event for event in room.log if event.kind == "settlement"]), colony_count)
 
     def test_finish_voids_open_predictions_and_clears_markets(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
@@ -2521,7 +2591,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(room.status, "finished")
         self.assertEqual(room.opportunities, {})
         self.assertFalse([prediction for prediction in room.predictions.values() if not prediction.resolved])
-        self.assertTrue(any(event.kind == "settlement" and event.data.get("reason") == "full_time" for event in room.log))
+        self.assertTrue(any(event.kind == "void" and event.data.get("reason") == "full_time" for event in room.log))
 
     def test_live_finish_closes_open_predictions_and_finishes_room(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
@@ -2569,7 +2639,7 @@ class GameHarnessTest(unittest.TestCase):
 
             def decide_ants(self, *, game_id, stage, context, ants):
                 self.calls.append({"stage": stage, "context": context, "ants": ants})
-                vote = "yes" if context["market"]["context"] == "goal_next_10" else "option_a"
+                vote = context["market"]["availableVotes"][0]["vote"]
                 return [
                     {
                         "antId": ant["antId"],
@@ -2601,8 +2671,8 @@ class GameHarnessTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(len(agent.calls), len(BASELINE_MARKET_CONTEXTS))
-        self.assertEqual([call["context"]["market"]["context"] for call in agent.calls], list(BASELINE_MARKET_CONTEXTS))
+        self.assertEqual(len(agent.calls), 1)
+        self.assertEqual([call["context"]["market"]["context"] for call in agent.calls], ["next_substitution"])
         self.assertNotIn("style", agent.calls[0]["context"]["colony"])
         self.assertNotIn("favoriteContext", agent.calls[0]["context"]["colony"])
         self.assertNotIn("infoNeed", agent.calls[0]["context"]["colony"])
@@ -2613,7 +2683,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertNotIn("personality", agent.calls[0]["ants"][0])
         self.assertNotIn("memory", agent.calls[0]["ants"][0])
         self.assertTrue(any(event.kind == "ant_agent_vote" for event in room.log))
-        self.assertTrue(any(prediction.option.option_id == "goal_next_10_yes" for prediction in room.predictions.values()))
+        self.assertTrue(any(prediction.option.option_id == "next_substitution_p1" for prediction in room.predictions.values()))
         self.assertFalse(any(event.kind == "agent_decision" for event in room.log))
 
     def test_deepseek_ant_agent_votes_do_not_buy_info(self):
@@ -3980,9 +4050,9 @@ class DemoRunApiTest(unittest.TestCase):
         )
         opened = _open_live_baseline_markets(harness, catchup_events)
 
-        self.assertEqual(opened, len(BASELINE_MARKET_CONTEXTS))
-        self.assertEqual({opportunity.context for opportunity in room.opportunities.values()}, set(BASELINE_MARKET_CONTEXTS))
-        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), len(BASELINE_MARKET_CONTEXTS))
+        self.assertEqual(opened, 1)
+        self.assertEqual({opportunity.context for opportunity in room.opportunities.values()}, {"next_card"})
+        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 1)
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("source") == "baseline" for event in room.log))
 
     def test_scheduled_txline_state_waits_before_live_markets(self):
@@ -4237,7 +4307,7 @@ class DemoRunApiTest(unittest.TestCase):
         game = response.json()
         self.assertEqual(game["fixtureId"], "demo-sandbox-previous")
         self.assertEqual(game["status"], "finished")
-        self.assertEqual(game["agentCallMode"], "batch")
+        self.assertEqual(game["agentCallMode"], "per_ant")
         self.assertEqual(len(game["colonies"]), 3)
         self.assertGreater(game["eventIndex"], 10)
 
@@ -5493,6 +5563,7 @@ class LivePositionRestoreTest(unittest.TestCase):
         self.assertIn(opportunity_id, room.opportunities)
         self.assertIn(prediction_id, room.predictions)
         self.assertFalse(room.predictions[prediction_id].resolved)
+        self.assertEqual(room.last_opportunity_clock_by_key["standard_market_arrival"], 20 * 60)
         self.assertEqual(room.colonies[colony_id].food_reserved, MARKET_RISK_SUGAR)
         self.assertEqual(room.public_state()["colonies"][0]["sugarAvailable"], STARTING_COLONY_SUGAR - MARKET_RISK_SUGAR)
 

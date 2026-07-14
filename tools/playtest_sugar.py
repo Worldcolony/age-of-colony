@@ -59,12 +59,10 @@ POLICY_DESCRIPTIONS = {
 }
 REWARD_CONTEXTS = (
     "penalties",
-    "goal_next_10",
     "next_goal_team",
     "next_corner",
-    "next_free_kick",
-    "next_yellow_card",
-    "next_foul",
+    "next_card",
+    "next_substitution",
 )
 
 
@@ -219,6 +217,8 @@ class LocalVoterAgent:
             target_by_context = {
                 "next_goal_team": "goal",
                 "next_corner": "corner",
+                "next_card": "card",
+                "next_substitution": "substitution",
                 "next_free_kick": "free_kick",
                 "next_yellow_card": "yellow_card",
                 "next_foul": "foul",
@@ -228,6 +228,8 @@ class LocalVoterAgent:
             prefix_by_context = {
                 "next_goal_team": "next_goal",
                 "next_corner": "next_corner",
+                "next_card": "next_card",
+                "next_substitution": "next_substitution",
                 "next_free_kick": "next_free_kick",
                 "next_yellow_card": "next_yellow_card",
                 "next_foul": "next_foul",

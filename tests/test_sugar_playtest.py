@@ -5,16 +5,14 @@ from tools.playtest_sugar import LocalVoterAgent, reward_audit, run_playtests
 
 
 class SugarPlaytestToolTest(unittest.TestCase):
-    def test_reward_audit_flags_three_way_markets(self):
+    def test_reward_audit_matches_binary_production_markets(self):
         rows = {row["context"]: row for row in reward_audit()}
 
-        self.assertAlmostEqual(rows["goal_next_10"]["breakEvenSum"], 1.0)
-        self.assertEqual(rows["goal_next_10"]["status"], "coherent")
-        self.assertGreater(rows["next_goal_team"]["breakEvenSum"], 1.0)
-        self.assertGreater(rows["next_corner"]["breakEvenSum"], 1.0)
-        self.assertGreater(rows["next_free_kick"]["breakEvenSum"], 1.0)
-        self.assertGreater(rows["next_yellow_card"]["breakEvenSum"], 1.0)
-        self.assertFalse(rows["next_foul"]["openedByCurrentV0"])
+        self.assertAlmostEqual(rows["penalties"]["breakEvenSum"], 1.0)
+        self.assertEqual(rows["penalties"]["status"], "coherent")
+        for context in ("next_goal_team", "next_corner", "next_card", "next_substitution"):
+            self.assertAlmostEqual(rows[context]["breakEvenSum"], 1.0)
+            self.assertEqual(rows[context]["status"], "coherent")
 
     def test_small_playtest_is_reproducible_and_preserves_invariants(self):
         first = run_playtests(policies=["accuracy_60"], runs=3, seed=91)
@@ -29,7 +27,7 @@ class SugarPlaytestToolTest(unittest.TestCase):
             self.assertGreaterEqual(row["meanFinalSugar"], 0)
             self.assertGreaterEqual(row["entryRate"], 0)
             self.assertLessEqual(row["entryRate"], 1)
-            self.assertIn("goal_next_10", result["styleContexts"][style])
+            self.assertIn("next_corner", result["styleContexts"][style])
             self.assertTrue(result["styleOptions"][style])
         for row in result["options"].values():
             self.assertGreaterEqual(row["offers"], row.get("entries", 0))
@@ -41,7 +39,7 @@ class SugarPlaytestToolTest(unittest.TestCase):
             "context": "goal_next_10",
             "minute": 4,
             "availableVotes": [
-                {"vote": "yes", "optionId": "goal_next_10_yes", "rewardSugar": 4},
+                {"vote": "yes", "optionId": "goal_next_10_yes", "rewardSugar": 5},
                 {"vote": "no", "optionId": "goal_next_10_no", "rewardSugar": 1},
                 {"vote": "abstain", "optionId": None, "rewardSugar": 0},
             ],
@@ -90,7 +88,7 @@ class SugarPlaytestToolTest(unittest.TestCase):
         }
         votes = [
             {"vote": "yes", "optionId": "penalty_goal", "rewardSugar": 1},
-            {"vote": "no", "optionId": "penalty_no_goal", "rewardSugar": 5},
+            {"vote": "no", "optionId": "penalty_no_goal", "rewardSugar": 4},
         ]
 
         self.assertIsNone(agent._correct_vote(market, votes))
@@ -139,12 +137,11 @@ class SugarPlaytestToolTest(unittest.TestCase):
             "minute": 20,
         }
         votes = [
-            {"vote": "option_a", "optionId": "next_goal_p1", "rewardSugar": 4},
-            {"vote": "option_b", "optionId": "next_goal_p2", "rewardSugar": 4},
-            {"vote": "option_c", "optionId": "next_goal_none", "rewardSugar": 1},
+            {"vote": "yes", "optionId": "next_goal_p1", "rewardSugar": 2},
+            {"vote": "no", "optionId": "next_goal_p2", "rewardSugar": 2},
         ]
 
-        self.assertEqual(agent._correct_vote(market, votes), "option_b")
+        self.assertEqual(agent._correct_vote(market, votes), "no")
 
 
 if __name__ == "__main__":

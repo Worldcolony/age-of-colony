@@ -39,6 +39,7 @@ SIGNAL_COUNT_KEYS = (
     "penalty",
     "penalty_scored",
     "penalty_missed",
+    "substitution",
     "danger",
     "attack",
 )
@@ -215,9 +216,23 @@ FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
-BASELINE_MARKET_CONTEXTS = ("goal_next_10", "next_goal_team", "next_corner", "next_free_kick", "next_yellow_card")
-ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union({"next_foul"})
-NO_DEADLINE_CONTEXTS = {"penalties", "next_goal_team", "next_corner", "next_free_kick", "next_yellow_card", "next_foul"}
+BASELINE_MARKET_CONTEXTS = ("next_corner", "next_card", "next_substitution", "next_goal_team")
+LEGACY_MARKET_CONTEXTS = {"goal_next_10", "next_free_kick", "next_yellow_card", "next_foul"}
+ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(LEGACY_MARKET_CONTEXTS)
+NO_DEADLINE_CONTEXTS = {"penalties", *ROLLING_WINDOW_CONTEXTS} - {"goal_next_10"}
+STANDARD_MARKET_INTERVAL_SECONDS = 5 * 60
+MAX_OPEN_STANDARD_MARKETS = 3
+MARKET_COOLDOWN_SECONDS = {
+    "penalties": 5 * 60,
+    "goal_next_10": 10 * 60,
+    "next_goal_team": STANDARD_MARKET_INTERVAL_SECONDS,
+    "next_corner": STANDARD_MARKET_INTERVAL_SECONDS,
+    "next_card": STANDARD_MARKET_INTERVAL_SECONDS,
+    "next_substitution": STANDARD_MARKET_INTERVAL_SECONDS,
+    "next_free_kick": STANDARD_MARKET_INTERVAL_SECONDS,
+    "next_yellow_card": STANDARD_MARKET_INTERVAL_SECONDS,
+    "next_foul": STANDARD_MARKET_INTERVAL_SECONDS,
+}
 
 
 def normalize_choice(value: str | None) -> str:
@@ -696,6 +711,7 @@ class GameRoom:
     opportunities: dict[str, Opportunity] = field(default_factory=dict)
     predictions: dict[str, Prediction] = field(default_factory=dict)
     last_opportunity_event_index_by_key: dict[str, int] = field(default_factory=dict)
+    last_opportunity_clock_by_key: dict[str, int] = field(default_factory=dict)
     log: list[GameLogEvent] = field(default_factory=list)
     agent_usage: dict[str, Any] | None = None
     log_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
@@ -1766,22 +1782,44 @@ class GameHarness:
         return decision
 
     def _claim_opportunity_slot(self, opportunity: Opportunity) -> bool:
+        key = self._opportunity_slot_key(opportunity)
+        if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_slot_prediction(key):
+            return False
+        if opportunity.context != "penalties" and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS:
+            return False
+
+        # TXLine can emit an award, a VAR confirmation and a result record for
+        # the same penalty. A shared penalty key plus a five-minute match-clock
+        # cooldown lets the award create one market while confirmations are
+        # ignored. Result records are filtered earlier by ``event_contexts``.
+        cadence_key = key if opportunity.context == "penalties" else "standard_market_arrival"
+        clock = opportunity_clock_seconds(opportunity)
+        if clock is not None:
+            last_clock = self.room.last_opportunity_clock_by_key.get(cadence_key)
+            cooldown = MARKET_COOLDOWN_SECONDS[opportunity.context]
+            if last_clock is not None and clock - last_clock < cooldown:
+                return False
+            self.room.last_opportunity_clock_by_key[cadence_key] = clock
+            self.room.last_opportunity_event_index_by_key[cadence_key] = self.room.event_index
+            return True
+
+        # Rare malformed records without a minute/clock keep a conservative
+        # event-index fallback so a feed issue cannot flood the room.
         cooldown_by_context = {
             "penalties": 2,
             "goal_next_10": 24,
             "next_goal_team": 24,
-            "next_corner": 12,
-            "next_free_kick": 10,
-            "next_yellow_card": 36,
-            "next_foul": 18,
+            "next_corner": 24,
+            "next_card": 24,
+            "next_substitution": 24,
+            "next_free_kick": 24,
+            "next_yellow_card": 24,
+            "next_foul": 24,
         }
-        key = self._opportunity_slot_key(opportunity)
-        if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_slot_prediction(key):
-            return False
-        last_event_index = self.room.last_opportunity_event_index_by_key.get(key, -10_000)
+        last_event_index = self.room.last_opportunity_event_index_by_key.get(cadence_key, -10_000)
         if self.room.event_index - last_event_index < cooldown_by_context[opportunity.context]:
             return False
-        self.room.last_opportunity_event_index_by_key[key] = self.room.event_index
+        self.room.last_opportunity_event_index_by_key[cadence_key] = self.room.event_index
         return True
 
     def _has_open_slot_prediction(self, key: str) -> bool:
@@ -1792,6 +1830,16 @@ class GameHarness:
             if opportunity and self._opportunity_slot_key(opportunity) == key:
                 return True
         return False
+
+    def _open_standard_market_contexts(self) -> set[str]:
+        contexts: set[str] = set()
+        for prediction in self.room.predictions.values():
+            if prediction.resolved:
+                continue
+            opportunity = self.room.opportunities.get(prediction.opportunity_id)
+            if opportunity and opportunity.context != "penalties":
+                contexts.add(opportunity.context)
+        return contexts
 
     def _opportunity_slot_key(self, opportunity: Opportunity) -> str:
         team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
@@ -1946,12 +1994,11 @@ class GameHarness:
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
             if not opportunity:
                 continue
-            if opportunity.context in {"goal_next_10", "next_goal_team", "next_corner", "next_free_kick", "next_yellow_card"}:
-                no_event_targets = {"no_goal", "no_corner", "no_free_kick", "no_yellow_card"}
+            if opportunity.context == "goal_next_10":
                 self._apply_settlement(
                     prediction,
                     opportunity,
-                    win=prediction.option.target in no_event_targets,
+                    win=prediction.option.target == "no_goal",
                     reason="full_time",
                     outcome=resolved_market_outcome(opportunity, None, reason="full_time"),
                 )
@@ -2658,38 +2705,48 @@ def build_opportunities(event: dict[str, Any], event_index: int, match_state: Ma
     contexts = event_contexts(event)
     if not contexts:
         return []
+    return [
+        opportunity
+        for context in contexts
+        if (opportunity := build_opportunity_for_context(event, event_index, context, match_state)) is not None
+    ]
+
+
+def build_opportunity_for_context(
+    event: dict[str, Any],
+    event_index: int,
+    context: str,
+    match_state: MatchState | None = None,
+) -> Opportunity | None:
     fixture_id = event.get("fixtureId")
     team = event.get("participant") or event.get("possession")
     team_label = event.get("participantLabel") or event.get("possessionLabel")
     minute = event.get("minute")
-    clock = event.get("clockSeconds")
+    clock = event_clock_seconds(event)
     participant1 = match_state.participant1 if match_state and match_state.participant1 else "A"
     participant2 = match_state.participant2 if match_state and match_state.participant2 else "B"
     source_event = dict(event)
     source_event["_participant1Label"] = participant1
     source_event["_participant2Label"] = participant2
-    opportunities = []
-    for context in contexts:
-        options = opportunity_options(context, participant1, participant2, team_label)
-        deadline_seconds = opportunity_deadline_seconds(context)
-        deadline_events = opportunity_deadline_events(context)
-        opportunities.append(
-            Opportunity(
-                opportunity_id=f"opp_{fixture_id}_{event_index}_{context}",
-                fixture_id=fixture_id,
-                context=context,
-                label=opportunity_label(context, event, team_label),
-                team=team,
-                team_label=team_label,
-                minute=minute,
-                created_event_index=event_index,
-                deadline_clock=clock + deadline_seconds if clock is not None and deadline_seconds is not None else None,
-                deadline_event_index=event_index + deadline_events if deadline_events is not None else None,
-                options=options,
-                source_event=source_event,
-            )
-        )
-    return opportunities
+    options = opportunity_options(context, participant1, participant2, team_label)
+    if not options:
+        return None
+    deadline_seconds = opportunity_deadline_seconds(context)
+    deadline_events = opportunity_deadline_events(context)
+    return Opportunity(
+        opportunity_id=f"opp_{fixture_id}_{event_index}_{context}",
+        fixture_id=fixture_id,
+        context=context,
+        label=opportunity_label(context, event, team_label),
+        team=team,
+        team_label=team_label,
+        minute=minute,
+        created_event_index=event_index,
+        deadline_clock=clock + deadline_seconds if clock is not None and deadline_seconds is not None else None,
+        deadline_event_index=event_index + deadline_events if deadline_events is not None else None,
+        options=options,
+        source_event=source_event,
+    )
 
 
 def event_context(event: dict[str, Any]) -> str | None:
@@ -2700,21 +2757,29 @@ def event_context(event: dict[str, Any]) -> str | None:
 def event_contexts(event: dict[str, Any]) -> list[str]:
     flags = set(event.get("highlights") or [])
     if event.get("synthetic") and (_event_token(event.get("action")) == "market_tick" or "market_tick" in flags):
-        return list(BASELINE_MARKET_CONTEXTS)
+        return cadence_market_contexts(event)
     if _event_is_penalty_award(event):
         targets = event_targets(event)
         if targets.intersection({"goal", "miss", "saved", "cancel"}):
             return []
         return ["penalties"]
     targets = event_targets(event)
-    if targets.intersection({"goal", "yellow_card", "red_card", "foul", "corner", "free_kick", "cancel"}):
+    if targets.intersection({"goal", "card", "foul", "corner", "free_kick", "substitution", "cancel"}):
         return []
     if (
         _event_has_text(event, "high_danger", "danger_possession", "attack_possession", "shot", "tir")
         or targets.intersection({"pressure", "shot"})
     ):
-        return list(BASELINE_MARKET_CONTEXTS)
+        return cadence_market_contexts(event)
     return []
+
+
+def cadence_market_contexts(event: dict[str, Any]) -> list[str]:
+    """Return one concrete event market for the current five-minute wave."""
+
+    clock = event_clock_seconds(event) or 0
+    context_index = (clock // STANDARD_MARKET_INTERVAL_SECONDS) % len(BASELINE_MARKET_CONTEXTS)
+    return [BASELINE_MARKET_CONTEXTS[context_index]]
 
 
 def _event_is_penalty_award(event: dict[str, Any]) -> bool:
@@ -2723,7 +2788,16 @@ def _event_is_penalty_award(event: dict[str, Any]) -> bool:
     flags = set(event.get("highlights") or [])
     award_tokens = {"penalty", "penalties", "penalty_awarded", "penalty_given", "penalty_kick", "spot_kick"}
     confirmation_tokens = {"penalty_confirmed", "confirmed_penalty"}
-    result_tokens = {"penalty_scored", "penalty_saved", "penalty_missed", "penalty_failed", "penalty_cancelled"}
+    result_tokens = {
+        "penalty_scored",
+        "penalty_saved",
+        "penalty_missed",
+        "penalty_failed",
+        "penalty_cancelled",
+        "penalty_outcome",
+        "penalty_result",
+        "penalty_shootout_outcome",
+    }
     false_prefixes = ("penalty_area", "penalty_box", "penalty_arc", "penalty_possible")
     if event.get("confirmed") is not None and not truthy(event.get("confirmed")):
         return False
@@ -2755,12 +2829,42 @@ def _event_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value).casefold()).strip("_")
 
 
+def event_clock_seconds(event: dict[str, Any]) -> int | None:
+    raw_clock = event.get("clockSeconds")
+    if raw_clock is not None:
+        try:
+            return int(raw_clock)
+        except (TypeError, ValueError):
+            pass
+    raw_minute = event.get("minute")
+    if raw_minute is not None:
+        try:
+            return int(raw_minute) * 60
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def opportunity_clock_seconds(opportunity: Opportunity) -> int | None:
+    clock = event_clock_seconds(opportunity.source_event)
+    if clock is not None:
+        return clock
+    if opportunity.minute is not None:
+        try:
+            return int(opportunity.minute) * 60
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def opportunity_deadline_seconds(context: str) -> int | None:
     return {
         "penalties": None,
         "goal_next_10": GOAL_NEXT_10_SECONDS,
         "next_goal_team": None,
         "next_corner": None,
+        "next_card": None,
+        "next_substitution": None,
         "next_free_kick": None,
         "next_yellow_card": None,
         "next_foul": None,
@@ -2773,6 +2877,8 @@ def opportunity_deadline_events(context: str) -> int | None:
         "goal_next_10": 56,
         "next_goal_team": None,
         "next_corner": None,
+        "next_card": None,
+        "next_substitution": None,
         "next_free_kick": None,
         "next_yellow_card": None,
         "next_foul": None,
@@ -2783,36 +2889,42 @@ def opportunity_options(context: str, participant1: str = "A", participant2: str
     if context == "penalties":
         return [
             OpportunityOption("penalty_goal", "yes, penalty scored", "safe", 1.35, "goal", reward_sugar=1),
-            OpportunityOption("penalty_no_goal", "no, missed or saved", "wild", 5.5, "no_goal", "any", reward_sugar=5),
+            OpportunityOption("penalty_no_goal", "no, missed or saved", "wild", 5.5, "no_goal", "any", reward_sugar=4),
         ]
     if context == "goal_next_10":
         return [
-            OpportunityOption("goal_next_10_yes", "yes, goal in the next 10 min", "risky", 2.4, "goal", "any", reward_sugar=4),
+            OpportunityOption("goal_next_10_yes", "yes, goal in the next 10 min", "risky", 2.4, "goal", "any", reward_sugar=5),
             OpportunityOption("goal_next_10_no", "no goal in the next 10 min", "safe", 1.35, "no_goal", "any", reward_sugar=1),
         ]
     if context == "next_goal_team":
         return [
-            OpportunityOption("next_goal_p1", f"{participant1} scores the next goal", "wild", 4.4, "goal", "participant1", reward_sugar=4),
-            OpportunityOption("next_goal_p2", f"{participant2} scores the next goal", "wild", 4.4, "goal", "participant2", reward_sugar=4),
-            OpportunityOption("next_goal_none", "no goal before full time", "safe", 1.35, "no_goal", "any", reward_sugar=1),
+            OpportunityOption("next_goal_p1", f"{participant1} scores the next goal", "wild", 4.4, "goal", "participant1", reward_sugar=2),
+            OpportunityOption("next_goal_p2", f"{participant2} scores the next goal", "wild", 4.4, "goal", "participant2", reward_sugar=2),
         ]
     if context == "next_corner":
         return [
             OpportunityOption("next_corner_p1", f"{participant1} wins the next corner", "risky", 2.6, "corner", "participant1", reward_sugar=2),
             OpportunityOption("next_corner_p2", f"{participant2} wins the next corner", "risky", 2.6, "corner", "participant2", reward_sugar=2),
-            OpportunityOption("next_corner_none", "no corner before full time", "safe", 1.45, "no_corner", "any", reward_sugar=1),
+        ]
+    if context == "next_card":
+        return [
+            OpportunityOption("next_card_p1", f"{participant1} gets the next card", "risky", 2.6, "card", "participant1", reward_sugar=2),
+            OpportunityOption("next_card_p2", f"{participant2} gets the next card", "risky", 2.6, "card", "participant2", reward_sugar=2),
+        ]
+    if context == "next_substitution":
+        return [
+            OpportunityOption("next_substitution_p1", f"{participant1} makes the next substitution", "risky", 2.6, "substitution", "participant1", reward_sugar=2),
+            OpportunityOption("next_substitution_p2", f"{participant2} makes the next substitution", "risky", 2.6, "substitution", "participant2", reward_sugar=2),
         ]
     if context == "next_free_kick":
         return [
             OpportunityOption("next_free_kick_p1", f"{participant1} wins the next free kick", "risky", 2.2, "free_kick", "participant1", reward_sugar=2),
             OpportunityOption("next_free_kick_p2", f"{participant2} wins the next free kick", "risky", 2.2, "free_kick", "participant2", reward_sugar=2),
-            OpportunityOption("next_free_kick_none", "no free kick before full time", "safe", 1.35, "no_free_kick", "any", reward_sugar=1),
         ]
     if context == "next_yellow_card":
         return [
-            OpportunityOption("next_yellow_card_p1", f"{participant1} gets the next yellow card", "wild", 3.8, "yellow_card", "participant1", reward_sugar=3),
-            OpportunityOption("next_yellow_card_p2", f"{participant2} gets the next yellow card", "wild", 3.8, "yellow_card", "participant2", reward_sugar=3),
-            OpportunityOption("next_yellow_card_none", "no yellow card before full time", "safe", 1.35, "no_yellow_card", "any", reward_sugar=1),
+            OpportunityOption("next_yellow_card_p1", f"{participant1} gets the next yellow card", "wild", 3.8, "yellow_card", "participant1", reward_sugar=2),
+            OpportunityOption("next_yellow_card_p2", f"{participant2} gets the next yellow card", "wild", 3.8, "yellow_card", "participant2", reward_sugar=2),
         ]
     if context == "next_foul":
         return [
@@ -2830,6 +2942,8 @@ def opportunity_label(context: str, event: dict[str, Any], team_label: str | Non
         "goal_next_10": "Market: goal in the next 10 minutes?",
         "next_goal_team": "Market: who scores the next goal?",
         "next_corner": "Market: who wins the next corner?",
+        "next_card": "Market: who gets the next card?",
+        "next_substitution": "Market: who makes the next substitution?",
         "next_free_kick": "Market: who wins the next free kick?",
         "next_yellow_card": "Market: who gets the next yellow card?",
         "next_foul": "Market: who commits the next foul?",
@@ -2919,19 +3033,27 @@ def agent_market_context(opportunity: Opportunity) -> dict[str, Any]:
     elif opportunity.context == "next_goal_team":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"
-        proposition = f"Who scores the next goal before full time: {participant1}, {participant2}, or no goal?"
+        proposition = f"Who scores the next goal before full time: {participant1} or {participant2}? No goal makes the market void."
     elif opportunity.context == "next_corner":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"
-        proposition = f"Who wins the next corner before full time: {participant1}, {participant2}, or no corner?"
+        proposition = f"Who wins the next corner before full time: {participant1} or {participant2}? No corner makes the market void."
+    elif opportunity.context == "next_card":
+        participant1 = opportunity.source_event.get("_participant1Label") or "team A"
+        participant2 = opportunity.source_event.get("_participant2Label") or "team B"
+        proposition = f"Who gets the next yellow or red card before full time: {participant1} or {participant2}? No card makes the market void."
+    elif opportunity.context == "next_substitution":
+        participant1 = opportunity.source_event.get("_participant1Label") or "team A"
+        participant2 = opportunity.source_event.get("_participant2Label") or "team B"
+        proposition = f"Who makes the next substitution before full time: {participant1} or {participant2}? No substitution makes the market void."
     elif opportunity.context == "next_free_kick":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"
-        proposition = f"Who wins the next free kick before full time: {participant1}, {participant2}, or no free kick?"
+        proposition = f"Who wins the next free kick before full time: {participant1} or {participant2}? No free kick makes the market void."
     elif opportunity.context == "next_yellow_card":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"
-        proposition = f"Who gets the next yellow card before full time: {participant1}, {participant2}, or no yellow card?"
+        proposition = f"Who gets the next yellow card before full time: {participant1} or {participant2}? No card makes the market void."
     elif opportunity.context == "next_foul":
         participant1 = opportunity.source_event.get("_participant1Label") or "team A"
         participant2 = opportunity.source_event.get("_participant2Label") or "team B"
@@ -2959,6 +3081,8 @@ def agent_opportunity_context(opportunity: Opportunity) -> dict[str, Any]:
         "goal_next_10": "Market: goal in the next 10 minutes?",
         "next_goal_team": "Market: who scores the next goal?",
         "next_corner": "Market: who wins the next corner?",
+        "next_card": "Market: who gets the next card?",
+        "next_substitution": "Market: who makes the next substitution?",
         "next_free_kick": "Market: who wins the next free kick?",
         "next_yellow_card": "Market: who gets the next yellow card?",
         "next_foul": "Market: who commits the next foul?",
@@ -3181,9 +3305,9 @@ def option_score(
 
     if prefers_market(ant.favorite_context, opportunity, option) or prefers_market(colony.favorite_context, opportunity, option):
         score += 0.15
-    if opportunity.context in {"goal_next_10", "next_goal_team", "next_corner", "next_free_kick"}:
+    if opportunity.context in {"goal_next_10", "next_goal_team", "next_corner", "next_substitution", "next_free_kick"}:
         score += ant.momentum_bias * 0.12
-    if opportunity.context in {"next_yellow_card", "next_foul"}:
+    if opportunity.context in {"next_card", "next_yellow_card", "next_foul"}:
         score += ant.chaos_bias * 0.12
         score += ant.momentum_bias * 0.05
     if opportunity.context == "chaos":
@@ -3208,6 +3332,12 @@ def prefers_market(favorite_context: str, opportunity: Opportunity, option: Oppo
             return True
     if opportunity.context == "next_corner":
         if favorite_context in {"corners", "momentum"}:
+            return True
+    if opportunity.context == "next_substitution":
+        if favorite_context == "momentum":
+            return True
+    if opportunity.context == "next_card":
+        if favorite_context == "chaos":
             return True
     if opportunity.context == "next_free_kick":
         if favorite_context in {"momentum", "chaos"}:
@@ -3389,9 +3519,7 @@ def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | No
             label = f"{team_label} scored" if team_label else "Goal scored"
             option = outcome_option(opportunity, target, team_scope)
         else:
-            target = "no_goal"
             label = "No goal before full time"
-            option = outcome_option(opportunity, target)
 
     elif opportunity.context == "next_corner":
         if "corner" in targets:
@@ -3399,9 +3527,23 @@ def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | No
             label = f"{team_label} won the next corner" if team_label else "Corner won"
             option = outcome_option(opportunity, target, team_scope)
         elif reason == "full_time":
-            target = "no_corner"
             label = "No corner before full time"
-            option = outcome_option(opportunity, target)
+
+    elif opportunity.context == "next_card":
+        if "card" in targets:
+            target = "card"
+            label = f"{team_label} got the next card" if team_label else "Card shown"
+            option = outcome_option(opportunity, target, team_scope)
+        elif reason == "full_time":
+            label = "No card before full time"
+
+    elif opportunity.context == "next_substitution":
+        if "substitution" in targets:
+            target = "substitution"
+            label = f"{team_label} made the next substitution" if team_label else "Substitution made"
+            option = outcome_option(opportunity, target, team_scope)
+        elif reason == "full_time":
+            label = "No substitution before full time"
 
     elif opportunity.context == "next_free_kick":
         if "free_kick" in targets:
@@ -3409,9 +3551,7 @@ def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | No
             label = f"{team_label} won the next free kick" if team_label else "Free kick won"
             option = outcome_option(opportunity, target, team_scope)
         elif reason == "full_time":
-            target = "no_free_kick"
             label = "No free kick before full time"
-            option = outcome_option(opportunity, target)
 
     elif opportunity.context == "next_yellow_card":
         if "yellow_card" in targets:
@@ -3419,9 +3559,7 @@ def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | No
             label = f"{team_label} got the next yellow card" if team_label else "Yellow card shown"
             option = outcome_option(opportunity, target, team_scope)
         elif reason == "full_time":
-            target = "no_yellow_card"
             label = "No yellow card before full time"
-            option = outcome_option(opportunity, target)
 
     elif opportunity.context == "next_foul":
         if "foul" in targets:
@@ -3534,6 +3672,16 @@ def evaluate_prediction_event(prediction: Prediction, opportunity: Opportunity, 
             return event_matches_team_scope(prediction.option.team_scope, event, opportunity)
         return None
 
+    if opportunity.context == "next_card":
+        if "card" in targets:
+            return event_matches_team_scope(prediction.option.team_scope, event, opportunity)
+        return None
+
+    if opportunity.context == "next_substitution":
+        if "substitution" in targets:
+            return event_matches_team_scope(prediction.option.team_scope, event, opportunity)
+        return None
+
     if opportunity.context == "next_free_kick":
         if "free_kick" in targets:
             if prediction.option.target == "no_free_kick":
@@ -3609,6 +3757,18 @@ def event_targets(event: dict[str, Any]) -> set[str]:
     if "free_kick" in flags or _event_has_text(event, "free_kick", "free kick", "coup franc"):
         targets.add("free_kick")
         targets.add("set_piece")
+    if "substitution" in flags or _event_has_text(
+        event,
+        "substitution",
+        "substitute",
+        "player_on",
+        "player_off",
+        "player on",
+        "player off",
+        "remplacement",
+        "changement",
+    ):
+        targets.add("substitution")
     if _event_has_text(event, "shot", "tir"):
         targets.add("shot")
     if _event_has_text(event, "high_danger", "danger_possession", "attack_possession"):
@@ -3936,6 +4096,8 @@ def _signal_types(event: dict[str, Any]) -> set[str]:
         signal_types.add("free_kick")
     if "foul" in targets:
         signal_types.add("foul")
+    if "substitution" in targets:
+        signal_types.add("substitution")
     if "yellow_card" in targets:
         signal_types.add("yellow")
     if "red_card" in targets:

@@ -6,7 +6,7 @@ import { useStore } from "@/store/game";
 import { fixtureId, flag, fmtKickoffLine, fmtScore, teamName } from "@/lib/format";
 import type { CreateColonyBody, FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
 
-const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "batch" as const };
+const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "per_ant" as const };
 const ADMIN_LAUNCH_REQUEST_STORAGE_KEY = "age-of-colony:admin-launch-request";
 let volatileLaunchRequest: { setupKey: string; requestKey: string } | null = null;
 const STYLES: { value: Style; label: string }[] = [

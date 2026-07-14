@@ -267,7 +267,7 @@ class StartGameRequest(BaseModel):
     mode: str = "replay"
     source: str = "historical"
     anonymousId: str | None = None
-    agentCallMode: Literal["per_ant", "batch"] | None = None
+    agentCallMode: Literal["per_ant", "batch"] | None = "per_ant"
     replayDelaySeconds: float = Field(default=0.0, ge=0.0, le=30.0)
     replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
 
@@ -287,7 +287,7 @@ class RunPreviousTxRequest(BaseModel):
     search: str | None = None
     seed: int | None = None
     stream: bool = False
-    agentCallMode: Literal["per_ant", "batch"] | None = None
+    agentCallMode: Literal["per_ant", "batch"] | None = "per_ant"
     replayDelaySeconds: float = Field(default=0.75, ge=0.0, le=30.0)
     replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
     colonies: list[CreateColonyRequest] | None = None
@@ -1714,7 +1714,7 @@ async def demo_run(payload: DemoRunRequest, request: Request) -> dict[str, Any]:
     harness = game_manager.harness(room.game_id)
     _add_autorun_colonies(harness)
     room.mode = "replay"
-    room.agent_call_mode = "batch"
+    room.agent_call_mode = "per_ant"
     events = demo_events(room.fixture_id)
     room.add_log(
         "game_started",
@@ -2632,6 +2632,8 @@ _RESTORABLE_MARKET_CONTEXTS = (
     "goal_next_10",
     "next_goal_team",
     "next_corner",
+    "next_card",
+    "next_substitution",
     "next_free_kick",
     "next_yellow_card",
     "next_foul",
@@ -2903,6 +2905,8 @@ def _restored_option_target(context: str, option_id: str) -> str:
         "goal_next_10": "goal",
         "next_goal_team": "goal",
         "next_corner": "corner",
+        "next_card": "card",
+        "next_substitution": "substitution",
         "next_free_kick": "free_kick",
         "next_yellow_card": "yellow_card",
         "next_foul": "foul",
@@ -2924,10 +2928,19 @@ def _opportunity_event_index_from_id(opportunity_id: str, context: str) -> int |
 def _remember_restored_opportunity_slot(room: GameRoom, opportunity: Opportunity) -> None:
     team_key = opportunity.team if opportunity.team is not None else opportunity.team_label or "any"
     key = f"{opportunity.context}:{team_key}" if opportunity.context == "penalties" else opportunity.context
-    room.last_opportunity_event_index_by_key[key] = max(
-        room.last_opportunity_event_index_by_key.get(key, -10_000),
+    cadence_key = key if opportunity.context == "penalties" else "standard_market_arrival"
+    room.last_opportunity_event_index_by_key[cadence_key] = max(
+        room.last_opportunity_event_index_by_key.get(cadence_key, -10_000),
         opportunity.created_event_index,
     )
+    clock = _first_restored_int(opportunity.source_event.get("clockSeconds"))
+    if clock is None and opportunity.minute is not None:
+        clock = opportunity.minute * 60
+    if clock is not None:
+        room.last_opportunity_clock_by_key[cadence_key] = max(
+            room.last_opportunity_clock_by_key.get(cadence_key, -10_000),
+            clock,
+        )
 
 
 def _first_restored_int(*values: Any) -> int | None:

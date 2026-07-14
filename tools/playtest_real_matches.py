@@ -15,7 +15,6 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -24,12 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import app.game.harness as harness_module  # noqa: E402
 from app.game.harness import (  # noqa: E402
     MARKET_RISK_SUGAR,
     GameManager,
     opportunity_options,
-    resolved_market_outcome,
     stable_seed,
 )
 from app.main import _choose_best_source, _fetch_score_sources, _recent_past_fixtures  # noqa: E402
@@ -44,9 +41,8 @@ from tools.playtest_sugar import (  # noqa: E402
 
 
 DEFAULT_POLICIES = ("uniform", "accuracy_50", "accuracy_60", "accuracy_70", "reward_chaser")
-RULE_SETS = ("current", "candidate_simple", "candidate_cadence")
+RULE_SETS = ("current",)
 COUNT_KEYS = ("offers", "entries", "wins", "losses", "voids", "sugarDelta")
-TEAM_EVENT_CONTEXTS = {"next_goal_team", "next_corner", "next_free_kick", "next_yellow_card"}
 
 
 class AbstainAgent:
@@ -270,119 +266,9 @@ def _minute_bucket(value: Any) -> str:
 
 @contextmanager
 def use_rule_set(name: str) -> Iterator[None]:
-    if name == "current":
-        yield
-        return
-    if name not in {"candidate_simple", "candidate_cadence"}:
+    if name not in RULE_SETS:
         raise ValueError(f"Unknown rule set: {name}")
-
-    original_options = harness_module.opportunity_options
-    original_finish = harness_module.GameHarness._finish_open_markets
-    original_event_contexts = harness_module.event_contexts
-    original_claim = harness_module.GameHarness._claim_opportunity_slot
-
-    def candidate_options(
-        context: str,
-        participant1: str = "A",
-        participant2: str = "B",
-        team_label: str | None = None,
-    ) -> list[harness_module.OpportunityOption]:
-        options = original_options(context, participant1, participant2, team_label)
-        if context == "penalties":
-            return [replace(option, reward_sugar=4) if option.option_id == "penalty_no_goal" else option for option in options]
-        if context == "goal_next_10" and name == "candidate_cadence":
-            return [replace(option, reward_sugar=5) if option.option_id == "goal_next_10_yes" else option for option in options]
-        if context in TEAM_EVENT_CONTEXTS:
-            return [
-                replace(option, reward_sugar=2)
-                for option in options
-                if option.team_scope in {"participant1", "participant2"}
-            ]
-        return options
-
-    def candidate_finish(self: harness_module.GameHarness) -> None:
-        closed = 0
-        for prediction in list(self.room.predictions.values()):
-            if prediction.resolved:
-                continue
-            opportunity = self.room.opportunities.get(prediction.opportunity_id)
-            if not opportunity:
-                continue
-            if opportunity.context == "goal_next_10":
-                self._apply_settlement(
-                    prediction,
-                    opportunity,
-                    win=prediction.option.target == "no_goal",
-                    reason="full_time",
-                    outcome=resolved_market_outcome(opportunity, None, reason="full_time"),
-                )
-            else:
-                self._void_prediction(prediction, opportunity, reason="full_time")
-            closed += 1
-        self.room.opportunities.clear()
-        if closed:
-            self.room.add_log(
-                "markets_closed",
-                f"Full time: {closed} open prediction(s) are closed.",
-                {"closed": closed, "reason": "full_time"},
-            )
-
-    def cadence_event_contexts(event: dict[str, Any]) -> list[str]:
-        contexts = original_event_contexts(event)
-        if contexts == ["penalties"]:
-            action = harness_module._event_token(event.get("action"))
-            if action in {"penalty_outcome", "penalty_result", "penalty_shootout_outcome"}:
-                return []
-            return contexts
-        if not contexts:
-            return []
-        raw_clock = event.get("clockSeconds")
-        try:
-            clock = int(raw_clock) if raw_clock is not None else int(event.get("minute")) * 60
-        except (TypeError, ValueError):
-            clock = 0
-        secondary_contexts = ("next_goal_team", "next_corner", "next_free_kick", "next_yellow_card")
-        secondary = secondary_contexts[(clock // (15 * 60)) % len(secondary_contexts)]
-        return ["goal_next_10", secondary]
-
-    def cadence_claim(self: harness_module.GameHarness, opportunity: harness_module.Opportunity) -> bool:
-        key = self._opportunity_slot_key(opportunity)
-        if self._has_open_slot_prediction(key):
-            return False
-        raw_clock = opportunity.source_event.get("clockSeconds")
-        if raw_clock is None and opportunity.minute is not None:
-            raw_clock = int(opportunity.minute) * 60
-        try:
-            clock = int(raw_clock) if raw_clock is not None else None
-        except (TypeError, ValueError):
-            clock = None
-        if clock is None:
-            return original_claim(self, opportunity)
-
-        cadence_key = "penalties" if opportunity.context == "penalties" else key
-        cooldown_seconds = 5 * 60 if opportunity.context == "penalties" else 10 * 60 if opportunity.context == "goal_next_10" else 15 * 60
-        last_by_key = getattr(self.room, "_playtest_last_market_clock_by_key", None)
-        if not isinstance(last_by_key, dict):
-            last_by_key = {}
-            setattr(self.room, "_playtest_last_market_clock_by_key", last_by_key)
-        last_clock = last_by_key.get(cadence_key)
-        if last_clock is not None and clock - int(last_clock) < cooldown_seconds:
-            return False
-        last_by_key[cadence_key] = clock
-        return True
-
-    harness_module.opportunity_options = candidate_options
-    harness_module.GameHarness._finish_open_markets = candidate_finish
-    if name == "candidate_cadence":
-        harness_module.event_contexts = cadence_event_contexts
-        harness_module.GameHarness._claim_opportunity_slot = cadence_claim
-    try:
-        yield
-    finally:
-        harness_module.opportunity_options = original_options
-        harness_module.GameHarness._finish_open_markets = original_finish
-        harness_module.event_contexts = original_event_contexts
-        harness_module.GameHarness._claim_opportunity_slot = original_claim
+    yield
 
 
 def simulate_campaign(
@@ -633,8 +519,7 @@ def format_report(report: dict[str, Any]) -> str:
             "Interpretation limits:",
             "  Real timelines validate event cadence and settlement exposure, not LLM prediction skill.",
             "  Seeds vary ant signals; football probability confidence comes from unique fixtures only.",
-            "  candidate_simple is simulated in memory: A/B only (+2/+2), no-event void, penalty +1/+4.",
-            "  candidate_cadence also limits arrivals by match clock, opens two contexts, and uses goal-next-10 +5/+1.",
+            "  Production opens one standard A/B market about every five match minutes, with at most three standard markets open.",
         ]
     )
     return "\n".join(lines)

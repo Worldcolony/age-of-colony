@@ -3,6 +3,8 @@
 Date: 2026-07-12  
 Command: `python3 tools/playtest_sugar.py --runs 300 --policies all --seed 20260712`
 
+> Historical report. Production now opens one binary market roughly every five match minutes, rotating between corner, card, substitution and next goal, with at most three standard markets open. The tables below describe the rules before that integration.
+
 This campaign ran 1,500 replays through the production `GameHarness` with deterministic local voters. The single bundled football timeline stayed fixed; only the voting policy and seed varied. These results validate the economy and expose structural sensitivities, but they are not estimates of real football odds.
 
 ## Reward coherence
@@ -78,4 +80,4 @@ Simplify the event markets to two choices:
 
 For penalties, use `+1` for scored and `+4` for missed/saved. This produces an exact 100% break-even sum and is a little less inflationary than `+1 / +5`.
 
-No production reward was changed by this playtest. The recommended table should be approved before implementation.
+Implementation status (2026-07-14): completed. Production uses binary team markets at `+2 / +2`, penalty at `+1 / +4`, a five-minute match-clock cadence, and independent per-ant decisions. Goal-in-next-10 remains readable for historical games but is no longer opened by the live rotation.

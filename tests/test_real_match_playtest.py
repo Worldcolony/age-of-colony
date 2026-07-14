@@ -5,10 +5,10 @@ from tools.playtest_real_matches import use_rule_set
 
 
 class RealMatchPlaytestToolTest(unittest.TestCase):
-    def test_candidate_cadence_rules_are_scoped_and_simplified(self):
+    def test_production_rules_are_binary_and_simplified(self):
         original_corner_options = harness_module.opportunity_options("next_corner", "A", "B")
 
-        with use_rule_set("candidate_cadence"):
+        with use_rule_set("current"):
             corner_options = harness_module.opportunity_options("next_corner", "A", "B")
             goal_options = harness_module.opportunity_options("goal_next_10", "A", "B")
             penalty_result_contexts = harness_module.event_contexts(
@@ -26,7 +26,7 @@ class RealMatchPlaytestToolTest(unittest.TestCase):
             self.assertEqual(penalty_result_contexts, [])
 
         restored_corner_options = harness_module.opportunity_options("next_corner", "A", "B")
-        self.assertEqual(len(original_corner_options), 3)
+        self.assertEqual(len(original_corner_options), 2)
         self.assertEqual(restored_corner_options, original_corner_options)
 
 
