@@ -1642,6 +1642,13 @@ class GameHarness:
         agent_reliability = agent_reliability_context(signal_pack["reliability"])
         agent_opportunity = agent_opportunity_context(opportunity)
         agent_market = agent_market_context(opportunity)
+        directional_vote_required = self.room.room_kind == "player" and self.room.mode == "live"
+        if directional_vote_required:
+            agent_market["availableVotes"] = [
+                item
+                for item in agent_market.get("availableVotes", [])
+                if item.get("vote") != "abstain"
+            ]
         agent_market.pop("minute", None)
         if opportunity.context != "penalties":
             agent_market.pop("teamLabel", None)
@@ -1679,6 +1686,7 @@ class GameHarness:
                 "oneDecisionPerAnt": True,
                 "economy": "Each entered market risks exactly 2 Sugar; rewards are the option's rewardSugar.",
                 "doctrineAppliedAfterVotes": True,
+                "directionalVoteRequired": directional_vote_required,
             },
             "opportunity": agent_opportunity,
             "market": agent_market,

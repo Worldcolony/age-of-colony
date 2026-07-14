@@ -2715,6 +2715,48 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(any(prediction.option.option_id == "next_substitution_p1" for prediction in room.predictions.values()))
         self.assertFalse(any(event.kind == "agent_decision" for event in room.log))
 
+    def test_player_live_market_requires_directional_ant_votes(self):
+        class DirectionalAntAgent:
+            def __init__(self):
+                self.context = None
+
+            def decide(self, *, game_id, stage, context):
+                return None
+
+            def decide_ants(self, *, game_id, stage, context, ants):
+                self.context = context
+                vote = context["market"]["availableVotes"][0]["vote"]
+                return [{"antId": ant["antId"], "vote": vote} for ant in ants]
+
+        agent = DirectionalAntAgent()
+        manager = GameManager(decision_agent=agent)
+        room = manager.create_room(fixture_id=42, participant1="France", participant2="Spain", seed=124)
+        room.mode = "live"
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Player Nest", 20, "balanced", "momentum", "medium")
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 6,
+                "clockSeconds": 360,
+                "participant": 1,
+                "participantLabel": "France",
+                "description": "High danger possession - France",
+            }
+        )
+
+        self.assertTrue(agent.context["rules"]["directionalVoteRequired"])
+        self.assertEqual(
+            [item["vote"] for item in agent.context["market"]["availableVotes"]],
+            ["yes", "no"],
+        )
+        vote_event = next(event for event in room.log if event.kind == "vote")
+        self.assertEqual(vote_event.data["vote"]["voteCounts"]["abstain"], 0)
+        self.assertTrue([prediction for prediction in room.predictions.values() if not prediction.resolved])
+
     def test_deepseek_ant_agent_votes_do_not_buy_info(self):
         class FakeAntAgent:
             def decide(self, *, game_id, stage, context):
@@ -2942,6 +2984,7 @@ class GameHarnessTest(unittest.TestCase):
         system_prompt = payload["messages"][0]["content"]
         self.assertIn("doctrine is applied only after all individual votes", system_prompt)
         self.assertIn("must not change what an ant votes for", system_prompt)
+        self.assertIn("directionalVoteRequired", system_prompt)
         self.assertNotIn("aggressive ants may choose with lighter evidence", system_prompt)
 
     def test_openrouter_ant_payload_uses_dynamic_market_vote_schema(self):
