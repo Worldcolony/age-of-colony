@@ -24,7 +24,7 @@ const CONFIG = {
       label: "The Gates",
       still: "/intro/gates.webp",
       clip: "/intro/vid/gates.mp4",
-      clipMobile: "/intro/vid/gates-m.mp4?v=intra1",
+      clipMobile: "/intro/vid/gates-m.mp4",
       accent: "#B07E1C",
       scroll: 1.7,
       linger: 0.45,
@@ -38,7 +38,7 @@ const CONFIG = {
       label: "The Fixture Board",
       still: "/intro/board.webp",
       clip: "/intro/vid/board.mp4",
-      clipMobile: "/intro/vid/board-m.mp4?v=intra1",
+      clipMobile: "/intro/vid/board-m.mp4",
       accent: "#456F25",
       scroll: 1.3,
       eyebrow: "01 — Pick a fixture",
@@ -51,7 +51,7 @@ const CONFIG = {
       label: "The War Council",
       still: "/intro/council.webp",
       clip: "/intro/vid/council.mp4",
-      clipMobile: "/intro/vid/council-m.mp4?v=intra1",
+      clipMobile: "/intro/vid/council-m.mp4",
       accent: "#A9462F",
       scroll: 1.4,
       linger: 0.35,
@@ -65,7 +65,7 @@ const CONFIG = {
       label: "The Prediction Loom",
       still: "/intro/loom.webp",
       clip: "/intro/vid/loom.mp4",
-      clipMobile: "/intro/vid/loom-m.mp4?v=intra1",
+      clipMobile: "/intro/vid/loom-m.mp4",
       accent: "#B07E1C",
       scroll: 1.5,
       linger: 0.4,
@@ -79,7 +79,7 @@ const CONFIG = {
       label: "Full Time",
       still: "/intro/victory.webp",
       clip: "/intro/vid/victory.mp4",
-      clipMobile: "/intro/vid/victory-m.mp4?v=intra1",
+      clipMobile: "/intro/vid/victory-m.mp4",
       accent: "#B07E1C",
       scroll: 1.7,
       linger: 0.5,
@@ -120,7 +120,7 @@ export default function IntroWorld() {
       mount();
     } else {
       const script = document.createElement("script");
-      script.src = "/intro/scrub-engine.js?v=intra1";
+      script.src = "/intro/scrub-engine.js";
       script.onload = mount;
       document.body.appendChild(script);
     }
