@@ -4,15 +4,23 @@ import { useRouter } from "next/navigation";
 import { api, API_BASE, ApiError, type CreatePlayerRoomRequest } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { usePlayerIdentity } from "@/lib/playerIdentity";
+import {
+  forgetPublicMatch,
+  isResumablePublicMatch,
+  publicMatchHref,
+  rememberedPublicMatchId,
+  rememberPublicMatch,
+} from "@/lib/publicMatch";
 import { flag, teamName, fixtureId, fmtKickoffLine } from "@/lib/format";
 import { GameShell, GameChip } from "@/components/GameShell";
-import type { Fixture } from "@/lib/types";
+import type { Fixture, GameState } from "@/lib/types";
 
 type LobbyView = "choose" | "public" | "friends" | "private-match";
 
 export default function LobbyPage() {
   const router = useRouter();
   const identity = usePlayerIdentity();
+  const currentGame = useStore((s) => s.game);
   const setMatchFixture = useStore((s) => s.setMatchFixture);
   const setGame = useStore((s) => s.setGame);
   const resetGame = useStore((s) => s.resetGame);
@@ -26,10 +34,49 @@ export default function LobbyPage() {
   const [roomCode, setRoomCode] = useState("");
   const [err, setErr] = useState("");
   const [loadErr, setLoadErr] = useState("");
+  const [restoredResume, setRestoredResume] = useState<{ wallet: string; game: GameState } | null>(null);
+  const rememberedId = identity.authenticated && identity.wallet
+    ? rememberedPublicMatchId(identity.wallet)
+    : null;
+  const currentResume = isResumablePublicMatch(currentGame) && currentGame.gameId === rememberedId
+    ? currentGame
+    : null;
+  const persistedResume = restoredResume?.wallet === identity.wallet
+    && restoredResume.game.gameId === rememberedId
+    && isResumablePublicMatch(restoredResume.game)
+    ? restoredResume.game
+    : null;
+  const resumeGame = currentResume ?? persistedResume;
 
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!identity.ready || !identity.authenticated || !identity.wallet || !rememberedId) return;
+    if (isResumablePublicMatch(currentGame) && currentGame.gameId === rememberedId) return;
+    const wallet = identity.wallet;
+
+    api.getGame(rememberedId).then((game) => {
+      if (cancelled) return;
+      if (!isResumablePublicMatch(game)) {
+        forgetPublicMatch(wallet);
+        setRestoredResume(null);
+        return;
+      }
+      setGame(game);
+      setRestoredResume({ wallet, game });
+    }).catch((error) => {
+      if (cancelled) return;
+      if (error instanceof ApiError && error.status === 404) forgetPublicMatch(wallet);
+      setRestoredResume(null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentGame, identity.authenticated, identity.ready, identity.wallet, rememberedId, setGame]);
 
   const matches = useMemo(() => {
     const seen = new Set<string>();
@@ -93,10 +140,11 @@ export default function LobbyPage() {
     setJoining(true);
     setErr("");
     try {
-      await identity.ensureWallet();
+      const wallet = await identity.ensureWallet();
       resetGame();
       setMatchFixture(f);
       const game = await api.createGame(payload);
+      rememberPublicMatch(game, wallet);
       setGame(game);
       router.push(`/room/${game.gameId}`);
     } catch (e) {
@@ -150,6 +198,20 @@ export default function LobbyPage() {
     }
   }
 
+  function resumePublicMatch() {
+    if (!resumeGame) return;
+    setGame(resumeGame);
+    setMatchFixture({
+      fixtureId: resumeGame.fixtureId ?? resumeGame.gameId,
+      participant1: resumeGame.participant1,
+      participant2: resumeGame.participant2,
+      competition: resumeGame.competition ?? undefined,
+      startTime: resumeGame.startTime ?? undefined,
+      startTimeIso: resumeGame.startTimeIso ?? undefined,
+    });
+    router.push(publicMatchHref(resumeGame));
+  }
+
   const sheetTitle = view === "choose"
     ? "How do you want to play?"
     : view === "public"
@@ -175,14 +237,18 @@ export default function LobbyPage() {
       cta={
         <button
           type="button"
-          className="g-cta"
+          className={`g-cta ${resumeGame?.status === "running_live" ? "rust" : ""}`}
           disabled={joining || !identity.ready}
-          onClick={() => show("choose")}
+          onClick={resumeGame ? resumePublicMatch : () => show("choose")}
         >
           {!identity.ready
             ? "Checking wallet..."
             : joining
             ? "Entering..."
+            : resumeGame?.status === "running_live"
+              ? "🔴 Return to live match"
+              : resumeGame
+                ? "🎟️ Return to my match"
             : "⚔️ Play"}
         </button>
       }
@@ -205,25 +271,53 @@ export default function LobbyPage() {
       )}
 
       {view === "choose" ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            className="glass flex min-h-32 flex-col items-start gap-2 border-l-4 border-l-gold p-4 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold"
-            onClick={() => show("public")}
-          >
-            <span className="text-2xl" aria-hidden="true">🌍</span>
-            <span className="font-bold text-ink">Public match</span>
-            <span className="text-xs leading-relaxed text-ink-soft">Join the shared room for a match and play with everyone.</span>
-          </button>
-          <button
-            type="button"
-            className="glass flex min-h-32 flex-col items-start gap-2 border-l-4 border-l-green p-4 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green"
-            onClick={() => show("friends")}
-          >
-            <span className="text-2xl" aria-hidden="true">🔐</span>
-            <span className="font-bold text-ink">Play with friends</span>
-            <span className="text-xs leading-relaxed text-ink-soft">Create an invite room or enter a six-digit code.</span>
-          </button>
+        <div className="flex flex-col gap-3">
+          {resumeGame && (
+            <section className="well overflow-hidden border-l-4 border-l-rust p-4" aria-labelledby="resume-public-title">
+              <div className="flex items-start gap-3">
+                <span className="plate grid h-11 w-12 shrink-0 place-items-center text-xl" aria-hidden="true">🎟️</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p id="resume-public-title" className="font-bold text-ink">Your public match</p>
+                    <span className={`status-pill ${resumeGame.status === "running_live" ? "!border-rust/50 !text-rust" : ""}`}>
+                      {resumeGame.status === "running_live" && <span className="live-dot" />}
+                      {resumeGame.status === "running_live" ? "Live" : "Joined"}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-sm font-bold text-ink-soft">
+                    {teamName(resumeGame.participant1)} <span className="text-gold">vs</span> {teamName(resumeGame.participant2)}
+                  </p>
+                  <p className="mt-1 text-xs text-ink-faint">Your colony and match are still waiting for you.</p>
+                </div>
+              </div>
+              <button type="button" className="btn btn-primary mt-3 !min-h-11" onClick={resumePublicMatch}>
+                {resumeGame.status === "running_live" ? "Return to live cockpit" : "Return to match"} →
+              </button>
+            </section>
+          )}
+
+          {resumeGame && <p className="text-center text-[11px] font-bold uppercase tracking-wide text-ink-faint">or start somewhere else</p>}
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              className="glass flex min-h-32 flex-col items-start gap-2 border-l-4 border-l-gold p-4 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold"
+              onClick={() => show("public")}
+            >
+              <span className="text-2xl" aria-hidden="true">🌍</span>
+              <span className="font-bold text-ink">Public match</span>
+              <span className="text-xs leading-relaxed text-ink-soft">Join the shared room for a match and play with everyone.</span>
+            </button>
+            <button
+              type="button"
+              className="glass flex min-h-32 flex-col items-start gap-2 border-l-4 border-l-green p-4 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green"
+              onClick={() => show("friends")}
+            >
+              <span className="text-2xl" aria-hidden="true">🔐</span>
+              <span className="font-bold text-ink">Play with friends</span>
+              <span className="text-xs leading-relaxed text-ink-soft">Create an invite room or enter a six-digit code.</span>
+            </button>
+          </div>
         </div>
       ) : view === "friends" ? (
         <div className="flex flex-col gap-3">
