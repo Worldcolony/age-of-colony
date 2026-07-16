@@ -646,7 +646,7 @@ function CockpitRun({ id }: { id: string }) {
   return (
     <>
     {mobileShell}
-    <div className="flex min-h-[calc(100dvh-36px)] w-full flex-col gap-4 pb-6 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
+    <div className="cockpit-desktop flex h-[calc(100dvh-36px)] w-full flex-col gap-4 overflow-hidden pb-2 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
       <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
         <button className="icon-btn" aria-label={adminRoom ? "Back to admin" : "Back"} onClick={() => router.push(cockpitExitHref)}>←</button>
         <div className="text-center">
@@ -667,8 +667,8 @@ function CockpitRun({ id }: { id: string }) {
         />
       )}
 
-      <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(270px,0.72fr)_minmax(620px,1.62fr)_minmax(300px,0.76fr)] 2xl:grid-cols-[320px_minmax(680px,1fr)_360px]">
-        <aside className="grid min-w-0 content-start gap-4">
+      <div className="cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(270px,0.72fr)_minmax(620px,1.62fr)_minmax(300px,0.76fr)] 2xl:grid-cols-[320px_minmax(680px,1fr)_360px]">
+        <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
           <section className="glass match-card-media flex min-w-0 flex-col gap-3 p-4">
             {txlineProof && (
               <div
@@ -727,7 +727,7 @@ function CockpitRun({ id }: { id: string }) {
           <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
         </aside>
 
-        <main className="grid min-w-0 content-start gap-4">
+        <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
           {status === "created" ? (
             <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:min-h-[360px] xl:justify-center">
               <p className="eyebrow">Simulation dashboard</p>
@@ -747,7 +747,7 @@ function CockpitRun({ id }: { id: string }) {
                 onOpenRanks={() => router.push(resultsHref)}
               />
 
-              <section className="glass flex min-h-[420px] min-w-0 flex-col gap-3 p-4 xl:min-h-[500px]">
+              <section className="cockpit-markets glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="eyebrow">Colony decisions</p>
@@ -765,46 +765,47 @@ function CockpitRun({ id }: { id: string }) {
                   onChange={setActiveTab}
                 />
 
-                {activeTab === "live" && (
-                  <LiveTab
-                    openMarkets={openMarkets}
-                    openSummary={openSummary}
-                    selectedMarket={selectedMarket}
-                    selectedMarketId={effectiveSelectedMarketId}
-                    settledMarkets={settledMarkets}
-                    colony={mine}
-                    colonyLabel={colonyFocusLabel}
-                    waitingForKickoff={txlineWaiting}
-                    matchStateLabel={txlineStateLabel}
-                    onSelectMarket={setSelectedMarketId}
-                    onSelectSettled={(marketId) => {
-                      setSelectedSettledId(marketId);
-                      setActiveTab("settled");
-                    }}
-                  />
-                )}
+                <div className="cockpit-markets-body min-h-0 overflow-y-auto pr-1">
+                  {activeTab === "live" && (
+                    <LiveTab
+                      openMarkets={openMarkets}
+                      openSummary={openSummary}
+                      selectedMarket={selectedMarket}
+                      selectedMarketId={effectiveSelectedMarketId}
+                      settledMarkets={settledMarkets}
+                      colony={mine}
+                      colonyLabel={colonyFocusLabel}
+                      waitingForKickoff={txlineWaiting}
+                      matchStateLabel={txlineStateLabel}
+                      onSelectMarket={setSelectedMarketId}
+                      onSelectSettled={(marketId) => {
+                        setSelectedSettledId(marketId);
+                        setActiveTab("settled");
+                      }}
+                    />
+                  )}
 
-                {activeTab === "settled" && (
-                  <SettledTab
-                    settledMarkets={settledMarkets}
-                    selectedSettled={selectedSettled}
-                    selectedSettledId={effectiveSelectedSettledId}
-                    colony={mine}
-                    colonyLabel={colonyFocusLabel}
-                    onSelectSettled={setSelectedSettledId}
-                  />
-                )}
+                  {activeTab === "settled" && (
+                    <SettledTab
+                      settledMarkets={settledMarkets}
+                      selectedSettled={selectedSettled}
+                      selectedSettledId={effectiveSelectedSettledId}
+                      colony={mine}
+                      colonyLabel={colonyFocusLabel}
+                      onSelectSettled={setSelectedSettledId}
+                    />
+                  )}
 
-                {activeTab === "feed" && (
-                  <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
-                )}
-
+                  {activeTab === "feed" && (
+                    <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
+                  )}
+                </div>
               </section>
             </>
           )}
         </main>
 
-        <aside className="grid min-w-0 content-start gap-4">
+        <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
           {mine && (ownColony || adminRoom) && (
             <ColonyCommandPanel
               gameId={id}
@@ -899,8 +900,10 @@ function RaceBroadcastPanel({
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Full rankings →</button>
       </div>
 
-      <ColonyRaceChart colonies={colonies} events={events} hero />
-      <MatchPulseTimeline events={events} />
+      <div className="race-broadcast-stage">
+        <ColonyRaceChart colonies={colonies} events={events} hero />
+        <MatchPulseTimeline events={events} />
+      </div>
     </section>
   );
 }
