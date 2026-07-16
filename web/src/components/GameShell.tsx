@@ -43,6 +43,8 @@ export function GameShell({
   children: ReactNode;
 }) {
   useEffect(() => {
+    // Scroll restoration can leave a fixed game screen offset after navigation.
+    window.scrollTo(0, 0);
     document.body.classList.add("game-mode");
     return () => {
       document.body.classList.remove("game-mode", "sheet-open");

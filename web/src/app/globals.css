@@ -455,6 +455,10 @@ body {
   .doctrine-grid { grid-template-columns: 1fr; }
   .doctrine-card { min-height: 62px; }
 }
+@container colony-command (max-width: 390px) {
+  .colony-command-head { flex-direction: column; }
+  .colony-command-actions { width: 100%; justify-content: space-between; }
+}
 
 /* Admin-only control baton: separates "who is controlled" from the live ranking. */
 .admin-colony-switcher {
@@ -529,6 +533,11 @@ body {
   outline: 3px solid rgba(176, 126, 28, 0.35);
   outline-offset: 2px;
 }
+.admin-colony-switcher.is-dense { padding: 9px 12px !important; }
+.admin-colony-switcher.is-dense .admin-control-seal { width: 46px; height: 46px; }
+.admin-colony-switcher.is-dense .admin-colony-copy { display: none; }
+.admin-colony-switcher.is-dense .admin-colony-select,
+.admin-colony-switcher.is-dense .admin-colony-step { min-height: 42px; }
 @keyframes command-unfold {
   from { opacity: 0; transform: translateY(-5px); }
   to { opacity: 1; transform: translateY(0); }
@@ -1630,25 +1639,65 @@ body {
 
 @media (min-width: 1280px) {
   .cockpit-desktop-grid { overflow: hidden; }
-  .cockpit-main { grid-template-rows: auto minmax(0, 1fr); }
+  .cockpit-main { grid-template-rows: minmax(290px, 1.18fr) minmax(210px, .82fr); }
   .cockpit-sidebar {
+    grid-auto-rows: max-content;
+    align-content: start;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
+  }
+  .cockpit-sidebar,
+  .cockpit-markets-body {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(116, 85, 30, .44) transparent;
+  }
+  .cockpit-sidebar::-webkit-scrollbar,
+  .cockpit-markets-body::-webkit-scrollbar { width: 7px; }
+  .cockpit-sidebar::-webkit-scrollbar-thumb,
+  .cockpit-markets-body::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(116, 85, 30, .44);
   }
   .cockpit-markets-body {
     flex: 1;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
   }
-  .race-broadcast { gap: 10px; padding: 12px; }
+  .cockpit-markets { padding: 12px; }
+  .race-broadcast {
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .race-broadcast-head p:last-child { display: none; }
   .race-broadcast-stage {
+    min-height: 0;
     grid-template-columns: minmax(0, 1.28fr) minmax(260px, .72fr);
     align-items: stretch;
   }
-  .race-broadcast-stage .colony-race.is-hero .colony-race-plot {
-    height: clamp(160px, 24dvh, 238px);
+  .race-broadcast-stage > .colony-race {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
   }
-  .race-broadcast-stage > .match-pulse { display: flex; min-height: 0; flex-direction: column; }
+  .race-broadcast-stage > .colony-race.is-hero { padding: 10px; }
+  .race-broadcast-stage .colony-race.is-hero .colony-race-plot {
+    min-height: 112px;
+    height: auto;
+    flex: 1;
+  }
+  .race-broadcast-stage .colony-race.is-hero .colony-race-legend {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 12px;
+  }
+  .race-broadcast-stage > .match-pulse {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    padding: 8px;
+  }
+  .race-broadcast-stage > .match-pulse .match-pulse-head { margin-bottom: 6px; }
   .race-broadcast-stage > .match-pulse .match-pulse-layout {
     display: flex;
     min-height: 0;
@@ -1656,9 +1705,9 @@ body {
     flex-direction: column;
   }
   .race-broadcast-stage > .match-pulse .match-pulse-latest {
-    min-height: 118px;
+    min-height: 78px;
     flex: 1;
-    padding: 11px 11px 9px 16px;
+    padding: 9px 10px 8px 14px;
   }
   .race-broadcast-stage > .match-pulse .match-pulse-latest > strong {
     margin-top: 9px;
@@ -1675,7 +1724,7 @@ body {
   .race-broadcast-stage > .match-pulse .match-pulse-recent li {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 6px;
-    min-height: 32px;
+    min-height: 28px;
     padding: 4px 6px;
   }
   .race-broadcast-stage > .match-pulse .match-pulse-recent em { display: none; }

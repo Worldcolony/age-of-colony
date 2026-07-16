@@ -72,7 +72,14 @@ export function ColonyRaceChart({
       <div className="colony-race-plot">
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-hidden="true" preserveAspectRatio="none">
           <defs>
-            <filter id={glowId} x="-20%" y="-20%" width="140%" height="140%">
+            <filter
+              id={glowId}
+              filterUnits="userSpaceOnUse"
+              x={-20}
+              y={-20}
+              width={WIDTH + 40}
+              height={HEIGHT + 40}
+            >
               <feGaussianBlur stdDeviation="3" result="blur" />
               <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>

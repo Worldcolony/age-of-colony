@@ -664,6 +664,7 @@ function CockpitRun({ id }: { id: string }) {
           colonies={sorted}
           colonyId={mine.colonyId}
           onSelect={selectAdminColony}
+          dense
         />
       )}
 
@@ -863,7 +864,7 @@ function RunStatusCard({
   const streamLabel = streamState === "reconnecting" ? "reconnect" : streamState;
   const shortId = gameId.length > 8 ? `${gameId.slice(0, 4)}...${gameId.slice(-4)}` : gameId;
   return (
-    <section className="glass flex min-w-0 flex-col gap-3 p-3">
+    <section className="colony-roster glass flex min-w-0 flex-col gap-3 p-3">
       <div>
         <p className="eyebrow">Run state</p>
         <h2 className="text-base font-bold">Replay control</h2>
@@ -1637,7 +1638,7 @@ function ColonyRoster({
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
       </div>
 
-      <div className="grid max-h-[420px] gap-2 overflow-y-auto pr-1 xl:max-h-[calc(100dvh-430px)]">
+      <div className="grid gap-2">
         {colonies.map((colony, index) => {
           const active = colony.colonyId === activeColonyId;
           return (

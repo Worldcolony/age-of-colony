@@ -358,7 +358,7 @@ function ColonyCommandPanelState({
 
   return (
     <section className="colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3" aria-labelledby={`${disclosureId}-title`}>
-      <div className="flex items-start justify-between gap-3">
+      <div className="colony-command-head flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="eyebrow">{adminControl ? "Selected admin colony" : "Your colony"}</p>
           <h2 id={`${disclosureId}-title`} className="truncate text-base font-bold">Control {colony.name}</h2>
@@ -368,7 +368,7 @@ function ColonyCommandPanelState({
               : "Change the whole colony or choose one ant. New orders apply to the next market."}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="colony-command-actions flex shrink-0 items-center gap-2">
           <span className={`status-pill ${commandDirty ? "!border-gold/60 !text-gold-deep" : editable ? "!border-green/50 !text-green" : ""}`}>
             {commandDirty ? "Unsaved draft" : editable ? "Live changes" : "Read-only"}
           </span>

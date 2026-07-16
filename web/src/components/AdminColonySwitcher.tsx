@@ -9,11 +9,13 @@ export function AdminColonySwitcher({
   colonyId,
   onSelect,
   compact = false,
+  dense = false,
 }: {
   colonies: Colony[];
   colonyId?: string | null;
   onSelect: (colonyId: string) => void;
   compact?: boolean;
+  dense?: boolean;
 }) {
   const selectId = useId();
   if (!colonies.length) return null;
@@ -28,7 +30,7 @@ export function AdminColonySwitcher({
 
   return (
     <section
-      className={`admin-colony-switcher glass relative overflow-hidden ${compact ? "p-3" : "p-4"}`}
+      className={`admin-colony-switcher glass relative overflow-hidden ${compact ? "p-3" : "p-4"} ${dense ? "is-dense" : ""}`}
       aria-labelledby={`${selectId}-title`}
     >
       <div className={`grid min-w-0 items-center gap-3 ${compact ? "grid-cols-[auto_1fr]" : "lg:grid-cols-[auto_minmax(190px,0.72fr)_minmax(300px,1.28fr)_auto]"}`}>
@@ -40,7 +42,7 @@ export function AdminColonySwitcher({
         <div className="min-w-0">
           <p className="eyebrow">Admin control</p>
           <h2 id={`${selectId}-title`} className="text-base font-bold text-ink">Controlled colony</h2>
-          <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+          <p className="admin-colony-copy mt-1 text-xs leading-relaxed text-ink-faint">
             Orders below affect only the selected colony.
           </p>
         </div>
