@@ -59,8 +59,8 @@ POLICY_DESCRIPTIONS = {
 }
 REWARD_CONTEXTS = (
     "penalties",
+    "goal_next_10",
     "next_goal_team",
-    "next_corner",
     "next_card",
     "next_substitution",
 )

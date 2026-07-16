@@ -5,13 +5,14 @@ import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { findIdentityColony, usePlayerIdentity } from "@/lib/playerIdentity";
-import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
+import { flag, teamName, fmtMatchTime, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 import { AdminColonySwitcher } from "@/components/AdminColonySwitcher";
 import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
+import { ColonyRaceChart } from "@/components/ColonyRaceChart";
 import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
 import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
 
@@ -100,6 +101,16 @@ interface MarketOutcome {
   tone: "green" | "gold" | "rust" | "muted";
 }
 
+interface EventSpotlight {
+  key: string;
+  tone: "goal" | "penalty" | "card" | "substitution" | "market" | "resolved" | "danger";
+  glyph: "ball" | "penalty" | "yellow-card" | "red-card" | "substitution" | "market" | "resolved";
+  kicker: string;
+  title: string;
+  detail: string;
+  duration: number;
+}
+
 export default function CockpitPage() {
   const { id } = useParams<{ id: string }>();
   return (
@@ -145,6 +156,33 @@ function CockpitRun({ id }: { id: string }) {
   // latest ranking to announce a winner on game_finished without becoming a
   // dependency of the event pipeline, so it's mirrored into a ref.
   const sortedRef = useRef<Colony[]>([]);
+  const [spotlight, setSpotlight] = useState<EventSpotlight | null>(null);
+  const spotlightQueueRef = useRef<EventSpotlight[]>([]);
+  const spotlightActiveRef = useRef(false);
+  const spotlightTimerRef = useRef<number | null>(null);
+
+  function showNextSpotlight() {
+    const next = spotlightQueueRef.current.shift();
+    if (!next) {
+      spotlightActiveRef.current = false;
+      setSpotlight(null);
+      return;
+    }
+    spotlightActiveRef.current = true;
+    setSpotlight(next);
+    spotlightTimerRef.current = window.setTimeout(() => {
+      spotlightTimerRef.current = null;
+      spotlightActiveRef.current = false;
+      setSpotlight(null);
+      window.setTimeout(showNextSpotlight, 140);
+    }, next.duration);
+  }
+
+  function queueSpotlight(next: EventSpotlight) {
+    if (spotlightQueueRef.current.some((item) => item.key === next.key) || spotlight?.key === next.key) return;
+    spotlightQueueRef.current.push(next);
+    if (!spotlightActiveRef.current) showNextSpotlight();
+  }
 
   function addEvent(e: GameEvent) {
     addEvents([e]);
@@ -154,6 +192,8 @@ function CockpitRun({ id }: { id: string }) {
   // 3D world (combat text over the mound that earned/lost it) and, when it's
   // about YOUR colony, as a toast over the HUD.
   function announceEvent(event: GameEvent) {
+    const eventSpotlight = spotlightFromEvent(event);
+    if (eventSpotlight) queueSpotlight(eventSpotlight);
     const colonyId = typeof event.data?.colonyId === "string" ? event.data.colonyId : null;
     const isMine = Boolean(colonyId && colonyId === mineIdRef.current);
     if (event.kind === "settlement") {
@@ -262,6 +302,11 @@ function CockpitRun({ id }: { id: string }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  useEffect(() => () => {
+    if (spotlightTimerRef.current !== null) window.clearTimeout(spotlightTimerRef.current);
+    spotlightQueueRef.current = [];
+  }, []);
 
   useGameStream(id, {
     onOpen: () => setStreamState("live"),
@@ -636,7 +681,7 @@ function CockpitRun({ id }: { id: string }) {
               <div className="min-w-0 flex-1 text-center">
                 <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
                 <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
-                <p className="truncate font-mono text-xs text-cyan">{game?.match?.possessionLabel || txlineStateLabel}</p>
+                <p className="truncate font-mono text-xs text-cyan">{fmtMatchTime(game?.match, status)} · {game?.match?.possessionLabel || txlineStateLabel}</p>
               </div>
               <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p2)}</span>
             </div>
@@ -736,6 +781,7 @@ function CockpitRun({ id }: { id: string }) {
           )}
           <ColonyRoster
             colonies={sorted}
+            events={events}
             activeColonyId={mine?.colonyId}
             onOpenRanks={() => router.push(resultsHref)}
             onSelectColony={adminRoom ? selectAdminColony : undefined}
@@ -757,6 +803,8 @@ function CockpitRun({ id }: { id: string }) {
         </button>
       </footer>
     </div>
+
+    {spotlight && <MatchEventSpotlight spotlight={spotlight} />}
 
     </>
   );
@@ -1445,11 +1493,13 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
 
 function ColonyRoster({
   colonies,
+  events,
   activeColonyId,
   onOpenRanks,
   onSelectColony,
 }: {
   colonies: Colony[];
+  events: GameEvent[];
   activeColonyId?: string;
   onOpenRanks: () => void;
   onSelectColony?: (colonyId: string) => void;
@@ -1472,7 +1522,9 @@ function ColonyRoster({
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
       </div>
 
-      <div className="grid max-h-[300px] gap-2 overflow-y-auto pr-1 xl:max-h-[calc(100dvh-390px)]">
+      <ColonyRaceChart colonies={colonies} events={events} compact />
+
+      <div className="grid max-h-[300px] gap-2 overflow-y-auto pr-1 xl:max-h-[calc(100dvh-610px)]">
         {colonies.map((colony, index) => {
           const active = colony.colonyId === activeColonyId;
           return (
@@ -1510,6 +1562,102 @@ function ColonyRoster({
       </div>
     </section>
   );
+}
+
+function spotlightFromEvent(event: GameEvent): EventSpotlight | null {
+  if (event.kind === "match_event") {
+    const type = String(event.data?.visualType ?? "");
+    const title = String(event.data?.title ?? event.message ?? "MATCH EVENT");
+    const minute = event.data?.minute != null ? `${event.data.minute}'` : "LIVE";
+    const score = event.data?.score as { participant1?: unknown; participant2?: unknown } | undefined;
+    const scoreText = score && (score.participant1 != null || score.participant2 != null)
+      ? ` · ${score.participant1 ?? 0}–${score.participant2 ?? 0}`
+      : "";
+    const base = {
+      key: `match-${event.index}`,
+      kicker: `${minute}${scoreText}`,
+      title,
+      detail: String(event.data?.detail ?? event.data?.description ?? "Match update"),
+      duration: type === "goal" || type === "penalty_goal" ? 3000 : 2500,
+    };
+    if (type === "goal" || type === "penalty_goal") return { ...base, tone: "goal", glyph: "ball" };
+    if (type === "penalty" || type === "penalty_missed") return { ...base, tone: "penalty", glyph: "penalty" };
+    if (type === "yellow_card") return { ...base, tone: "card", glyph: "yellow-card" };
+    if (type === "red_card") return { ...base, tone: "danger", glyph: "red-card" };
+    if (type === "substitution") return { ...base, tone: "substitution", glyph: "substitution" };
+    if (type === "goal_cancelled") return { ...base, tone: "danger", glyph: "ball" };
+    return null;
+  }
+
+  if (event.kind === "opportunity") {
+    const opportunity = event.data?.opportunity as Opportunity | undefined;
+    if (!opportunity) return null;
+    const minute = opportunity.minute != null ? `${opportunity.minute}'` : "NEW EVENT";
+    return {
+      key: `open-${event.index}`,
+      tone: "market",
+      glyph: "market",
+      kicker: `${minute} · MARKET OPEN`,
+      title: marketSpotlightTitle(opportunity.context),
+      detail: cleanMarketLabel(String(opportunity.label ?? event.message ?? "Ants are voting")),
+      duration: 1900,
+    };
+  }
+
+  if (event.kind === "market_closed") {
+    const market = event.data?.market as Opportunity | undefined;
+    const outcome = event.data?.resolvedOutcome as { label?: unknown; detail?: unknown } | undefined;
+    return {
+      key: `closed-${event.index}`,
+      tone: "resolved",
+      glyph: "resolved",
+      kicker: "MARKET FINISHED",
+      title: String(outcome?.label ?? "EVENT RESOLVED"),
+      detail: String(outcome?.detail ?? cleanMarketLabel(String(market?.label ?? event.message))),
+      duration: 1900,
+    };
+  }
+
+  return null;
+}
+
+function marketSpotlightTitle(context?: string): string {
+  const labels: Record<string, string> = {
+    penalties: "PENALTY CALL",
+    next_goal_team: "NEXT GOAL",
+    goal_next_10: "GOAL IN 10 MIN?",
+    next_substitution: "NEXT SUB",
+    next_card: "NEXT CARD",
+  };
+  return labels[String(context ?? "")] ?? "NEW MARKET";
+}
+
+function MatchEventSpotlight({ spotlight }: { spotlight: EventSpotlight }) {
+  return (
+    <div className="match-spotlight" data-tone={spotlight.tone} role="status" aria-live="assertive">
+      <div className="match-spotlight-panel">
+        <span className="match-spotlight-kicker">{spotlight.kicker}</span>
+        <EventSpotlightGlyph glyph={spotlight.glyph} />
+        <strong className="match-spotlight-title">{spotlight.title}</strong>
+        <span className="match-spotlight-detail">{spotlight.detail}</span>
+        <span className="match-spotlight-scan" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
+function EventSpotlightGlyph({ glyph }: { glyph: EventSpotlight["glyph"] }) {
+  if (glyph === "yellow-card" || glyph === "red-card") {
+    return <span className={`match-spotlight-card ${glyph === "red-card" ? "red" : "yellow"}`} aria-hidden="true" />;
+  }
+  const labels: Record<Exclude<EventSpotlight["glyph"], "yellow-card" | "red-card">, string> = {
+    ball: "⚽",
+    penalty: "◎",
+    substitution: "↔",
+    market: "🎯",
+    resolved: "✓",
+  };
+  return <span className="match-spotlight-glyph" aria-hidden="true">{labels[glyph]}</span>;
 }
 
 function MiniStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {

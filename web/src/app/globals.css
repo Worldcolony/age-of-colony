@@ -1135,3 +1135,241 @@ body {
 .pod-gold { background: linear-gradient(180deg, #f0d488, #d9b556); border-color: #a8842e !important; }
 .pod-silver { background: linear-gradient(180deg, #e8e4da, #cbc6b8); border-color: #8f8a7c !important; }
 .pod-bronze { background: linear-gradient(180deg, #dfb08e, #c08b62); border-color: #8f5f3a !important; }
+
+/* The live Sugar race deliberately echoes a broadcast match graph: thin grid,
+   bright team traces and a crowned end point make the leader readable at a glance. */
+.colony-race {
+  overflow: hidden;
+  border: 2px solid rgba(74, 58, 30, 0.34);
+  border-radius: var(--radius-glass);
+  background:
+    linear-gradient(180deg, rgba(255, 253, 245, 0.96), rgba(236, 228, 205, 0.9)),
+    repeating-linear-gradient(90deg, transparent 0 44px, rgba(74, 58, 30, 0.04) 44px 45px);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55), 2px 2px 0 rgba(74, 58, 30, 0.14);
+  padding: 12px;
+}
+.colony-race-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.colony-race-head h3 {
+  margin-top: 2px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--color-ink);
+}
+.colony-race-lead {
+  flex: none;
+  border: 2px solid rgba(176, 126, 28, 0.45);
+  border-radius: 999px;
+  background: rgba(240, 212, 136, 0.4);
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--color-gold-deep);
+}
+.colony-race-plot {
+  position: relative;
+  margin-top: 8px;
+  height: 178px;
+  border: 1px solid rgba(74, 58, 30, 0.12);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.44);
+}
+.colony-race-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.colony-race-grid { stroke: rgba(74, 58, 30, 0.14); stroke-width: 1; stroke-dasharray: 2 5; vector-effect: non-scaling-stroke; }
+.colony-race-axis {
+  position: absolute;
+  left: 4px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--color-ink-faint);
+}
+.colony-race-axis.top { top: 5px; }
+.colony-race-axis.bottom { bottom: 5px; }
+.colony-race-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 12px;
+  margin-top: 9px;
+}
+.colony-race-legend > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--color-ink-soft);
+  font-size: 11px;
+}
+.colony-race-legend > div.is-leader { color: var(--color-ink); font-weight: 800; }
+.colony-race-legend b { font-family: var(--font-mono); color: var(--color-ink); }
+.colony-race-dot { width: 9px; height: 9px; border-radius: 999px; box-shadow: 0 0 0 2px rgba(255,255,255,.75); }
+.colony-race.is-compact { padding: 9px; }
+.colony-race.is-compact .colony-race-plot { height: 104px; }
+.colony-race.is-compact .colony-race-head h3 { font-size: 13px; }
+.colony-race.is-compact .colony-race-lead { padding: 3px 6px; font-size: 9px; }
+.colony-race.is-compact .colony-race-legend { grid-template-columns: 1fr; max-height: 68px; overflow-y: auto; }
+
+/* A single broadcast-style impact moment is the signature motion for this UI.
+   It announces real football events as well as market open/close boundaries. */
+.match-spotlight {
+  --spot: #f0d488;
+  --spot-deep: #b07e1c;
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--spot) 22%, transparent) 0 18%, transparent 55%),
+    linear-gradient(180deg, rgba(27, 29, 23, 0.18), rgba(22, 23, 19, 0.72));
+  animation: match-spotlight-backdrop .28s ease-out both;
+}
+.match-spotlight[data-tone="goal"] { --spot: #b9ef6a; --spot-deep: #4e7e2a; }
+.match-spotlight[data-tone="penalty"] { --spot: #f0d488; --spot-deep: #b07e1c; }
+.match-spotlight[data-tone="card"] { --spot: #ffe34d; --spot-deep: #b38d00; }
+.match-spotlight[data-tone="danger"] { --spot: #ff6b57; --spot-deep: #a32920; }
+.match-spotlight[data-tone="substitution"] { --spot: #7fd7ce; --spot-deep: #168f91; }
+.match-spotlight[data-tone="market"] { --spot: #efb45e; --spot-deep: #a9462f; }
+.match-spotlight[data-tone="resolved"] { --spot: #b9ef6a; --spot-deep: #456f25; }
+.match-spotlight-panel {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  width: min(760px, 94vw);
+  overflow: hidden;
+  border: 3px solid color-mix(in srgb, var(--spot) 80%, #fff);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, rgba(21, 23, 18, 0.97), rgba(48, 43, 28, 0.96)),
+    repeating-linear-gradient(90deg, transparent 0 36px, rgba(255,255,255,.03) 36px 37px);
+  box-shadow: 0 0 0 5px rgba(22, 23, 18, 0.72), 0 0 70px color-mix(in srgb, var(--spot) 45%, transparent);
+  color: #fff9e8;
+  padding: clamp(28px, 6vw, 58px) 24px;
+  text-align: center;
+  transform-origin: center;
+  animation: match-spotlight-panel .42s cubic-bezier(.18,.86,.24,1.12) both;
+}
+.match-spotlight-panel::before,
+.match-spotlight-panel::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18%;
+  opacity: .28;
+  background: repeating-linear-gradient(135deg, var(--spot) 0 7px, transparent 7px 20px);
+}
+.match-spotlight-panel::before { left: 0; clip-path: polygon(0 0, 100% 0, 24% 100%, 0 100%); }
+.match-spotlight-panel::after { right: 0; transform: scaleX(-1); clip-path: polygon(0 0, 100% 0, 24% 100%, 0 100%); }
+.match-spotlight-kicker {
+  position: relative;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: clamp(10px, 1.8vw, 14px);
+  font-weight: 800;
+  letter-spacing: .24em;
+  color: var(--spot);
+}
+.match-spotlight-glyph {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-height: 86px;
+  margin: 10px 0 2px;
+  font-family: var(--font-display);
+  font-size: clamp(62px, 12vw, 112px);
+  line-height: 1;
+  color: var(--spot);
+  filter: drop-shadow(0 0 18px color-mix(in srgb, var(--spot) 70%, transparent));
+  animation: match-spotlight-glyph .72s cubic-bezier(.18,.82,.28,1.2) both;
+}
+.match-spotlight-card {
+  position: relative;
+  z-index: 2;
+  width: clamp(52px, 9vw, 82px);
+  aspect-ratio: .7;
+  margin: 18px 0 12px;
+  border: 4px solid rgba(255,255,255,.78);
+  border-radius: 7px;
+  box-shadow: 0 0 28px currentColor, 10px 10px 0 rgba(0,0,0,.3);
+  transform: rotate(8deg);
+  animation: match-card-slam .55s cubic-bezier(.18,.82,.28,1.25) both;
+}
+.match-spotlight-card.yellow { color: #ffe34d; background: #ffe34d; }
+.match-spotlight-card.red { color: #ef3f32; background: #ef3f32; }
+.match-spotlight-title {
+  position: relative;
+  z-index: 2;
+  font-family: var(--font-display);
+  font-size: clamp(26px, 6.5vw, 62px);
+  line-height: 1.35;
+  color: #fff9e8;
+  text-shadow: 4px 4px 0 color-mix(in srgb, var(--spot-deep) 82%, #111);
+}
+.match-spotlight-detail {
+  position: relative;
+  z-index: 2;
+  max-width: 620px;
+  margin-top: 10px;
+  font-size: clamp(13px, 2.3vw, 18px);
+  font-weight: 800;
+  color: color-mix(in srgb, var(--spot) 64%, #fff);
+}
+.match-spotlight-scan {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--spot), transparent);
+  box-shadow: 0 0 18px var(--spot);
+  animation: match-spotlight-scan 1.2s ease-in-out infinite;
+}
+
+@keyframes match-spotlight-backdrop {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes match-spotlight-panel {
+  from { opacity: 0; transform: scale(.78) translateY(26px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes match-spotlight-glyph {
+  0% { opacity: 0; transform: scale(.3) rotate(-14deg); }
+  72% { opacity: 1; transform: scale(1.16) rotate(4deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+@keyframes match-card-slam {
+  from { opacity: 0; transform: translateY(-80px) scale(1.7) rotate(-18deg); }
+  to { opacity: 1; transform: translateY(0) scale(1) rotate(8deg); }
+}
+@keyframes match-spotlight-scan {
+  0% { top: 8%; opacity: 0; }
+  20%, 80% { opacity: .75; }
+  100% { top: 92%; opacity: 0; }
+}
+
+@media (max-width: 520px) {
+  .colony-race-legend { grid-template-columns: 1fr; }
+  .match-spotlight-panel { padding-inline: 16px; }
+  .match-spotlight-title { text-shadow: 3px 3px 0 color-mix(in srgb, var(--spot-deep) 82%, #111); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .match-spotlight,
+  .match-spotlight-panel,
+  .match-spotlight-glyph,
+  .match-spotlight-card,
+  .match-spotlight-scan {
+    animation: none !important;
+  }
+}

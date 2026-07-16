@@ -2579,6 +2579,8 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
         room.match_state.game_state = stored_match.get("gameState")
         room.match_state.status_id = stored_match.get("statusId")
         room.match_state.possession_label = stored_match.get("possessionLabel")
+        room.match_state.minute = _safe_int(stored_match.get("minute"))
+        room.match_state.clock_seconds = _safe_int(stored_match.get("clockSeconds"))
     stored_agent_usage = public_state.get("agentUsage") or row.get("agent_usage")
     room.agent_usage = dict(stored_agent_usage) if isinstance(stored_agent_usage, dict) else None
     for player in public_state.get("players") or []:

@@ -202,6 +202,8 @@ export interface Opportunity {
   label?: string;
   question?: string;
   kind?: string; // safe | precision | chaos | hero
+  teamLabel?: string | null;
+  minute?: number | null;
   options?: OpportunityOption[];
   deadlineLabel?: string;
   infoCost?: number;
@@ -255,7 +257,14 @@ export interface GameState {
   agentCallMode?: AgentCallMode | null;
   eventIndex?: number;
   players: Player[];
-  match?: { score?: MatchScore | null; gameState?: string | number | null; statusId?: string | number | null; possessionLabel?: string | null };
+  match?: {
+    score?: MatchScore | null;
+    gameState?: string | number | null;
+    statusId?: string | number | null;
+    possessionLabel?: string | null;
+    minute?: number | null;
+    clockSeconds?: number | null;
+  };
   colonies: Colony[];
   activeOpportunities: Opportunity[];
   agentUsage?: unknown;

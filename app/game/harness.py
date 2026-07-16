@@ -216,10 +216,14 @@ FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
-BASELINE_MARKET_CONTEXTS = ("next_corner", "next_card", "next_substitution", "next_goal_team")
+# Product-facing markets are intentionally limited to the five agreed football
+# moments: a penalty when TXLine awards one, plus these four rolling markets.
+# Legacy contexts remain readable for stored games and old tests, but they are
+# no longer opened by the live/replay cadence.
+BASELINE_MARKET_CONTEXTS = ("goal_next_10", "next_card", "next_substitution", "next_goal_team")
 CORE_LIVE_MARKET_CONTEXTS = ("goal_next_10", "next_goal_team")
-ROTATING_LIVE_MARKET_CONTEXTS = ("next_corner", "next_card", "next_substitution")
-LEGACY_MARKET_CONTEXTS = {"next_free_kick", "next_yellow_card", "next_foul"}
+ROTATING_LIVE_MARKET_CONTEXTS = ("next_substitution", "next_card")
+LEGACY_MARKET_CONTEXTS = {"next_corner", "next_free_kick", "next_yellow_card", "next_foul"}
 ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(CORE_LIVE_MARKET_CONTEXTS, LEGACY_MARKET_CONTEXTS)
 NO_DEADLINE_CONTEXTS = {"penalties", *ROLLING_WINDOW_CONTEXTS} - {"goal_next_10"}
 STANDARD_MARKET_INTERVAL_SECONDS = 5 * 60
@@ -638,6 +642,8 @@ class MatchState:
     game_state: Any = None
     status_id: Any = None
     possession_label: str | None = None
+    minute: int | None = None
+    clock_seconds: int | None = None
     # TXLine commonly emits well over one thousand records for a match. Keep the
     # complete in-memory timeline so the statistical lens is genuinely based on
     # the whole match; presentation helpers still select a short recent tail.
@@ -656,6 +662,15 @@ class MatchState:
             }
         if event.get("possessionLabel"):
             self.possession_label = event["possessionLabel"]
+        event_clock = event_clock_seconds(event)
+        if event_clock is not None:
+            self.clock_seconds = event_clock
+            self.minute = event_clock // 60
+        elif event.get("minute") is not None:
+            try:
+                self.minute = int(event["minute"])
+            except (TypeError, ValueError):
+                pass
         self.recent_events.append(event)
 
     def pressure_summary(self) -> str:
@@ -765,6 +780,8 @@ class GameRoom:
                 "gameState": self.match_state.game_state if self.match_state else None,
                 "statusId": self.match_state.status_id if self.match_state else None,
                 "possessionLabel": self.match_state.possession_label if self.match_state else None,
+                "minute": self.match_state.minute if self.match_state else None,
+                "clockSeconds": self.match_state.clock_seconds if self.match_state else None,
             },
             "colonies": colonies,
             "activeOpportunities": [opportunity.public_state() for opportunity in self.opportunities.values()],
@@ -1368,6 +1385,9 @@ class GameHarness:
 
     def process_event(self, event: dict[str, Any]) -> None:
         self.room.event_index += 1
+        match_event = match_event_presentation(event)
+        if match_event:
+            self.room.add_log("match_event", str(match_event["title"]), match_event)
         # A timed window is half-open: an event at its deadline belongs to the
         # next window, not the one that just ended. Expire those positions
         # before evaluating the incoming event so a late goal cannot win a
@@ -2087,6 +2107,29 @@ class GameHarness:
             if has_open_prediction or self.room.event_index <= opportunity.created_event_index:
                 continue
             if opportunity_predictions:
+                resolution_events = [
+                    log_event
+                    for log_event in self.room.log
+                    if log_event.kind in {"settlement", "void"}
+                    and log_event.data.get("opportunityId") == opportunity_id
+                ]
+                resolution = resolution_events[-1] if resolution_events else None
+                resolution_data = resolution.data if resolution else {}
+                reason = str(resolution_data.get("reason") or "resolved")
+                outcome = resolution_data.get("resolvedOutcome")
+                if not isinstance(outcome, dict):
+                    outcome = resolved_market_outcome(opportunity, event, reason=reason)
+                self.room.add_log(
+                    "market_closed",
+                    f"Market finished: {opportunity.label}",
+                    {
+                        "opportunityId": opportunity_id,
+                        "reason": reason,
+                        "positionCount": len(opportunity_predictions),
+                        "market": opportunity.public_state(),
+                        "resolvedOutcome": outcome,
+                    },
+                )
                 self.room.opportunities.pop(opportunity_id, None)
                 continue
             # An abstained market is still a live market. Keep it visible until
@@ -2837,6 +2880,60 @@ def event_contexts(event: dict[str, Any]) -> list[str]:
     ):
         return cadence_market_contexts(event)
     return []
+
+
+def match_event_presentation(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the small, public payload needed for a large football-event cue."""
+
+    if truthy(event.get("synthetic")):
+        return None
+    if event.get("confirmed") is not None and not truthy(event.get("confirmed")):
+        return None
+
+    targets = event_targets(event)
+    penalty_event = _event_is_penalty_award(event) or _event_has_text(event, "penalty", "spot kick")
+    visual_type: str | None = None
+    title: str | None = None
+
+    if "cancel" in targets and _event_has_text(event, "goal", "but"):
+        visual_type, title = "goal_cancelled", "GOAL OVERTURNED"
+    elif "goal" in targets:
+        visual_type = "penalty_goal" if penalty_event else "goal"
+        title = "PENALTY SCORED" if penalty_event else "GOAL"
+    elif penalty_event and targets.intersection({"miss", "saved"}):
+        visual_type, title = "penalty_missed", "PENALTY MISSED"
+    elif _event_is_penalty_award(event):
+        visual_type, title = "penalty", "PENALTY"
+    elif "red_card" in targets:
+        visual_type, title = "red_card", "RED CARD"
+    elif "yellow_card" in targets:
+        visual_type, title = "yellow_card", "YELLOW CARD"
+    elif "substitution" in targets:
+        visual_type, title = "substitution", "SUBSTITUTION"
+
+    if not visual_type or not title:
+        return None
+
+    player = event.get("player") if isinstance(event.get("player"), dict) else {}
+    player_name = player.get("name") or event.get("playerName")
+    team_label = event.get("participantLabel") or event.get("possessionLabel")
+    minute = event.get("minute")
+    detail_bits = [str(value) for value in (team_label, player_name) if value]
+    description = str(event.get("description") or "").strip()
+    detail = " · ".join(detail_bits) or description or "Match update"
+
+    return {
+        "visualType": visual_type,
+        "title": title,
+        "detail": detail,
+        "minute": minute,
+        "clockSeconds": event_clock_seconds(event),
+        "teamLabel": team_label,
+        "playerName": player_name,
+        "score": event.get("score") if isinstance(event.get("score"), dict) else None,
+        "action": event.get("action"),
+        "description": description or None,
+    }
 
 
 def cadence_market_contexts(event: dict[str, Any]) -> list[str]:

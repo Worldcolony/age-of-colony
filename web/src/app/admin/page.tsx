@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, api, type ReplayFixture, type TxLineValidationResult } from "@/lib/api";
 import { useStore } from "@/store/game";
-import { fixtureId, flag, fmtKickoffLine, fmtScore, teamName } from "@/lib/format";
+import { fixtureId, flag, fmtKickoffLine, fmtMatchTime, fmtScore, teamName } from "@/lib/format";
+import { colonySugar } from "@/lib/sugar";
 import type { CreateColonyBody, FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
 
 const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "per_ant" as const };
@@ -1020,9 +1021,10 @@ export default function AdminPage() {
                   {game.status.replace(/_/g, " ")}
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <MiniRunStat label="Score" value={fmtScore(game.match?.score)} />
-                <MiniRunStat label="Colonies" value={game.colonies.length} />
+                <MiniRunStat label="Match time" value={fmtMatchTime(game.match, game.status)} />
+                <MiniRunStat label="Leader" value={leadingColony(game)?.name ?? "—"} />
                 <MiniRunStat label="Events" value={game.eventIndex ?? 0} />
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -1052,7 +1054,8 @@ export default function AdminPage() {
                 <th className="px-3 py-1">Run</th>
                 <th className="px-3 py-1">Status</th>
                 <th className="px-3 py-1">Score</th>
-                <th className="px-3 py-1">Colonies</th>
+                <th className="px-3 py-1">Time</th>
+                <th className="px-3 py-1">Leader</th>
                 <th className="px-3 py-1">Events</th>
                 <th className="px-3 py-1 text-right">Actions</th>
               </tr>
@@ -1066,7 +1069,11 @@ export default function AdminPage() {
                   </td>
                   <td className="px-3 py-3"><span className={`status-pill ${game.status === "finished" ? "!border-lime/40 !text-lime" : ""}`}>{game.status.replace("_", " ")}</span></td>
                   <td className="px-3 py-3 font-mono text-sm">{fmtScore(game.match?.score)}</td>
-                  <td className="px-3 py-3 text-sm">{game.colonies.length}</td>
+                  <td className="px-3 py-3 font-mono text-sm font-bold text-gold-deep">{fmtMatchTime(game.match, game.status)}</td>
+                  <td className="px-3 py-3 text-sm">
+                    <strong className="block max-w-40 truncate">{leadingColony(game)?.name ?? "—"}</strong>
+                    <span className="font-mono text-[10px] text-green">{leadingColony(game) ? `${colonySugar(leadingColony(game)!)} Sugar` : ""}</span>
+                  </td>
                   <td className="px-3 py-3 text-sm">{game.eventIndex ?? 0}</td>
                   <td className="rounded-r-md px-3 py-3">
                     <div className="flex justify-end gap-2">
@@ -1218,16 +1225,29 @@ function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: Game
       </div>
       <div className="grid gap-px bg-[color:var(--brd-soft)] lg:grid-cols-2">
         {games.slice(0, 4).map((game) => (
-          <article key={game.gameId} className="grid gap-2 bg-[rgba(249,243,226,0.88)] px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+          <article key={game.gameId} className="grid gap-3 bg-[rgba(249,243,226,0.88)] px-4 py-3">
             <div className="min-w-0">
-              <strong className="block truncate text-sm text-ink">{matchTitle(game)}</strong>
-              <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
-                {game.status.replace(/_/g, " ")} · {game.eventIndex ?? 0} events processed
-              </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm text-ink">{matchTitle(game)}</strong>
+                  <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-ink-faint">
+                    {game.status.replace(/_/g, " ")} · {game.eventIndex ?? 0} events processed
+                  </p>
+                </div>
+                <span className="status-pill !border-rust/50 !text-rust"><span className="live-dot" /> {fmtMatchTime(game.match, game.status)}</span>
+              </div>
             </div>
-            <button type="button" className="btn btn-ghost !min-h-10 !w-auto px-3 py-2 text-xs" onClick={() => onOpen(game)}>
-              Open cockpit →
-            </button>
+            <div className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] p-3">
+              <div>
+                <p className="font-mono text-2xl font-bold text-gold">{fmtScore(game.match?.score)}</p>
+                <p className="mt-1 truncate text-xs font-bold text-ink-soft">
+                  {leadingColony(game) ? `👑 ${leadingColony(game)!.name} leads with ${colonySugar(leadingColony(game)!)} Sugar` : "Waiting for colony standings"}
+                </p>
+              </div>
+              <button type="button" className="btn btn-ghost !min-h-10 !w-auto px-3 py-2 text-xs" onClick={() => onOpen(game)}>
+                Open cockpit →
+              </button>
+            </div>
           </article>
         ))}
       </div>
@@ -1577,6 +1597,10 @@ function adminColonySummary(colony: AdminColonyDraft): string {
       ? "acts with lighter evidence"
       : "uses a medium evidence threshold";
   return `${colony.size} ants · ${temper} · prioritizes ${colony.favoriteContext} · ${evidence}.`;
+}
+
+function leadingColony(game: GameState): GameState["colonies"][number] | undefined {
+  return [...game.colonies].sort((a, b) => colonySugar(b) - colonySugar(a))[0];
 }
 
 function matchTitle(game: GameState): string {

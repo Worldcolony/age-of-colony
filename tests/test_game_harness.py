@@ -440,11 +440,11 @@ class GameHarnessTest(unittest.TestCase):
     def test_concrete_market_rotates_every_five_match_minutes(self):
         room, _ = self.make_room()
         expected = {
-            1: "next_corner",
+            1: "goal_next_10",
             6: "next_card",
             11: "next_substitution",
             16: "next_goal_team",
-            21: "next_corner",
+            21: "goal_next_10",
         }
         for minute, secondary in expected.items():
             with self.subTest(minute=minute):
@@ -1491,7 +1491,6 @@ class GameHarnessTest(unittest.TestCase):
     def test_next_event_markets_have_no_deadline(self):
         room, _ = self.make_room()
         for minute, context in (
-            (1, "next_corner"),
             (6, "next_card"),
             (11, "next_substitution"),
             (16, "next_goal_team"),
@@ -1649,7 +1648,7 @@ class GameHarnessTest(unittest.TestCase):
         }
         card_event = {**corner_event, "seq": 2, "minute": 6, "clockSeconds": 360}
         selected = {
-            "next_corner": build_opportunities(corner_event, 1, room.match_state)[0],
+            "next_corner": build_opportunity_for_context(corner_event, 1, "next_corner", room.match_state),
             "next_card": build_opportunities(card_event, 2, room.match_state)[0],
         }
         room.event_index = 1
@@ -2084,27 +2083,31 @@ class GameHarnessTest(unittest.TestCase):
         harness = manager.harness(room.game_id)
         colony = harness.add_colony("Corner Nest", 20, "balanced", "corners", "medium")
 
-        harness.process_event(
-            {
-                "fixtureId": 42,
-                "seq": 1,
-                "action": "high_danger_possession",
-                "highlights": [],
-                "minute": 20,
-                "clockSeconds": 1200,
-                "participant": 1,
-                "participantLabel": "France",
-                "possession": 1,
-                "possessionLabel": "France",
-                "description": "High danger possession - France",
-            }
+        source_event = {
+            "fixtureId": 42,
+            "seq": 1,
+            "action": "high_danger_possession",
+            "highlights": [],
+            "minute": 20,
+            "clockSeconds": 1200,
+            "participant": 1,
+            "participantLabel": "France",
+            "possession": 1,
+            "possessionLabel": "France",
+            "description": "High danger possession - France",
+        }
+        opportunity = build_opportunity_for_context(source_event, 1, "next_corner", room.match_state)
+        room.event_index = 1
+        room.opportunities[opportunity.opportunity_id] = opportunity
+        prediction = create_prediction(
+            colony,
+            opportunity,
+            vote_for_option(colony, opportunity, option_index=0, support_count=12),
+            1,
+            bought_info=False,
         )
-        corner_predictions = [
-            prediction
-            for prediction in room.predictions.values()
-            if prediction.option.option_id == "next_corner_p1"
-        ]
-        self.assertTrue(corner_predictions)
+        room.predictions[prediction.prediction_id] = prediction
+        corner_predictions = [prediction]
 
         harness.process_event(
             {
@@ -2168,6 +2171,39 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(card_predictions[0].resolved)
         self.assertGreaterEqual(colony.memory.wins, 1)
         self.assertTrue(any(event.kind == "settlement" and event.data.get("resolvedOutcome", {}).get("target") == "card" for event in room.log))
+        closed = [
+            event
+            for event in room.log
+            if event.kind == "market_closed"
+            and event.data.get("opportunityId") == card_predictions[0].opportunity_id
+        ]
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0].data.get("reason"), "resolved")
+
+    def test_important_match_event_is_published_with_clock_and_score(self):
+        room, harness = self.make_room()
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 9,
+                "action": "goal",
+                "highlights": ["goal"],
+                "minute": 67,
+                "clockSeconds": 4052,
+                "participant": 2,
+                "participantLabel": "Belgium",
+                "confirmed": True,
+                "score": {"participant1": 1, "participant2": 2},
+                "description": "Goal - Belgium",
+            }
+        )
+
+        match_event = next(event for event in room.log if event.kind == "match_event")
+        self.assertEqual(match_event.data["visualType"], "goal")
+        self.assertEqual(match_event.data["teamLabel"], "Belgium")
+        self.assertEqual(match_event.data["score"], {"participant1": 1, "participant2": 2})
+        self.assertEqual(room.public_state()["match"]["minute"], 67)
+        self.assertEqual(room.public_state()["match"]["clockSeconds"], 4052)
 
     def test_next_substitution_market_waits_until_full_time_without_substitution(self):
         def vote_only_on_substitution(_ant, context):

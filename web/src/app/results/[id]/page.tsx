@@ -6,7 +6,8 @@ import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { colonySugar } from "@/lib/sugar";
 import { legacyAnonymousIdForHost, usePlayerIdentity } from "@/lib/playerIdentity";
-import type { GameState } from "@/lib/types";
+import { ColonyRaceChart } from "@/components/ColonyRaceChart";
+import type { GameEvent, GameState } from "@/lib/types";
 
 export default function ResultsPage() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +28,7 @@ function ResultsRun({ id }: { id: string }) {
   const [game, setLocal] = useState<GameState | null>(
     storedGame?.gameId === id ? storedGame : null,
   );
+  const [events, setEvents] = useState<GameEvent[]>([]);
   const receiveGame = useCallback((next: GameState) => {
     setLocal(next);
     setStoredGame(next);
@@ -34,16 +36,25 @@ function ResultsRun({ id }: { id: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    api.getGame(id).then((next) => {
-      if (!cancelled) receiveGame(next);
-    }).catch(() => {});
+    api.getReplay(id).then((replay) => {
+      if (cancelled) return;
+      receiveGame(replay.game);
+      setEvents(replay.events ?? []);
+    }).catch(() => {
+      api.getGame(id).then((next) => {
+        if (!cancelled) receiveGame(next);
+      }).catch(() => {});
+    });
     return () => {
       cancelled = true;
     };
   }, [id, receiveGame]);
 
   const running = game ? ["running_replay", "running_live"].includes(game.status) : false;
-  useGameStream(id, { onState: receiveGame }, running);
+  useGameStream(id, {
+    onState: receiveGame,
+    onEvent: (event) => setEvents((current) => current.some((item) => item.index === event.index) ? current : [...current, event]),
+  }, running);
 
   const cols = useMemo(() => [...(game?.colonies ?? [])].sort((a, b) => colonySugar(b) - colonySugar(a)), [game]);
   const finished = game?.status === "finished";
@@ -123,6 +134,8 @@ function ResultsRun({ id }: { id: string }) {
       )}
 
       <div className="glass p-4">
+        <ColonyRaceChart colonies={cols} events={events} />
+
         <div className="mb-3 flex items-end justify-center gap-2.5">
           {podium.map((pos) => {
             const c = cols[pos];

@@ -10,7 +10,9 @@ class SugarPlaytestToolTest(unittest.TestCase):
 
         self.assertAlmostEqual(rows["penalties"]["breakEvenSum"], 1.0)
         self.assertEqual(rows["penalties"]["status"], "coherent")
-        for context in ("next_goal_team", "next_corner", "next_card", "next_substitution"):
+        self.assertLess(rows["goal_next_10"]["breakEvenSum"], 1.0)
+        self.assertEqual(rows["goal_next_10"]["status"], "generous")
+        for context in ("next_goal_team", "next_card", "next_substitution"):
             self.assertAlmostEqual(rows[context]["breakEvenSum"], 1.0)
             self.assertEqual(rows[context]["status"], "coherent")
 
@@ -27,7 +29,7 @@ class SugarPlaytestToolTest(unittest.TestCase):
             self.assertGreaterEqual(row["meanFinalSugar"], 0)
             self.assertGreaterEqual(row["entryRate"], 0)
             self.assertLessEqual(row["entryRate"], 1)
-            self.assertIn("next_corner", result["styleContexts"][style])
+            self.assertIn("goal_next_10", result["styleContexts"][style])
             self.assertTrue(result["styleOptions"][style])
         for row in result["options"].values():
             self.assertGreaterEqual(row["offers"], row.get("entries", 0))

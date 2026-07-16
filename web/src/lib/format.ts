@@ -1,4 +1,4 @@
-import type { Fixture, GameEvent, MatchScore } from "./types";
+import type { Fixture, GameEvent, GameState, MatchScore } from "./types";
 
 export function teamName(v?: string | null, fallback = "TBD"): string {
   return (v && v.trim()) || fallback;
@@ -32,12 +32,13 @@ const KIND_ICON: Record<string, string> = {
   settlement: "💰", observe: "👁️", starvation: "☠️", hatch: "🥚", void: "🚫",
   markets_closed: "🔒", game_finished: "🏁", game_error: "⚠️", rally: "📣",
   recall: "🛡️", switch: "🔀",
+  match_event: "⚽", market_closed: "✓",
 };
 export function kindIcon(kind: string): string {
   return KIND_ICON[kind] || "•";
 }
 
-const MATCH_KINDS = new Set(["game_created", "game_started", "opportunity", "markets_closed", "game_finished"]);
+const MATCH_KINDS = new Set(["game_created", "game_started", "match_event", "opportunity", "market_closed", "markets_closed", "game_finished"]);
 export function isMatchEvent(e: GameEvent): boolean {
   return MATCH_KINDS.has(e.kind);
 }
@@ -45,6 +46,27 @@ export function isMatchEvent(e: GameEvent): boolean {
 export function fmtScore(score?: MatchScore | null): string {
   if (!score) return "0 – 0";
   return `${score.participant1 ?? 0} – ${score.participant2 ?? 0}`;
+}
+
+export function fmtMatchTime(match?: GameState["match"] | null, status?: string | null): string {
+  if (status === "finished") return "FT";
+  const rawClock = match?.clockSeconds;
+  if (rawClock != null) {
+    const clock = Number(rawClock);
+    if (Number.isFinite(clock) && clock >= 0) {
+      const minutes = Math.floor(clock / 60);
+      const seconds = Math.floor(clock % 60);
+      return `${minutes}:${String(seconds).padStart(2, "0")}`;
+    }
+  }
+  const rawMinute = match?.minute;
+  if (rawMinute != null) {
+    const minute = Number(rawMinute);
+    if (Number.isFinite(minute) && minute >= 0) return `${Math.floor(minute)}'`;
+  }
+  const state = String(match?.gameState ?? "").toLowerCase();
+  if (state.includes("play") || state.includes("live")) return "LIVE";
+  return "—";
 }
 
 export function fmtWhen(t?: number): string {
