@@ -269,6 +269,67 @@ body {
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-rust); animation: pulse 1.1s infinite; }
 
+/* The server clock is event-driven; this isolated HUD clock interpolates
+   between authoritative snapshots and keeps every numeral perfectly aligned. */
+.smooth-match-clock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+  color: var(--color-gold-deep);
+}
+.smooth-match-clock-value {
+  display: inline-block;
+  min-width: 5ch;
+  text-align: center;
+}
+.match-clock-panel {
+  display: grid;
+  justify-items: center;
+  width: fit-content;
+  min-width: 152px;
+  margin: 7px auto 0;
+  border: 2px solid rgba(135, 96, 18, .38);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 252, 238, .96), rgba(228, 218, 193, .92)),
+    repeating-linear-gradient(90deg, transparent 0 18px, rgba(74, 58, 30, .04) 18px 19px);
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, .5), 2px 2px 0 rgba(74, 58, 30, .14);
+  padding: 6px 14px 5px;
+}
+.match-clock-panel .smooth-match-clock {
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1;
+  color: var(--color-gold-deep);
+  text-shadow: 2px 2px 0 rgba(176, 126, 28, .16);
+}
+.match-clock-panel > p {
+  max-width: 180px;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--color-ink-faint);
+}
+.admin-history-clock {
+  font-size: 17px;
+  line-height: 1;
+}
+.admin-live-clock {
+  margin-top: 2px;
+  font-size: clamp(25px, 3.5vw, 34px);
+  line-height: 1;
+  color: var(--color-rust);
+  text-shadow: 2px 2px 0 rgba(169, 70, 47, .12);
+}
+
 /* live orders leave a short pheromone trace across the command parchment */
 .colony-command-panel::after {
   content: "";
@@ -625,6 +686,42 @@ body {
 }
 .g-chip .t { font-weight: 800; font-size: 13px; line-height: 1.15; color: var(--color-ink); }
 .g-chip .s { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-ink-faint); }
+.g-chip .mobile-match-chip {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.mobile-match-chip-teams {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--color-ink-soft);
+}
+.mobile-match-chip-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+.mobile-match-chip-row .smooth-match-clock {
+  flex: none;
+  gap: 5px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--color-gold-deep);
+  text-shadow: 1px 1px 0 rgba(176, 126, 28, .16);
+}
+.mobile-match-chip-row .live-dot {
+  width: 6px;
+  height: 6px;
+}
+.mobile-match-chip-state {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+}
 
 /* --- wallet seal: persistent player identity, above the resource stack --- */
 .wallet-hud {

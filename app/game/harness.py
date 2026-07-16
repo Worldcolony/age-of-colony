@@ -222,12 +222,12 @@ GOAL_NEXT_10_SECONDS = 10 * 60
 # no longer opened by the live/replay cadence.
 BASELINE_MARKET_CONTEXTS = ("goal_next_10", "next_card", "next_substitution", "next_goal_team")
 CORE_LIVE_MARKET_CONTEXTS = ("goal_next_10", "next_goal_team")
-ROTATING_LIVE_MARKET_CONTEXTS = ("next_substitution", "next_card")
+EVENT_LIVE_MARKET_CONTEXTS = ("next_substitution", "next_card")
 LEGACY_MARKET_CONTEXTS = {"next_corner", "next_free_kick", "next_yellow_card", "next_foul"}
 ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(CORE_LIVE_MARKET_CONTEXTS, LEGACY_MARKET_CONTEXTS)
 NO_DEADLINE_CONTEXTS = {"penalties", *ROLLING_WINDOW_CONTEXTS} - {"goal_next_10"}
 STANDARD_MARKET_INTERVAL_SECONDS = 5 * 60
-MAX_OPEN_STANDARD_MARKETS = 3
+MAX_OPEN_STANDARD_MARKETS = len(BASELINE_MARKET_CONTEXTS)
 MARKET_COOLDOWN_SECONDS = {
     "penalties": 5 * 60,
     "goal_next_10": 10 * 60,
@@ -720,6 +720,7 @@ class GameRoom:
     seed: int = 7
     status: str = "created"
     mode: str | None = None
+    replay_time_scale: float | None = None
     agent_call_mode: str | None = None
     event_index: int = 0
     players: list[PlayerState] = field(default_factory=list)
@@ -772,6 +773,7 @@ class GameRoom:
             else None,
             "status": self.status,
             "mode": self.mode,
+            "replayTimeScale": self.replay_time_scale,
             "agentCallMode": self.agent_call_mode,
             "eventIndex": self.event_index,
             "players": [self._public_player_state(player, player_colonies) for player in self.players],
@@ -795,6 +797,7 @@ class GameRoom:
             snapshot = copy.deepcopy(restored_snapshot)
             snapshot["status"] = self.status
             snapshot["mode"] = self.mode
+            snapshot["replayTimeScale"] = self.replay_time_scale
             snapshot["agentCallMode"] = self.agent_call_mode
             snapshot["roomKind"] = self.room_kind
             if self.room_kind == "player":
@@ -1819,28 +1822,28 @@ class GameHarness:
             and truthy(opportunity.source_event.get("synthetic"))
             and opportunity.source_event.get("reason") == "live_baseline"
         )
-        prioritized_core_market = (
+        prioritized_live_market = (
             synthetic_player_live_market
-            and opportunity.context in CORE_LIVE_MARKET_CONTEXTS
+            and opportunity.context in BASELINE_MARKET_CONTEXTS
         )
         if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_market_slot(key):
             return False
         if (
             opportunity.context != "penalties"
             and len(self._open_standard_market_contexts()) >= MAX_OPEN_STANDARD_MARKETS
-            and not prioritized_core_market
+            and not prioritized_live_market
         ):
             return False
 
         # A player-facing live room should not sit empty after a market resolves.
         # The polling loop may immediately request synthetic replacements for
-        # the two core goal markets before the regular five-minute cadence. A
-        # single synthetic wave may also fill the rotating third slot; normal
-        # event-driven markets and later waves still obey the cooldown below.
+        # any of the four agreed live markets before the regular five-minute
+        # cadence. Normal event-driven markets and later waves still obey the
+        # cooldown below.
         replace_empty_live_slot = synthetic_player_live_market and not self._open_standard_market_contexts()
-        replace_missing_core_market = (
+        replace_missing_live_market = (
             synthetic_player_live_market
-            and opportunity.context in CORE_LIVE_MARKET_CONTEXTS
+            and opportunity.context in BASELINE_MARKET_CONTEXTS
         )
 
         # TXLine can emit an award, a VAR confirmation and a result record for
@@ -1860,7 +1863,7 @@ class GameHarness:
                 last_clock is not None
                 and clock - last_clock < cooldown
                 and not replace_empty_live_slot
-                and not replace_missing_core_market
+                and not replace_missing_live_market
                 and not same_market_wave
             ):
                 return False
@@ -2945,13 +2948,11 @@ def cadence_market_contexts(event: dict[str, Any]) -> list[str]:
 
 
 def live_baseline_market_contexts(event: dict[str, Any]) -> list[str]:
-    """Keep two goal markets open plus one rotating event market."""
+    """Keep all four agreed rolling football markets available."""
 
-    clock = event_clock_seconds(event) or 0
-    rotating_index = (clock // STANDARD_MARKET_INTERVAL_SECONDS) % len(ROTATING_LIVE_MARKET_CONTEXTS)
     return [
         *CORE_LIVE_MARKET_CONTEXTS,
-        ROTATING_LIVE_MARKET_CONTEXTS[rotating_index],
+        *EVENT_LIVE_MARKET_CONTEXTS,
     ]
 
 

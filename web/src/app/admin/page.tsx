@@ -3,8 +3,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, api, type ReplayFixture, type TxLineValidationResult } from "@/lib/api";
 import { useStore } from "@/store/game";
-import { fixtureId, flag, fmtKickoffLine, fmtMatchTime, fmtScore, teamName } from "@/lib/format";
+import { fixtureId, flag, fmtKickoffLine, fmtScore, teamName } from "@/lib/format";
 import { colonySugar } from "@/lib/sugar";
+import { SmoothMatchClock } from "@/components/SmoothMatchClock";
 import type { CreateColonyBody, FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
 
 const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "per_ant" as const };
@@ -1023,7 +1024,10 @@ export default function AdminPage() {
               </div>
               <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
                 <MiniRunStat label="Score" value={fmtScore(game.match?.score)} />
-                <MiniRunStat label="Match time" value={fmtMatchTime(game.match, game.status)} />
+                <MiniRunStat
+                  label="Match time"
+                  value={<SmoothMatchClock match={game.match} status={game.status} mode={game.mode} replayTimeScale={game.replayTimeScale} className="admin-history-clock" />}
+                />
                 <MiniRunStat label="Leader" value={leadingColony(game)?.name ?? "—"} />
                 <MiniRunStat label="Events" value={game.eventIndex ?? 0} />
               </div>
@@ -1069,7 +1073,15 @@ export default function AdminPage() {
                   </td>
                   <td className="px-3 py-3"><span className={`status-pill ${game.status === "finished" ? "!border-lime/40 !text-lime" : ""}`}>{game.status.replace("_", " ")}</span></td>
                   <td className="px-3 py-3 font-mono text-sm">{fmtScore(game.match?.score)}</td>
-                  <td className="px-3 py-3 font-mono text-sm font-bold text-gold-deep">{fmtMatchTime(game.match, game.status)}</td>
+                  <td className="px-3 py-3">
+                    <SmoothMatchClock
+                      match={game.match}
+                      status={game.status}
+                      mode={game.mode}
+                      replayTimeScale={game.replayTimeScale}
+                      className="admin-history-clock"
+                    />
+                  </td>
                   <td className="px-3 py-3 text-sm">
                     <strong className="block max-w-40 truncate">{leadingColony(game)?.name ?? "—"}</strong>
                     <span className="font-mono text-[10px] text-green">{leadingColony(game) ? `${colonySugar(leadingColony(game)!)} Sugar` : ""}</span>
@@ -1234,13 +1246,26 @@ function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: Game
                     {game.status.replace(/_/g, " ")} · {game.eventIndex ?? 0} events processed
                   </p>
                 </div>
-                <span className="status-pill !border-rust/50 !text-rust"><span className="live-dot" /> {fmtMatchTime(game.match, game.status)}</span>
+                <span className="status-pill !border-rust/50 !text-rust"><span className="live-dot" /> Live</span>
               </div>
             </div>
-            <div className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] p-3">
-              <div>
-                <p className="font-mono text-2xl font-bold text-gold">{fmtScore(game.match?.score)}</p>
-                <p className="mt-1 truncate text-xs font-bold text-ink-soft">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] p-3">
+              <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
+                <div>
+                  <p className="font-mono text-[9px] uppercase tracking-wider text-ink-faint">Score</p>
+                  <p className="font-mono text-2xl font-bold text-gold">{fmtScore(game.match?.score)}</p>
+                </div>
+                <div className="min-w-0 border-l-2 border-[color:var(--brd-soft)] pl-4">
+                  <p className="font-mono text-[9px] uppercase tracking-wider text-ink-faint">Match clock</p>
+                  <SmoothMatchClock
+                    match={game.match}
+                    status={game.status}
+                    mode={game.mode}
+                    replayTimeScale={game.replayTimeScale}
+                    className="admin-live-clock"
+                  />
+                </div>
+                <p className="col-span-2 mt-1 truncate text-xs font-bold text-ink-soft">
                   {leadingColony(game) ? `👑 ${leadingColony(game)!.name} leads with ${colonySugar(leadingColony(game)!)} Sugar` : "Waiting for colony standings"}
                 </p>
               </div>

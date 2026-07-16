@@ -1748,9 +1748,9 @@ class GameHarnessTest(unittest.TestCase):
         room.event_index = 1000
         self.assertTrue(harness._claim_opportunity_slot(at_boundary))
 
-    def test_at_most_three_standard_markets_stay_open_at_once(self):
+    def test_four_standard_markets_and_a_penalty_can_stay_open_at_once(self):
         room, harness = self.make_room()
-        colony = harness.add_colony("Three Market Nest", 20, "balanced", "momentum", "medium")
+        colony = harness.add_colony("Five Market Nest", 20, "balanced", "momentum", "medium")
         opportunities = []
         for event_index, minute in enumerate((1, 6, 11, 16), start=1):
             opportunity = build_opportunities(
@@ -1769,7 +1769,7 @@ class GameHarnessTest(unittest.TestCase):
             )[0]
             opportunities.append(opportunity)
 
-        for event_index, opportunity in enumerate(opportunities[:3], start=1):
+        for event_index, opportunity in enumerate(opportunities, start=1):
             room.event_index = event_index
             self.assertTrue(harness._claim_opportunity_slot(opportunity))
             prediction = create_prediction(
@@ -1782,9 +1782,36 @@ class GameHarnessTest(unittest.TestCase):
             room.opportunities[opportunity.opportunity_id] = opportunity
             room.predictions[prediction.prediction_id] = prediction
 
-        room.event_index = 4
-        self.assertFalse(harness._claim_opportunity_slot(opportunities[3]))
-        self.assertEqual(len(harness._open_standard_market_contexts()), 3)
+        self.assertEqual(len(harness._open_standard_market_contexts()), 4)
+
+        penalty = build_opportunity_for_context(
+            penalty_event(seq=5, minute=17, clockSeconds=1020),
+            5,
+            "penalties",
+            room.match_state,
+        )
+        room.event_index = 5
+        self.assertTrue(harness._claim_opportunity_slot(penalty))
+        room.opportunities[penalty.opportunity_id] = penalty
+        self.assertEqual(len(room.opportunities), 5)
+
+        extra_standard = build_opportunity_for_context(
+            {
+                "fixtureId": 42,
+                "seq": 6,
+                "action": "high_danger_possession",
+                "minute": 21,
+                "clockSeconds": 1260,
+                "participant": 1,
+                "participantLabel": "France",
+                "description": "High danger possession - France",
+            },
+            6,
+            "next_corner",
+            room.match_state,
+        )
+        room.event_index = 6
+        self.assertFalse(harness._claim_opportunity_slot(extra_standard))
 
         first_prediction = next(
             prediction
@@ -1793,7 +1820,7 @@ class GameHarnessTest(unittest.TestCase):
         )
         harness._void_prediction(first_prediction, opportunities[0], reason="test")
         harness._clear_old_opportunities()
-        self.assertTrue(harness._claim_opportunity_slot(opportunities[3]))
+        self.assertTrue(harness._claim_opportunity_slot(extra_standard))
 
     def test_precision_market_resolves_on_next_goal_team(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
@@ -4334,12 +4361,12 @@ class DemoRunApiTest(unittest.TestCase):
         )
         opened = _open_live_baseline_markets(harness, catchup_events)
 
-        self.assertEqual(opened, 3)
+        self.assertEqual(opened, 4)
         self.assertEqual(
             {opportunity.context for opportunity in room.opportunities.values()},
-            {"goal_next_10", "next_goal_team", "next_card"},
+            {"goal_next_10", "next_goal_team", "next_card", "next_substitution"},
         )
-        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 3)
+        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 4)
         self.assertTrue(any(event.kind == "live_sync" and event.data.get("source") == "baseline" for event in room.log))
 
     def test_live_baseline_replaces_an_empty_board_then_resumes_five_minute_waves(self):
@@ -4361,7 +4388,7 @@ class DemoRunApiTest(unittest.TestCase):
                 "description": "Clock tick",
             }
         ]
-        self.assertEqual(_open_live_baseline_markets(harness, first_wave), 3)
+        self.assertEqual(_open_live_baseline_markets(harness, first_wave), 4)
         for prediction in list(room.predictions.values()):
             harness._void_prediction(
                 prediction,
@@ -4377,12 +4404,12 @@ class DemoRunApiTest(unittest.TestCase):
                 harness,
                 [{**first_wave[0], "seq": 2, "minute": 9, "clockSeconds": 599}],
             ),
-            3,
+            4,
         )
         self.assertEqual(room.event_index, event_index_before_replacement + 1)
         self.assertEqual(
             {opportunity.context for opportunity in room.opportunities.values()},
-            {"goal_next_10", "next_goal_team", "next_card"},
+            {"goal_next_10", "next_goal_team", "next_card", "next_substitution"},
         )
 
         self.assertEqual(
@@ -4408,7 +4435,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertTrue(any(not prediction.resolved for prediction in room.predictions.values()))
         self.assertEqual(
             {opportunity.context for opportunity in room.opportunities.values()},
-            {"goal_next_10", "next_goal_team", "next_substitution"},
+            {"goal_next_10", "next_goal_team", "next_card", "next_substitution"},
         )
 
     def test_live_baseline_replaces_core_goal_markets_before_the_next_wave(self):
@@ -4429,7 +4456,7 @@ class DemoRunApiTest(unittest.TestCase):
             "description": "Clock tick",
         }
 
-        self.assertEqual(_open_live_baseline_markets(harness, [source]), 3)
+        self.assertEqual(_open_live_baseline_markets(harness, [source]), 4)
         for prediction in list(room.predictions.values()):
             opportunity = room.opportunities.get(prediction.opportunity_id)
             if opportunity and opportunity.context in {"goal_next_10", "next_goal_team"}:
@@ -4447,9 +4474,9 @@ class DemoRunApiTest(unittest.TestCase):
 
         self.assertEqual(
             {opportunity.context for opportunity in room.opportunities.values()},
-            {"goal_next_10", "next_goal_team", "next_card"},
+            {"goal_next_10", "next_goal_team", "next_card", "next_substitution"},
         )
-        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 3)
+        self.assertEqual(len([prediction for prediction in room.predictions.values() if not prediction.resolved]), 4)
 
     def test_live_baseline_prioritizes_a_missing_core_market_during_deployment_transition(self):
         def first_available_vote(_ant, context):
@@ -5611,6 +5638,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(game["fixtureId"], 778)
         self.assertEqual(game["status"], "running_replay")
         self.assertEqual(game["agentCallMode"], "batch")
+        self.assertEqual(game["replayTimeScale"], 120)
         self.assertEqual(game["eventIndex"], 0)
         self.assertEqual(len(game["colonies"]), 1)
         self.assertEqual(game["colonies"][0]["name"], "Admin Scout")

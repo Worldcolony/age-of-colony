@@ -48,15 +48,20 @@ export function fmtScore(score?: MatchScore | null): string {
   return `${score.participant1 ?? 0} – ${score.participant2 ?? 0}`;
 }
 
+export function fmtClockSeconds(value: number): string {
+  const clock = Math.max(0, Math.floor(value));
+  const minutes = Math.floor(clock / 60);
+  const seconds = clock % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 export function fmtMatchTime(match?: GameState["match"] | null, status?: string | null): string {
   if (status === "finished") return "FT";
   const rawClock = match?.clockSeconds;
   if (rawClock != null) {
     const clock = Number(rawClock);
     if (Number.isFinite(clock) && clock >= 0) {
-      const minutes = Math.floor(clock / 60);
-      const seconds = Math.floor(clock % 60);
-      return `${minutes}:${String(seconds).padStart(2, "0")}`;
+      return fmtClockSeconds(clock);
     }
   }
   const rawMinute = match?.minute;

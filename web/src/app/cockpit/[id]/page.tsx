@@ -5,14 +5,15 @@ import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { findIdentityColony, usePlayerIdentity } from "@/lib/playerIdentity";
-import { flag, teamName, fmtMatchTime, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
+import { flag, teamName, fmtScore, kindIcon, isMatchEvent } from "@/lib/format";
 import type { GameEvent, Colony, GameState, Opportunity } from "@/lib/types";
 import { worldLink } from "@/three/worldLink";
-import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
+import { GameShell, GameToasts, useGameToasts } from "@/components/GameShell";
 import { AdminColonySwitcher } from "@/components/AdminColonySwitcher";
 import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
 import { ColonyRaceChart } from "@/components/ColonyRaceChart";
+import { SmoothMatchClock } from "@/components/SmoothMatchClock";
 import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
 import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
 
@@ -515,11 +516,24 @@ function CockpitRun({ id }: { id: string }) {
     <div className="xl:hidden">
       <GameShell
         chip={
-          <GameChip
-            emblem={flag(p1)}
-            title={`${p1} ${fmtScore(game?.match?.score)} ${p2}`}
-            sub={streamState === "reconnecting" ? "reconnecting..." : status.replace(/_/g, " ") || "live"}
-          />
+          <>
+            <span className="emblem">{flag(p1)}</span>
+            <span className="mobile-match-chip min-w-0">
+              <span className="mobile-match-chip-teams block truncate">{p1} {fmtScore(game?.match?.score)} {p2}</span>
+              <span className="mobile-match-chip-row">
+                <SmoothMatchClock
+                  match={game?.match}
+                  status={status}
+                  mode={game?.mode}
+                  replayTimeScale={game?.replayTimeScale}
+                  showLiveDot
+                />
+                <span className="mobile-match-chip-state truncate">
+                  {streamState === "reconnecting" ? "reconnecting" : game?.match?.possessionLabel || txlineStateLabel}
+                </span>
+              </span>
+            </span>
+          </>
         }
         resources={[
           { icon: "🏆", value: rank ? `#${rank}` : "—", title: "Rank" },
@@ -681,7 +695,16 @@ function CockpitRun({ id }: { id: string }) {
               <div className="min-w-0 flex-1 text-center">
                 <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
                 <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
-                <p className="truncate font-mono text-xs text-cyan">{fmtMatchTime(game?.match, status)} · {game?.match?.possessionLabel || txlineStateLabel}</p>
+                <div className="match-clock-panel">
+                  <SmoothMatchClock
+                    match={game?.match}
+                    status={status}
+                    mode={game?.mode}
+                    replayTimeScale={game?.replayTimeScale}
+                    showLiveDot
+                  />
+                  <p className="truncate">{game?.match?.possessionLabel || txlineStateLabel}</p>
+                </div>
               </div>
               <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p2)}</span>
             </div>

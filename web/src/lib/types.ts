@@ -254,6 +254,7 @@ export interface GameState {
   owner?: { anonymousId?: string | null; wallet?: string | null; name?: string | null } | null;
   status: GameStatus;
   mode?: string | null;
+  replayTimeScale?: number | null;
   agentCallMode?: AgentCallMode | null;
   eventIndex?: number;
   players: Player[];

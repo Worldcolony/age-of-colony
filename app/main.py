@@ -20,7 +20,7 @@ from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
-    CORE_LIVE_MARKET_CONTEXTS,
+    BASELINE_MARKET_CONTEXTS,
     MARKET_RISK_SUGAR,
     PRIVATE_SNAPSHOT_KEY,
     STANDARD_MARKET_INTERVAL_SECONDS,
@@ -1657,6 +1657,7 @@ async def run_previous_tx_game(payload: RunPreviousTxRequest, request: Request) 
         harness = game_manager.harness(room.game_id)
         _add_run_previous_colonies(harness, payload.colonies)
         room.mode = "replay"
+        room.replay_time_scale = payload.replayTimeScale
         room.agent_call_mode = payload.agentCallMode
         timeline = build_timeline(
             records,
@@ -2567,6 +2568,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
     )
     room.status = public_state.get("status") or row.get("status") or "created"
     room.mode = public_state.get("mode") or row.get("mode")
+    room.replay_time_scale = _safe_float(public_state.get("replayTimeScale"))
     if room.status in {"finished", "stopped", "error"}:
         setattr(room, "_aoc_restored_terminal", True)
         setattr(room, "_aoc_restored_public_state", json.loads(json.dumps(public_state)))
@@ -3122,6 +3124,7 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
             raise HTTPException(status_code=422, detail="No demo replay is available for this fixture.")
         _clear_restored_terminal_snapshot(room)
         room.mode = "replay"
+        room.replay_time_scale = payload.replayTimeScale
         room.agent_call_mode = payload.agentCallMode
         room.add_log(
             "game_started",
@@ -3165,6 +3168,7 @@ async def _start_replay_room(room, payload: StartGameRequest) -> dict[str, Any]:
         )
     _clear_restored_terminal_snapshot(room)
     room.mode = "replay"
+    room.replay_time_scale = payload.replayTimeScale
     room.agent_call_mode = payload.agentCallMode
     room.add_log(
         "game_started",
@@ -3604,6 +3608,14 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, Any]] | None = None) -> int:
     room = harness.room
     latest_event = _latest_fixture_event(room, timeline_events or [])
@@ -3626,18 +3638,15 @@ def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, An
 def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | None) -> bool:
     """Return whether a replacement or five-minute market wave may open."""
 
-    # Keep a player room actionable: replace either core goal market on the
-    # next live poll instead of waiting for the next five-minute boundary.
+    # Keep a player room actionable: replace any of the four agreed rolling
+    # markets on the next live poll instead of waiting for a five-minute wave.
     if room.room_kind == "player" and room.mode == "live":
         open_contexts = {
             opportunity.context
             for opportunity in room.opportunities.values()
             if opportunity.context != "penalties"
         }
-        if not open_contexts or any(
-            context not in open_contexts
-            for context in CORE_LIVE_MARKET_CONTEXTS
-        ):
+        if not open_contexts or any(context not in open_contexts for context in BASELINE_MARKET_CONTEXTS):
             return True
 
     cadence_key = "standard_market_arrival"
