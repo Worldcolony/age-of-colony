@@ -1683,8 +1683,6 @@ body {
     scrollbar-gutter: stable;
   }
   .cockpit-markets { padding: 12px; }
-  .colony-roster { container-name: colony-roster; container-type: inline-size; }
-  .colony-roster-list { grid-template-columns: minmax(0, 1fr); }
   .race-broadcast {
     min-height: 0;
     grid-template-rows: auto minmax(0, 1fr);

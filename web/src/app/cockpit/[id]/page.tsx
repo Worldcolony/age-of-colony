@@ -820,12 +820,6 @@ function CockpitRun({ id }: { id: string }) {
               initialScope={adminRoom ? "colony" : "ants"}
             />
           )}
-          <ColonyRoster
-            colonies={sorted}
-            activeColonyId={mine?.colonyId}
-            onOpenRanks={() => router.push(resultsHref)}
-            onSelectColony={adminRoom ? selectAdminColony : undefined}
-          />
         </aside>
       </div>
 
@@ -1609,75 +1603,6 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
   );
 }
 
-function ColonyRoster({
-  colonies,
-  activeColonyId,
-  onOpenRanks,
-  onSelectColony,
-}: {
-  colonies: Colony[];
-  activeColonyId?: string;
-  onOpenRanks: () => void;
-  onSelectColony?: (colonyId: string) => void;
-}) {
-  if (!colonies.length) {
-    return (
-      <section className="glass min-w-0 p-4 text-center text-sm text-ink-faint">
-        No colonies attached to this simulation yet.
-      </section>
-    );
-  }
-
-  return (
-    <section className="colony-roster glass flex min-w-0 flex-col gap-3 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="eyebrow">Colonies</p>
-          <h2 className="text-base font-bold">Simulation roster</h2>
-        </div>
-        <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
-      </div>
-
-      <div className="colony-roster-list grid min-w-0 gap-2">
-        {colonies.map((colony, index) => {
-          const active = colony.colonyId === activeColonyId;
-          return (
-            <button
-              type="button"
-              key={colony.colonyId}
-              aria-pressed={active}
-              disabled={!onSelectColony}
-              onClick={() => onSelectColony?.(colony.colonyId)}
-              className={`min-w-0 w-full rounded-md border-2 p-3 text-left disabled:cursor-default disabled:opacity-100 ${
-                active
-                  ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
-                  : `border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] ${onSelectColony ? "hover:border-gold/60" : ""}`
-              }`}
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="font-mono text-sm font-bold text-gold">#{index + 1}</span>
-                    <h3 className="truncate text-sm font-bold text-ink">{colony.name}</h3>
-                  </div>
-                  <p className="mt-1 truncate text-xs text-ink-faint">{labelize(colony.style)} temperament · fixed voters</p>
-                </div>
-                {active && <span className="status-pill">{onSelectColony ? "controlled" : "active"}</span>}
-              </div>
-
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <MiniStat label="Rank" value={`#${index + 1}`} tone="gold" />
-                <MiniStat label="Voters" value={colony.size || 20} />
-                <MiniStat label="Sugar" value={colonySugar(colony)} tone="green" />
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
 function spotlightFromEvent(event: GameEvent): EventSpotlight | null {
   if (event.kind === "match_event") {
     const type = String(event.data?.visualType ?? "");
@@ -1782,13 +1707,6 @@ function MiniStat({ label, value, tone }: { label: string; value: number | strin
       <p className={`truncate font-mono text-base font-bold ${color}`}>{value}</p>
     </div>
   );
-}
-
-function labelize(value: string | null | undefined): string {
-  if (value === "cautious") return "Careful";
-  if (value === "aggressive") return "Bold";
-  if (value === "balanced") return "Steady";
-  return String(value || "steady").replace(/_/g, " ");
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {
