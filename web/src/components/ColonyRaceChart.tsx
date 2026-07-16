@@ -1,3 +1,4 @@
+import { useId, type CSSProperties } from "react";
 import { colonySugar } from "@/lib/sugar";
 import type { Colony, GameEvent } from "@/lib/types";
 
@@ -10,17 +11,21 @@ const PAD_Y = 24;
 interface RacePoint {
   index: number;
   values: Record<string, number>;
+  changedColonyId?: string;
 }
 
 export function ColonyRaceChart({
   colonies,
   events,
   compact = false,
+  hero = false,
 }: {
   colonies: Colony[];
   events: GameEvent[];
   compact?: boolean;
+  hero?: boolean;
 }) {
+  const glowId = useId().replace(/:/g, "");
   if (!colonies.length) return null;
 
   const ranked = [...colonies].sort((a, b) => colonySugar(b) - colonySugar(a));
@@ -53,7 +58,7 @@ export function ColonyRaceChart({
 
   return (
     <section
-      className={`colony-race ${compact ? "is-compact" : ""}`}
+      className={`colony-race ${compact ? "is-compact" : ""} ${hero ? "is-hero" : ""}`}
       aria-label={tied ? `Sugar race. ${tiedLeaders.length} colonies are tied at ${colonySugar(leader)} Sugar.` : `Sugar race. ${leader.name} leads by ${lead} Sugar.`}
     >
       <div className="colony-race-head">
@@ -61,13 +66,13 @@ export function ColonyRaceChart({
           <p className="eyebrow">Sugar race</p>
           <h3>{tied ? `${tiedLeaders.length} colonies are level` : `${leader.name} is leading`}</h3>
         </div>
-        <span className="colony-race-lead">{tied ? `LEVEL · ${colonySugar(leader)} Sugar` : `👑 +${lead} Sugar`}</span>
+        <span className="colony-race-lead">{tied ? `LEVEL · ${colonySugar(leader)} Sugar` : `LEAD · +${lead} Sugar`}</span>
       </div>
 
       <div className="colony-race-plot">
         <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-hidden="true" preserveAspectRatio="none">
           <defs>
-            <filter id="raceGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <filter id={glowId} x="-20%" y="-20%" width="140%" height="140%">
               <feGaussianBlur stdDeviation="3" result="blur" />
               <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
             </filter>
@@ -92,9 +97,22 @@ export function ColonyRaceChart({
                   strokeWidth={colonyIndex === 0 ? 5 : 3.5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  filter={!tied && colonyIndex === 0 ? "url(#raceGlow)" : undefined}
+                  strokeDasharray={seriesDash(colonyIndex)}
+                  filter={!tied && colonyIndex === 0 ? `url(#${glowId})` : undefined}
                   vectorEffect="non-scaling-stroke"
                 />
+                {points.slice(1).filter((point) => point.changedColonyId === colony.colonyId).map((point) => (
+                  <circle
+                    key={`${colony.colonyId}-${point.index}`}
+                    cx={xFor(point.index)}
+                    cy={yFor(point.values[colony.colonyId] ?? colonySugar(colony)) + visualOffset}
+                    r={3.5}
+                    fill="#fff8e8"
+                    stroke={color}
+                    strokeWidth="2"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))}
                 <circle cx={endX} cy={endY} r={!tied && colonyIndex === 0 ? 7 : 5} fill={color} stroke="#fff8e8" strokeWidth="3" vectorEffect="non-scaling-stroke" />
               </g>
             );
@@ -102,14 +120,20 @@ export function ColonyRaceChart({
         </svg>
         <span className="colony-race-axis top">{maxValue}</span>
         <span className="colony-race-axis bottom">{minValue}</span>
+        <span className="colony-race-x start">Start</span>
+        <span className="colony-race-x end">Now</span>
       </div>
 
       <div className="colony-race-legend">
         {ranked.map((colony, index) => (
           <div key={colony.colonyId} className={!tied && index === 0 ? "is-leader" : ""}>
-            <span className="colony-race-dot" style={{ background: CHART_COLORS[index % CHART_COLORS.length] }} />
-            <span className="truncate">{!tied && index === 0 ? "👑 " : ""}{colony.name}</span>
-            <b>{colonySugar(colony)}</b>
+            <span
+              className="colony-race-line"
+              data-series={index % 4}
+              style={{ "--series-color": CHART_COLORS[index % CHART_COLORS.length] } as CSSProperties}
+            />
+            <span className="truncate">{!tied && index === 0 ? "#1 " : ""}{colony.name}</span>
+            <b>{colonySugar(colony)} <small>Sugar</small></b>
           </div>
         ))}
       </div>
@@ -138,13 +162,20 @@ function buildRacePoints(colonies: Colony[], events: GameEvent[]): RacePoint[] {
     const colonyId = String(event.data?.colonyId ?? "");
     if (!(colonyId in running)) continue;
     running[colonyId] += eventDelta(event);
-    points.push({ index: event.index, values: { ...running } });
+    points.push({ index: event.index, values: { ...running }, changedColonyId: colonyId });
   }
 
   if (points.length === 1) {
     points.push({ index: firstIndex + 1, values: { ...running } });
   }
   return points;
+}
+
+function seriesDash(index: number): string | undefined {
+  if (index === 1) return "12 7";
+  if (index === 2) return "3 7";
+  if (index === 3) return "14 5 3 5";
+  return undefined;
 }
 
 function eventDelta(event: GameEvent): number {

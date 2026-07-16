@@ -475,6 +475,12 @@ function CockpitRun({ id }: { id: string }) {
 
   const mobileTabs = (
     <>
+      <RaceBroadcastPanel
+        colonies={sorted}
+        events={events}
+        compact
+        onOpenRanks={() => router.push(resultsHref)}
+      />
       <CockpitTabs
         active={activeTab}
         counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
@@ -661,7 +667,7 @@ function CockpitRun({ id }: { id: string }) {
         />
       )}
 
-      <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(320px,0.82fr)_minmax(520px,1.2fr)_minmax(360px,0.95fr)] 2xl:grid-cols-[360px_minmax(580px,1fr)_430px]">
+      <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(270px,0.72fr)_minmax(620px,1.62fr)_minmax(300px,0.76fr)] 2xl:grid-cols-[320px_minmax(680px,1fr)_360px]">
         <aside className="grid min-w-0 content-start gap-4">
           <section className="glass match-card-media flex min-w-0 flex-col gap-3 p-4">
             {txlineProof && (
@@ -734,59 +740,67 @@ function CockpitRun({ id }: { id: string }) {
               </button>
             </section>
           ) : (
-            <section className="glass flex min-h-[420px] min-w-0 flex-col gap-3 p-4 xl:min-h-[calc(100dvh-132px)]">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="eyebrow">Simulation dashboard</p>
-                  <h2 className="text-2xl font-bold">Decision board</h2>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <span className="status-pill">{openMarkets.length} live</span>
-                  <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
-                </div>
-              </div>
-
-              <CockpitTabs
-                active={activeTab}
-                counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-                onChange={setActiveTab}
+            <>
+              <RaceBroadcastPanel
+                colonies={sorted}
+                events={events}
+                onOpenRanks={() => router.push(resultsHref)}
               />
 
-              {activeTab === "live" && (
-                <LiveTab
-                  openMarkets={openMarkets}
-                  openSummary={openSummary}
-                  selectedMarket={selectedMarket}
-                  selectedMarketId={effectiveSelectedMarketId}
-                  settledMarkets={settledMarkets}
-                  colony={mine}
-                  colonyLabel={colonyFocusLabel}
-                  waitingForKickoff={txlineWaiting}
-                  matchStateLabel={txlineStateLabel}
-                  onSelectMarket={setSelectedMarketId}
-                  onSelectSettled={(marketId) => {
-                    setSelectedSettledId(marketId);
-                    setActiveTab("settled");
-                  }}
+              <section className="glass flex min-h-[420px] min-w-0 flex-col gap-3 p-4 xl:min-h-[500px]">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="eyebrow">Colony decisions</p>
+                    <h2 className="text-2xl font-bold">Live markets</h2>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="status-pill">{openMarkets.length} live</span>
+                    <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+                  </div>
+                </div>
+
+                <CockpitTabs
+                  active={activeTab}
+                  counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+                  onChange={setActiveTab}
                 />
-              )}
 
-              {activeTab === "settled" && (
-                <SettledTab
-                  settledMarkets={settledMarkets}
-                  selectedSettled={selectedSettled}
-                  selectedSettledId={effectiveSelectedSettledId}
-                  colony={mine}
-                  colonyLabel={colonyFocusLabel}
-                  onSelectSettled={setSelectedSettledId}
-                />
-              )}
+                {activeTab === "live" && (
+                  <LiveTab
+                    openMarkets={openMarkets}
+                    openSummary={openSummary}
+                    selectedMarket={selectedMarket}
+                    selectedMarketId={effectiveSelectedMarketId}
+                    settledMarkets={settledMarkets}
+                    colony={mine}
+                    colonyLabel={colonyFocusLabel}
+                    waitingForKickoff={txlineWaiting}
+                    matchStateLabel={txlineStateLabel}
+                    onSelectMarket={setSelectedMarketId}
+                    onSelectSettled={(marketId) => {
+                      setSelectedSettledId(marketId);
+                      setActiveTab("settled");
+                    }}
+                  />
+                )}
 
-              {activeTab === "feed" && (
-                <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
-              )}
+                {activeTab === "settled" && (
+                  <SettledTab
+                    settledMarkets={settledMarkets}
+                    selectedSettled={selectedSettled}
+                    selectedSettledId={effectiveSelectedSettledId}
+                    colony={mine}
+                    colonyLabel={colonyFocusLabel}
+                    onSelectSettled={setSelectedSettledId}
+                  />
+                )}
 
-            </section>
+                {activeTab === "feed" && (
+                  <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
+                )}
+
+              </section>
+            </>
           )}
         </main>
 
@@ -806,12 +820,10 @@ function CockpitRun({ id }: { id: string }) {
           )}
           <ColonyRoster
             colonies={sorted}
-            events={events}
             activeColonyId={mine?.colonyId}
             onOpenRanks={() => router.push(resultsHref)}
             onSelectColony={adminRoom ? selectAdminColony : undefined}
           />
-          <EventStreamCard feedRows={aggregatedFeed.slice(0, 7)} onOpenFeed={() => setActiveTab("feed")} />
         </aside>
       </div>
 
@@ -865,26 +877,103 @@ function RunStatusCard({
   );
 }
 
-function EventStreamCard({ feedRows, onOpenFeed }: { feedRows: FeedRow[]; onOpenFeed: () => void }) {
+function RaceBroadcastPanel({
+  colonies,
+  events,
+  compact = false,
+  onOpenRanks,
+}: {
+  colonies: Colony[];
+  events: GameEvent[];
+  compact?: boolean;
+  onOpenRanks: () => void;
+}) {
   return (
-    <section className="glass flex min-w-0 flex-col gap-3 p-3">
-      <div className="flex items-center justify-between gap-3">
+    <section className={`race-broadcast ${compact ? "is-compact" : ""}`}>
+      <div className="race-broadcast-head">
         <div>
-          <p className="eyebrow">Signals</p>
-          <h2 className="text-base font-bold">Event stream</h2>
+          <p className="eyebrow">Live colony race</p>
+          <h2>Who is winning the match?</h2>
+          <p>Every settled call moves Sugar. Match events explain why markets open.</p>
         </div>
-        <button className="quiet-link text-sm" onClick={onOpenFeed}>Open feed</button>
+        <button className="quiet-link text-sm" onClick={onOpenRanks}>Full rankings →</button>
       </div>
 
-      <div className="well grid max-h-[300px] gap-0 overflow-y-auto px-3">
-        {feedRows.length === 0 ? (
-          <span className="block py-5 text-center text-sm text-ink-faint">Waiting for live signals...</span>
-        ) : (
-          feedRows.map((row) => <FeedRowLine key={row.key} row={row} />)
-        )}
-      </div>
+      <ColonyRaceChart colonies={colonies} events={events} hero />
+      <MatchPulseTimeline events={events} />
     </section>
   );
+}
+
+function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
+  const moments = events.flatMap((event) => {
+    const spotlight = spotlightFromEvent(event);
+    return spotlight ? [{ event, spotlight }] : [];
+  });
+  const latest = moments[0];
+  const recent = moments.slice(1, 5);
+
+  return (
+    <section className="match-pulse" aria-label="Latest match and market events">
+      <header className="match-pulse-head">
+        <div>
+          <p>Match pulse</p>
+          <h3>Live events</h3>
+        </div>
+        <span>{moments.length ? `${moments.length} signals` : "Waiting"}</span>
+      </header>
+
+      {latest ? (
+        <div className="match-pulse-layout">
+          <article className="match-pulse-latest" data-tone={latest.spotlight.tone} role="status" aria-live="polite">
+            <div className="match-pulse-event-top">
+              <span className="match-pulse-glyph">{pulseGlyphLabel(latest.spotlight.glyph)}</span>
+              <span>{latest.spotlight.kicker}</span>
+            </div>
+            <strong>{latest.spotlight.title}</strong>
+            <p>{latest.spotlight.detail}</p>
+            <small>Latest signal · #{latest.event.index}</small>
+          </article>
+
+          <ol className="match-pulse-recent" aria-label="Previous events">
+            {recent.length ? recent.map(({ event, spotlight }) => (
+              <li key={spotlight.key} data-tone={spotlight.tone}>
+                <span className="match-pulse-glyph">{pulseGlyphLabel(spotlight.glyph)}</span>
+                <span className="min-w-0">
+                  <small>{spotlight.kicker}</small>
+                  <b>{spotlight.title}</b>
+                </span>
+                <em>#{event.index}</em>
+              </li>
+            )) : (
+              <li className="is-empty">The next goal, card, substitution or market will appear here.</li>
+            )}
+          </ol>
+        </div>
+      ) : (
+        <div className="match-pulse-empty">
+          <span className="match-pulse-glyph">LIVE</span>
+          <div>
+            <strong>Waiting for the first match event</strong>
+            <p>Goals, penalties, cards, substitutions and new markets will stay visible here.</p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function pulseGlyphLabel(glyph: EventSpotlight["glyph"]): string {
+  const labels: Record<EventSpotlight["glyph"], string> = {
+    ball: "GOAL",
+    penalty: "PEN",
+    "yellow-card": "YC",
+    "red-card": "RC",
+    substitution: "SUB",
+    market: "OPEN",
+    resolved: "DONE",
+  };
+  return labels[glyph];
 }
 
 // A single aggregated feed row: color edge by kind, bold colony name, a
@@ -1518,13 +1607,11 @@ function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
 
 function ColonyRoster({
   colonies,
-  events,
   activeColonyId,
   onOpenRanks,
   onSelectColony,
 }: {
   colonies: Colony[];
-  events: GameEvent[];
   activeColonyId?: string;
   onOpenRanks: () => void;
   onSelectColony?: (colonyId: string) => void;
@@ -1538,7 +1625,7 @@ function ColonyRoster({
   }
 
   return (
-    <section className="glass flex min-w-0 flex-col gap-3 p-3 xl:min-h-[360px]">
+    <section className="glass flex min-w-0 flex-col gap-3 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow">Colonies</p>
@@ -1547,9 +1634,7 @@ function ColonyRoster({
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
       </div>
 
-      <ColonyRaceChart colonies={colonies} events={events} compact />
-
-      <div className="grid max-h-[300px] gap-2 overflow-y-auto pr-1 xl:max-h-[calc(100dvh-610px)]">
+      <div className="grid max-h-[420px] gap-2 overflow-y-auto pr-1 xl:max-h-[calc(100dvh-430px)]">
         {colonies.map((colony, index) => {
           const active = colony.colonyId === activeColonyId;
           return (
