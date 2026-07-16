@@ -2569,6 +2569,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
     room.status = public_state.get("status") or row.get("status") or "created"
     room.mode = public_state.get("mode") or row.get("mode")
     room.replay_time_scale = _safe_float(public_state.get("replayTimeScale"))
+    room.replay_clock_target_seconds = _safe_non_negative_float(public_state.get("replayClockTargetSeconds"))
     if room.status in {"finished", "stopped", "error"}:
         setattr(room, "_aoc_restored_terminal", True)
         setattr(room, "_aoc_restored_public_state", json.loads(json.dumps(public_state)))
@@ -3232,7 +3233,19 @@ async def _run_replay_game(
             room = game_manager.get_room(game_id)
             if not room or room.status != "running_replay":
                 break
+            current_clock = _event_clock_seconds(event)
+            if current_clock is not None:
+                # Hold the visual clock at this event while colony agents and
+                # settlements are being processed. This is especially
+                # important for penalties, which can take several seconds.
+                room.replay_clock_target_seconds = current_clock
             await asyncio.to_thread(harness.process_event, event)
+            authoritative_clock = room.match_state.clock_seconds if room.match_state else current_clock
+            next_clock = _event_clock_seconds(events[index + 1]) if index < len(events) - 1 else None
+            if next_clock is not None and (authoritative_clock is None or next_clock >= authoritative_clock):
+                room.replay_clock_target_seconds = next_clock
+            else:
+                room.replay_clock_target_seconds = authoritative_clock
             _sync_room_agent_usage(game_id)
             await _sync_room_to_supabase_async(room)
             delay = _replay_delay_after_event(
@@ -3247,6 +3260,7 @@ async def _run_replay_game(
         room = game_manager.get_room(game_id)
         if room and room.status == "running_replay":
             await asyncio.to_thread(harness.finish_game, mode="replay")
+            room.replay_clock_target_seconds = room.match_state.clock_seconds if room.match_state else None
     except asyncio.CancelledError:
         room.status = "stopped"
         raise
@@ -3614,6 +3628,14 @@ def _safe_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _safe_non_negative_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
 
 
 def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, Any]] | None = None) -> int:

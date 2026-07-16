@@ -526,6 +526,7 @@ function CockpitRun({ id }: { id: string }) {
                   status={status}
                   mode={game?.mode}
                   replayTimeScale={game?.replayTimeScale}
+                  replayClockTargetSeconds={game?.replayClockTargetSeconds}
                   showLiveDot
                 />
                 <span className="mobile-match-chip-state truncate">
@@ -701,6 +702,7 @@ function CockpitRun({ id }: { id: string }) {
                     status={status}
                     mode={game?.mode}
                     replayTimeScale={game?.replayTimeScale}
+                    replayClockTargetSeconds={game?.replayClockTargetSeconds}
                     showLiveDot
                   />
                   <p className="truncate">{game?.match?.possessionLabel || txlineStateLabel}</p>

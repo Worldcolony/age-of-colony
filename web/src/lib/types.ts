@@ -255,6 +255,7 @@ export interface GameState {
   status: GameStatus;
   mode?: string | null;
   replayTimeScale?: number | null;
+  replayClockTargetSeconds?: number | null;
   agentCallMode?: AgentCallMode | null;
   eventIndex?: number;
   players: Player[];

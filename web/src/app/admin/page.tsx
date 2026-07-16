@@ -1026,7 +1026,7 @@ export default function AdminPage() {
                 <MiniRunStat label="Score" value={fmtScore(game.match?.score)} />
                 <MiniRunStat
                   label="Match time"
-                  value={<SmoothMatchClock match={game.match} status={game.status} mode={game.mode} replayTimeScale={game.replayTimeScale} className="admin-history-clock" />}
+                  value={<SmoothMatchClock match={game.match} status={game.status} mode={game.mode} replayTimeScale={game.replayTimeScale} replayClockTargetSeconds={game.replayClockTargetSeconds} className="admin-history-clock" />}
                 />
                 <MiniRunStat label="Leader" value={leadingColony(game)?.name ?? "—"} />
                 <MiniRunStat label="Events" value={game.eventIndex ?? 0} />
@@ -1079,6 +1079,7 @@ export default function AdminPage() {
                       status={game.status}
                       mode={game.mode}
                       replayTimeScale={game.replayTimeScale}
+                      replayClockTargetSeconds={game.replayClockTargetSeconds}
                       className="admin-history-clock"
                     />
                   </td>
@@ -1262,6 +1263,7 @@ function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: Game
                     status={game.status}
                     mode={game.mode}
                     replayTimeScale={game.replayTimeScale}
+                    replayClockTargetSeconds={game.replayClockTargetSeconds}
                     className="admin-live-clock"
                   />
                 </div>

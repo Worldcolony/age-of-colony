@@ -9,6 +9,7 @@ interface SmoothMatchClockProps {
   status?: GameState["status"] | string | null;
   mode?: GameState["mode"];
   replayTimeScale?: number | null;
+  replayClockTargetSeconds?: number | null;
   className?: string;
   showLiveDot?: boolean;
 }
@@ -33,49 +34,40 @@ function isRunningStatus(status?: string | null): boolean {
 /**
  * Match snapshots only move when a TXLine event is processed. This clock uses
  * those snapshots as authoritative anchors, then advances locally at the
- * measured replay rate so the HUD no longer jumps from event to event.
+ * configured replay rate without ever passing the server's next-event bound.
  */
 export function SmoothMatchClock({
   match,
   status,
   mode,
   replayTimeScale,
+  replayClockTargetSeconds,
   className = "",
   showLiveDot = false,
 }: SmoothMatchClockProps) {
   const rawClock = matchClockSeconds(match);
+  const replayTarget = Number(replayClockTargetSeconds);
+  const validReplayTarget = replayClockTargetSeconds != null
+    && Number.isFinite(replayTarget)
+    && replayTarget >= 0
+    ? replayTarget
+    : null;
   const running = isRunningStatus(status);
   const [displayClock, setDisplayClock] = useState<number | null>(() => rawClock);
   const anchorRef = useRef<ClockPoint | null>(null);
-  const previousServerRef = useRef<ClockPoint | null>(null);
-  const observedRateRef = useRef(0);
 
   useEffect(() => {
     if (rawClock == null) {
       anchorRef.current = null;
-      previousServerRef.current = null;
-      observedRateRef.current = 0;
       const clearFrame = window.requestAnimationFrame(() => setDisplayClock(null));
       return () => window.cancelAnimationFrame(clearFrame);
     }
 
     const now = performance.now();
-    const previous = previousServerRef.current;
-    if (previous && rawClock > previous.clock && now > previous.at) {
-      const observedRate = (rawClock - previous.clock) / ((now - previous.at) / 1000);
-      if (Number.isFinite(observedRate) && observedRate > 0) {
-        const cappedRate = Math.min(3600, observedRate);
-        observedRateRef.current = observedRateRef.current > 0
-          ? observedRateRef.current * 0.55 + cappedRate * 0.45
-          : cappedRate;
-      }
-    }
-
-    previousServerRef.current = { clock: rawClock, at: now };
     anchorRef.current = { clock: rawClock, at: now };
     const snapFrame = window.requestAnimationFrame(() => setDisplayClock(Math.floor(rawClock)));
     return () => window.cancelAnimationFrame(snapFrame);
-  }, [rawClock]);
+  }, [rawClock, validReplayTarget]);
 
   useEffect(() => {
     if (!running || rawClock == null) return;
@@ -90,8 +82,12 @@ export function SmoothMatchClock({
           : 0;
         const rate = status === "running_live" || mode === "live"
           ? 1
-          : observedRateRef.current || fallbackRate;
-        const nextClock = Math.floor(anchor.clock + Math.max(0, now - anchor.at) / 1000 * rate);
+          : validReplayTarget == null ? 0 : fallbackRate;
+        const interpolatedClock = anchor.clock + Math.max(0, now - anchor.at) / 1000 * rate;
+        const boundedClock = status === "running_replay" && validReplayTarget != null
+          ? Math.min(interpolatedClock, Math.max(anchor.clock, validReplayTarget))
+          : interpolatedClock;
+        const nextClock = Math.floor(boundedClock);
         setDisplayClock((current) => current === nextClock ? current : nextClock);
       }
       frame = window.requestAnimationFrame(tick);
@@ -99,7 +95,7 @@ export function SmoothMatchClock({
 
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [mode, rawClock, replayTimeScale, running, status]);
+  }, [mode, rawClock, replayTimeScale, running, status, validReplayTarget]);
 
   const text = status === "finished"
     ? "FT"

@@ -721,6 +721,7 @@ class GameRoom:
     status: str = "created"
     mode: str | None = None
     replay_time_scale: float | None = None
+    replay_clock_target_seconds: float | None = None
     agent_call_mode: str | None = None
     event_index: int = 0
     players: list[PlayerState] = field(default_factory=list)
@@ -774,6 +775,7 @@ class GameRoom:
             "status": self.status,
             "mode": self.mode,
             "replayTimeScale": self.replay_time_scale,
+            "replayClockTargetSeconds": self.replay_clock_target_seconds,
             "agentCallMode": self.agent_call_mode,
             "eventIndex": self.event_index,
             "players": [self._public_player_state(player, player_colonies) for player in self.players],
@@ -798,6 +800,7 @@ class GameRoom:
             snapshot["status"] = self.status
             snapshot["mode"] = self.mode
             snapshot["replayTimeScale"] = self.replay_time_scale
+            snapshot["replayClockTargetSeconds"] = self.replay_clock_target_seconds
             snapshot["agentCallMode"] = self.agent_call_mode
             snapshot["roomKind"] = self.room_kind
             if self.room_kind == "player":

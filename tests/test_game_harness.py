@@ -26,6 +26,7 @@ from app.main import (
     _replay_delay_after_event,
     _restore_room_from_stored_row,
     _run_live_game,
+    _run_replay_game,
     _start_replay_room,
     _stored_game_can_resume_live,
     _sync_live_match_state_from_timeline,
@@ -5822,6 +5823,82 @@ class DemoRunApiTest(unittest.TestCase):
             ),
             0.8,
         )
+
+    def test_replay_clock_is_bounded_during_processing_and_between_events(self):
+        room = game_manager.create_room(
+            fixture_id=42,
+            participant1="France",
+            participant2="Spain",
+            seed=96,
+            room_kind="admin",
+        )
+        room.status = "running_replay"
+        room.mode = "replay"
+        room.replay_time_scale = 120
+        self.addCleanup(game_manager.rooms.pop, room.game_id, None)
+        self.addCleanup(game_manager.room_codes.pop, room.room_code, None)
+        self.addCleanup(game_manager.replay_tasks.pop, room.game_id, None)
+        harness = game_manager.harness(room.game_id)
+        events = [
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "penalty",
+                "highlights": ["penalty"],
+                "minute": 20,
+                "clockSeconds": 1200,
+                "participant": 1,
+                "participantLabel": "France",
+                "confirmed": True,
+                "description": "Penalty awarded",
+            },
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "yellow_card",
+                "highlights": ["card", "yellow_card"],
+                "minute": 27,
+                "clockSeconds": 1620,
+                "participant": 2,
+                "participantLabel": "Spain",
+                "confirmed": True,
+                "description": "Yellow card",
+            },
+        ]
+        processing_targets = []
+        synced_targets = []
+        original_process_event = harness.process_event
+
+        def process_event_with_target_check(event):
+            processing_targets.append(room.replay_clock_target_seconds)
+            original_process_event(event)
+
+        async def fake_sync(target_room):
+            synced_targets.append(target_room.public_state().get("replayClockTargetSeconds"))
+            return {"stored": True}
+
+        async def skip_delay(_seconds):
+            return None
+
+        with (
+            patch.object(game_manager, "harness", return_value=harness),
+            patch.object(harness, "process_event", side_effect=process_event_with_target_check),
+            patch("app.main._sync_room_to_supabase_async", fake_sync),
+            patch("app.main.asyncio.sleep", skip_delay),
+        ):
+            asyncio.run(
+                _run_replay_game(
+                    room.game_id,
+                    events,
+                    delay_seconds=0.8,
+                    time_scale=120,
+                )
+            )
+
+        self.assertEqual(processing_targets, [1200, 1620])
+        self.assertEqual(synced_targets[:2], [1620, 1620])
+        self.assertEqual(room.public_state()["replayClockTargetSeconds"], 1620)
+        self.assertEqual(room.status, "finished")
 
     def test_rerun_clones_colonies_and_starts_new_replay(self):
         class FakeTxLineClient:
