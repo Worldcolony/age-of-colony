@@ -637,6 +637,11 @@ body {
 .game-mode .tabbar,
 .game-mode .scrim { display: none; }
 .game-mode { overflow: hidden; }
+.game-mode .app-shell {
+  height: 100dvh;
+  min-height: 0;
+  padding-bottom: 0;
+}
 /* world is touchable whenever the sheet is down */
 .game-mode:not(.sheet-open) iframe[data-world] { pointer-events: auto !important; }
 
@@ -1282,6 +1287,7 @@ body {
   color: var(--color-ink-faint);
 }
 .race-broadcast-head button { flex: none; }
+.g-sheet-body .race-broadcast.is-compact { flex: none; }
 .race-broadcast-stage {
   display: grid;
   min-width: 0;
@@ -1515,6 +1521,7 @@ body {
   position: relative;
   z-index: 1;
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   font-family: var(--font-mono);
@@ -1522,6 +1529,12 @@ body {
   font-weight: 800;
   letter-spacing: .1em;
   color: var(--pulse);
+}
+.match-pulse-event-top > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .match-pulse-glyph {
   display: inline-grid;
@@ -1541,8 +1554,11 @@ body {
 .match-pulse-latest > strong {
   position: relative;
   z-index: 1;
-  display: block;
+  display: -webkit-box;
   margin-top: 13px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-family: var(--font-display);
   font-size: clamp(17px, 2.1vw, 25px);
   line-height: 1.4;
@@ -1638,8 +1654,11 @@ body {
 .match-pulse-empty p { margin-top: 4px; font-size: 11px; color: rgba(255,249,232,.55); }
 
 @media (min-width: 1280px) {
-  .cockpit-desktop-grid { overflow: hidden; }
-  .cockpit-main { grid-template-rows: minmax(290px, 1.18fr) minmax(210px, .82fr); }
+  .cockpit-desktop-grid {
+    grid-template-columns: clamp(250px, 20vw, 320px) minmax(0, 1fr) clamp(280px, 22vw, 360px) !important;
+    overflow: hidden;
+  }
+  .cockpit-main { grid-template-rows: minmax(0, 1.18fr) minmax(170px, .82fr); }
   .cockpit-sidebar {
     grid-auto-rows: max-content;
     align-content: start;
@@ -1664,6 +1683,8 @@ body {
     scrollbar-gutter: stable;
   }
   .cockpit-markets { padding: 12px; }
+  .colony-roster { container-name: colony-roster; container-type: inline-size; }
+  .colony-roster-list { grid-template-columns: minmax(0, 1fr); }
   .race-broadcast {
     min-height: 0;
     grid-template-rows: auto minmax(0, 1fr);
@@ -1712,6 +1733,7 @@ body {
   .race-broadcast-stage > .match-pulse .match-pulse-latest > strong {
     margin-top: 9px;
     font-size: clamp(14px, 1.3vw, 19px);
+    line-height: 1.25;
   }
   .race-broadcast-stage > .match-pulse .match-pulse-latest > p {
     margin-top: 4px;
@@ -1721,6 +1743,7 @@ body {
   .race-broadcast-stage > .match-pulse .match-pulse-recent {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .race-broadcast-stage > .match-pulse .match-pulse-recent li:nth-child(n+3) { display: none; }
   .race-broadcast-stage > .match-pulse .match-pulse-recent li {
     grid-template-columns: auto minmax(0, 1fr);
     gap: 6px;
@@ -1733,6 +1756,44 @@ body {
     height: 24px;
     font-size: 8px;
   }
+}
+
+@media (min-width: 1280px) and (max-width: 1399px) {
+  .race-broadcast-head h2 { font-size: 16px; }
+  .race-broadcast-stage {
+    grid-template-columns: minmax(0, 1fr) minmax(225px, .6fr);
+    gap: 8px;
+  }
+  .race-broadcast-stage .colony-race-head h3 {
+    max-width: 150px;
+    overflow: hidden;
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .race-broadcast-stage .colony-race-lead { padding: 4px 6px; font-size: 9px; }
+  .race-broadcast-stage > .match-pulse .match-pulse-recent { display: none; }
+  .race-broadcast-stage > .match-pulse .match-pulse-latest > strong {
+    margin-top: 6px;
+    -webkit-line-clamp: 4;
+    font-size: 13px;
+    line-height: 1.2;
+  }
+  .race-broadcast-stage > .match-pulse .match-pulse-latest > p { -webkit-line-clamp: 1; }
+  .race-broadcast-stage > .match-pulse .match-pulse-latest > small { display: none; }
+}
+
+@media (min-width: 1280px) and (max-height: 760px) {
+  .cockpit-desktop { gap: 10px; }
+  .cockpit-desktop-grid,
+  .cockpit-main,
+  .cockpit-sidebar { gap: 10px; }
+  .cockpit-desktop > footer { display: none; }
+  .admin-colony-switcher.is-dense { padding-block: 6px !important; }
+  .admin-colony-switcher.is-dense .admin-control-seal { width: 40px; height: 40px; }
+  .admin-colony-switcher.is-dense .admin-colony-select,
+  .admin-colony-switcher.is-dense .admin-colony-step { min-height: 38px; }
+  .race-broadcast-stage .colony-race.is-hero .colony-race-plot { min-height: 86px; }
 }
 
 /* A single broadcast-style impact moment is the signature motion for this UI.

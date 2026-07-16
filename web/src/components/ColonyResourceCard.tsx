@@ -68,7 +68,7 @@ export function ColonyResourceCard({
 
 function ResourceMetric({ label, value, tone }: { label: string; value: number | string; tone?: "gold" }) {
   return (
-    <div className="well grid min-h-[62px] place-content-center px-2 py-2">
+    <div className="well grid min-h-[62px] min-w-0 place-content-center overflow-hidden px-2 py-2">
       <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
       <p className={`font-mono text-base font-bold ${tone === "gold" ? "text-gold" : "text-ink"}`}>{value}</p>
     </div>

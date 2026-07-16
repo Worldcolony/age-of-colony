@@ -700,7 +700,7 @@ function CockpitRun({ id }: { id: string }) {
             )}
             <div className="flex items-center justify-between gap-3">
               <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p1)}</span>
-              <div className="min-w-0 flex-1 text-center">
+              <div className="min-w-0 flex-1 overflow-hidden text-center">
                 <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
                 <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
                 <div className="match-clock-panel">
@@ -864,7 +864,7 @@ function RunStatusCard({
   const streamLabel = streamState === "reconnecting" ? "reconnect" : streamState;
   const shortId = gameId.length > 8 ? `${gameId.slice(0, 4)}...${gameId.slice(-4)}` : gameId;
   return (
-    <section className="colony-roster glass flex min-w-0 flex-col gap-3 p-3">
+    <section className="glass flex min-w-0 flex-col gap-3 p-3">
       <div>
         <p className="eyebrow">Run state</p>
         <h2 className="text-base font-bold">Replay control</h2>
@@ -1629,7 +1629,7 @@ function ColonyRoster({
   }
 
   return (
-    <section className="glass flex min-w-0 flex-col gap-3 p-3">
+    <section className="colony-roster glass flex min-w-0 flex-col gap-3 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="eyebrow">Colonies</p>
@@ -1638,7 +1638,7 @@ function ColonyRoster({
         <button className="quiet-link text-sm" onClick={onOpenRanks}>Open ranks</button>
       </div>
 
-      <div className="grid gap-2">
+      <div className="colony-roster-list grid min-w-0 gap-2">
         {colonies.map((colony, index) => {
           const active = colony.colonyId === activeColonyId;
           return (
@@ -1648,13 +1648,13 @@ function ColonyRoster({
               aria-pressed={active}
               disabled={!onSelectColony}
               onClick={() => onSelectColony?.(colony.colonyId)}
-              className={`w-full rounded-md border-2 p-3 text-left disabled:cursor-default disabled:opacity-100 ${
+              className={`min-w-0 w-full rounded-md border-2 p-3 text-left disabled:cursor-default disabled:opacity-100 ${
                 active
                   ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
                   : `border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] ${onSelectColony ? "hover:border-gold/60" : ""}`
               }`}
             >
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="font-mono text-sm font-bold text-gold">#{index + 1}</span>
@@ -1779,7 +1779,7 @@ function MiniStat({ label, value, tone }: { label: string; value: number | strin
   return (
     <div className="well px-2 py-2">
       <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
-      <p className={`font-mono text-base font-bold ${color}`}>{value}</p>
+      <p className={`truncate font-mono text-base font-bold ${color}`}>{value}</p>
     </div>
   );
 }

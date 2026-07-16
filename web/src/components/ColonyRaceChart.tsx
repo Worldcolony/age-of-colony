@@ -64,7 +64,7 @@ export function ColonyRaceChart({
       <div className="colony-race-head">
         <div>
           <p className="eyebrow">Sugar race</p>
-          <h3>{tied ? `${tiedLeaders.length} colonies are level` : `${leader.name} is leading`}</h3>
+          <h3>{tied ? `${tiedLeaders.length} colonies tied` : `${leader.name} is leading`}</h3>
         </div>
         <span className="colony-race-lead">{tied ? `LEVEL · ${colonySugar(leader)} Sugar` : `LEAD · +${lead} Sugar`}</span>
       </div>
