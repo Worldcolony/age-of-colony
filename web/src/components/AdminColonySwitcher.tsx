@@ -10,12 +10,14 @@ export function AdminColonySwitcher({
   onSelect,
   compact = false,
   dense = false,
+  onManage,
 }: {
   colonies: Colony[];
   colonyId?: string | null;
   onSelect: (colonyId: string) => void;
   compact?: boolean;
   dense?: boolean;
+  onManage?: () => void;
 }) {
   const selectId = useId();
   if (!colonies.length) return null;
@@ -86,9 +88,21 @@ export function AdminColonySwitcher({
             <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green" aria-hidden="true" />
             In control
           </span>
-          <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-gold-deep">
-            {String(selectedIndex + 1).padStart(2, "0")} / {String(colonies.length).padStart(2, "0")}
-          </span>
+          {onManage ? (
+            <button
+              type="button"
+              className="admin-colony-manage-button"
+              aria-label={`Manage orders for ${selected.name}`}
+              onClick={onManage}
+            >
+              <span>Manage orders</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          ) : (
+            <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-gold-deep">
+              {String(selectedIndex + 1).padStart(2, "0")} / {String(colonies.length).padStart(2, "0")}
+            </span>
+          )}
         </div>
       </div>
     </section>

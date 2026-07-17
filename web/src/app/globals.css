@@ -720,11 +720,72 @@ body {
   outline: 3px solid rgba(176, 126, 28, 0.35);
   outline-offset: 2px;
 }
+.admin-colony-manage-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 2px solid var(--color-gold-deep);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #f6e6b5, #ddb258);
+  box-shadow: var(--pixel-shadow), inset 2px 2px 0 rgba(255, 250, 230, .46);
+  padding: 7px 12px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: #4a3510;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+.admin-colony-manage-button:hover {
+  border-color: var(--color-rust);
+  background: #f8ecc8;
+}
+.admin-colony-manage-button:focus-visible {
+  outline: 3px solid rgba(176, 126, 28, .35);
+  outline-offset: 2px;
+}
 .admin-colony-switcher.is-dense { padding: 9px 12px !important; }
 .admin-colony-switcher.is-dense .admin-control-seal { width: 46px; height: 46px; }
 .admin-colony-switcher.is-dense .admin-colony-copy { display: none; }
 .admin-colony-switcher.is-dense .admin-colony-select,
 .admin-colony-switcher.is-dense .admin-colony-step { min-height: 42px; }
+
+.admin-command-drawer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 118;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(24, 24, 18, .48);
+  backdrop-filter: blur(3px);
+}
+.admin-command-drawer {
+  width: min(470px, calc(100vw - 24px));
+  height: 100%;
+  overflow-y: auto;
+  border-left: 3px solid rgba(176, 126, 28, .72);
+  background:
+    linear-gradient(180deg, rgba(44, 47, 37, .12), transparent 180px),
+    rgba(229, 221, 196, .98);
+  box-shadow: -12px 0 36px rgba(24, 24, 18, .28);
+  padding: 14px;
+  animation: admin-drawer-enter 180ms ease-out both;
+}
+.admin-command-drawer > .colony-command-panel {
+  min-height: calc(100dvh - 28px);
+  overflow: visible;
+}
+@keyframes admin-drawer-enter {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .admin-command-drawer { animation: none; }
+}
 @keyframes command-unfold {
   from { opacity: 0; transform: translateY(-5px); }
   to { opacity: 1; transform: translateY(0); }
@@ -2229,6 +2290,9 @@ body {
   .cockpit-desktop-grid {
     grid-template-columns: minmax(0, 1fr) clamp(310px, 23vw, 380px) !important;
     overflow: hidden;
+  }
+  .cockpit-desktop-grid.is-admin-wide {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
   .cockpit-main { grid-template-rows: minmax(0, 1.08fr) minmax(228px, .92fr); }
   .cockpit-sidebar {

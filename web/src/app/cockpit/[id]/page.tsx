@@ -1,5 +1,6 @@
 "use client";
 import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
@@ -145,6 +146,7 @@ function CockpitRun({ id }: { id: string }) {
   const [watchedColonyId, setWatchedColonyId] = useState<string | null>(null);
   const [mobileAdminCommandDirty, setMobileAdminCommandDirty] = useState(false);
   const [desktopAdminCommandDirty, setDesktopAdminCommandDirty] = useState(false);
+  const [desktopAdminCommandOpen, setDesktopAdminCommandOpen] = useState(false);
   const defaultAdminColonyIdRef = useRef<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const snapshotRequestSequence = useRef(0);
@@ -420,6 +422,15 @@ function CockpitRun({ id }: { id: string }) {
     const t = window.setTimeout(() => worldLink.focusColony(mine.colonyId), 900);
     return () => window.clearTimeout(t);
   }, [mine?.colonyId]);
+
+  useEffect(() => {
+    if (!desktopAdminCommandOpen) return;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setDesktopAdminCommandOpen(false);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [desktopAdminCommandOpen]);
 
   if (!game || lastSyncAt === null) {
     return (
@@ -700,11 +711,12 @@ function CockpitRun({ id }: { id: string }) {
           colonies={sorted}
           colonyId={mine.colonyId}
           onSelect={selectAdminColony}
+          onManage={() => setDesktopAdminCommandOpen(true)}
           dense
         />
       )}
 
-      <div className="cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+      <div className={`cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${adminRoom ? "is-admin-wide" : ""}`}>
         <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
           {status === "created" ? (
             <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:row-span-2 xl:min-h-[360px] xl:justify-center">
@@ -785,24 +797,25 @@ function CockpitRun({ id }: { id: string }) {
           )}
         </main>
 
-        <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
-          {mine && (ownColony || adminRoom) ? (
-            <ColonyCommandPanel
-              gameId={id}
-              status={status}
-              colony={mine}
-              anonymousId={identity.anonymousId}
-              controlMode={adminRoom ? "admin" : "player"}
-              compactLayout
-              onDirtyChange={adminRoom ? setDesktopAdminCommandDirty : undefined}
-              onGameChange={setGame}
-              initialScope={adminRoom ? "colony" : "ants"}
-              rank={rank}
-            />
-          ) : (
-            <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} compact />
-          )}
-        </aside>
+        {!adminRoom && (
+          <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
+            {mine && ownColony ? (
+              <ColonyCommandPanel
+                gameId={id}
+                status={status}
+                colony={mine}
+                anonymousId={identity.anonymousId}
+                controlMode="player"
+                compactLayout
+                onGameChange={setGame}
+                initialScope="ants"
+                rank={rank}
+              />
+            ) : (
+              <ColonyResourceCard colony={mine} rank={rank} spectator={false} compact />
+            )}
+          </aside>
+        )}
       </div>
 
       <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
@@ -818,6 +831,38 @@ function CockpitRun({ id }: { id: string }) {
         </button>
       </footer>
     </div>
+
+    {adminRoom && desktopAdminCommandOpen && mine && createPortal((
+      <div
+        className="admin-command-drawer-layer max-xl:hidden"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.currentTarget === event.target) setDesktopAdminCommandOpen(false);
+        }}
+      >
+        <aside
+          className="admin-command-drawer"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Manage orders for ${mine.name}`}
+        >
+          <ColonyCommandPanel
+            gameId={id}
+            status={status}
+            colony={mine}
+            anonymousId={identity.anonymousId}
+            controlMode="admin"
+            compactLayout
+            expandedByDefault
+            onRequestClose={() => setDesktopAdminCommandOpen(false)}
+            onDirtyChange={setDesktopAdminCommandDirty}
+            onGameChange={setGame}
+            initialScope="colony"
+            rank={rank}
+          />
+        </aside>
+      </div>
+    ), document.body)}
 
     {spotlight && <MatchEventSpotlight spotlight={spotlight} />}
 
