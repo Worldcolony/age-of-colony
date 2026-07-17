@@ -37,7 +37,7 @@ export function AdminColonySwitcher({
     >
       <div className={`grid min-w-0 items-center gap-3 ${compact ? "grid-cols-[auto_1fr]" : "lg:grid-cols-[auto_minmax(190px,0.72fr)_minmax(300px,1.28fr)_auto]"}`}>
         <div className="admin-control-seal" aria-hidden="true">
-          <AdminCrownIcon />
+          <span className="text-xl">👑</span>
           <span>Admin</span>
         </div>
 
@@ -106,14 +106,5 @@ export function AdminColonySwitcher({
         </div>
       </div>
     </section>
-  );
-}
-
-function AdminCrownIcon() {
-  return (
-    <svg className="admin-crown-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="m4 8 4 4 4-7 4 7 4-4-2 10H6L4 8Z" />
-      <path d="M7 21h10" />
-    </svg>
   );
 }

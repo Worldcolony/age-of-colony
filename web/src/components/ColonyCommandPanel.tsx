@@ -455,7 +455,7 @@ function ColonyCommandPanelState({
             onClick={() => openScope("colony")}
           >
             <span className="command-summary-icon" aria-hidden="true">
-              <CommandSummaryIcon kind="strategy" />
+              {compactLayout ? <CommandSummaryIcon kind="strategy" /> : "👑"}
             </span>
             <span className="command-summary-copy min-w-0">
               <strong className="block text-sm">Colony strategy</strong>
@@ -475,7 +475,7 @@ function ColonyCommandPanelState({
             onClick={() => openScope("ants")}
           >
             <span className="command-summary-icon" aria-hidden="true">
-              <CommandSummaryIcon kind="ants" />
+              {compactLayout ? <CommandSummaryIcon kind="ants" /> : "🐜"}
             </span>
             <span className="command-summary-copy min-w-0">
               <strong className="block text-sm">{antsLabel}</strong>
@@ -505,8 +505,7 @@ function ColonyCommandPanelState({
               data-active={scope === "ants"}
               onClick={() => openScope("ants")}
             >
-              <span className="command-scope-icon" aria-hidden="true"><CommandSummaryIcon kind="ants" /></span>
-              {antsLabel}{roster ? ` · ${roster.ants.length}` : ""}
+              🐜 {antsLabel}{roster ? ` · ${roster.ants.length}` : ""}
             </button>
             <button
               type="button"
@@ -514,8 +513,7 @@ function ColonyCommandPanelState({
               data-active={scope === "colony"}
               onClick={() => openScope("colony")}
             >
-              <span className="command-scope-icon" aria-hidden="true"><CommandSummaryIcon kind="strategy" /></span>
-              Colony strategy
+              👑 Colony strategy
             </button>
           </div>
 
