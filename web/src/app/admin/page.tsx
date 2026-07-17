@@ -710,7 +710,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex w-full flex-col gap-4 pb-6 lg:relative lg:left-1/2 lg:w-[min(1500px,calc(100vw-32px))] lg:-translate-x-1/2">
+    <div className={`admin-page flex w-full flex-col gap-4 pb-6 lg:relative lg:left-1/2 lg:w-[min(1500px,calc(100vw-32px))] lg:-translate-x-1/2 ${adminView === "launch" ? "is-launch" : "is-simulations"}`}>
       <AdminHeader
         view={adminView}
         refreshing={refreshing}
@@ -749,9 +749,9 @@ export default function AdminPage() {
       {adminView === "launch" && <WorkflowRail currentStep={workflowStep} />}
 
       {adminView === "launch" && (
-      <section className="mx-auto grid w-full max-w-5xl gap-4">
-        <div className="grid gap-4">
-          <div className="grid min-w-0 gap-4">
+      <section className="admin-launch-workspace mx-auto grid w-full max-w-5xl gap-4">
+        <div className="grid min-h-0 gap-4">
+          <div className="grid min-h-0 min-w-0 gap-4">
             {workflowStep === 1 && (
             <StepCard
               number="1"
@@ -788,7 +788,7 @@ export default function AdminPage() {
                 </p>
               )}
 
-              <div className="mt-4 grid max-h-[340px] gap-2 overflow-y-auto pr-1">
+              <div className="admin-fixture-list mt-4 grid max-h-[340px] gap-2 overflow-y-auto pr-1">
                 {fixtures.map((fixture) => {
                   const key = String(fixtureId(fixture));
                   const selected = key === selectedFixtureId;
@@ -1162,9 +1162,9 @@ function AdminHeader({
   onRefresh: () => void;
 }) {
   return (
-    <header className="grid gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-2xl">
+    <header className="admin-header grid gap-4">
+      <div className="admin-header-main flex flex-wrap items-start justify-between gap-4">
+        <div className="admin-header-copy max-w-2xl">
           <p className="eyebrow">Age of Colony admin</p>
           <h1 className="hud-title text-[18px] leading-relaxed md:text-[22px]">Simulation control</h1>
           <p className="mt-2 text-sm leading-relaxed text-ink-faint">
@@ -1178,7 +1178,7 @@ function AdminHeader({
           </button>
         </div>
       </div>
-      <nav className="glass grid grid-cols-2 gap-2 p-2" aria-label="Admin sections">
+      <nav className="admin-view-nav glass grid grid-cols-2 gap-2 p-2" aria-label="Admin sections">
         <button
           type="button"
           className={`btn !min-h-12 py-2 text-sm ${view === "launch" ? "btn-primary" : "btn-ghost"}`}
@@ -1367,8 +1367,8 @@ function WorkflowRail({ currentStep }: { currentStep: WizardStep }) {
     { number: 4, label: "Room" },
   ];
   return (
-    <nav className="glass relative mx-auto w-full max-w-5xl overflow-hidden p-3 sm:p-4" aria-label="Simulation setup progress">
-      <div className="absolute left-[12.5%] right-[12.5%] top-[31px] hidden border-t-2 border-dashed border-[color:var(--brd-soft)] sm:block" aria-hidden="true" />
+    <nav className="admin-workflow-rail glass relative mx-auto w-full max-w-5xl overflow-hidden p-3 sm:p-4" aria-label="Simulation setup progress">
+      <div className="admin-workflow-line absolute left-[12.5%] right-[12.5%] top-[31px] hidden border-t-2 border-dashed border-[color:var(--brd-soft)] sm:block" aria-hidden="true" />
       <ol className="relative grid grid-cols-4 gap-2">
         {steps.map((step) => {
           const complete = currentStep > step.number;
@@ -1403,7 +1403,7 @@ function WorkflowRail({ currentStep }: { currentStep: WizardStep }) {
 
 function WizardFooter({ children }: { children: ReactNode }) {
   return (
-    <footer className="mt-5 flex flex-col gap-2 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.86)] p-3 shadow-[3px_3px_0_rgba(74,58,30,0.16)] sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+    <footer className="admin-wizard-footer mt-5 flex flex-col gap-2 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.86)] p-3 shadow-[3px_3px_0_rgba(74,58,30,0.16)] sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
       {children}
     </footer>
   );
@@ -1465,8 +1465,8 @@ function LaunchProgress({ working, roomReady }: { working: string; roomReady: bo
 
 function StepCard({ number, title, status, children }: { number: string; title: string; status: string; children: ReactNode }) {
   return (
-    <section className="glass min-w-0 p-4">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <section className="admin-step-card glass min-w-0 p-4" data-step={number}>
+      <div className="admin-step-card-head mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className="plate flex h-9 w-9 items-center justify-center font-mono text-sm font-bold text-gold-deep">
             {number}
@@ -1475,7 +1475,9 @@ function StepCard({ number, title, status, children }: { number: string; title: 
         </div>
         <span className="status-pill">{status}</span>
       </div>
-      {children}
+      <div className="admin-step-card-body">
+        {children}
+      </div>
     </section>
   );
 }
