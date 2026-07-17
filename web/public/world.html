@@ -193,7 +193,11 @@
     var C = window.DN && DN.camera;
     if (!C || !C.controls) { if (tries < 80) setTimeout(tune, 250); return; }
     try {
-      C.flyTo(new THREE.Vector3(0, 5, 0), 110, 38, 3.2);
+      // Don't yank the camera to world center when a game is already framed
+      // (selected colony or founded match mounds) — the AOC bridge owns it then.
+      var gameFramed = (DN.app && DN.app.selection) ||
+        (DN.colony.list.some(function (c) { return String(c.owner || '').indexOf('aoc:') === 0; }));
+      if (!gameFramed) C.flyTo(new THREE.Vector3(0, 5, 0), 110, 38, 3.2);
       C.autoRotate(true);
       C.controls.autoRotateSpeed = 0.55;
     } catch (e) {}
@@ -214,6 +218,19 @@
   var lastSync = null;     // replay the latest sync once the engine is ready
   var pendingFocus = null; // focus request that arrived before the mound existed
   var GOLDEN = 2.399963;   // golden angle keeps game mounds evenly spread
+  var resumeOrbitTimer = null;
+
+  // selectColony's flyTo() always kills auto-rotate (camera.js), so a focus
+  // shot would otherwise freeze the camera on one mound forever. Resume a
+  // slow orbit once the fly-in settles, so the world keeps feeling alive.
+  function focusColony(col) {
+    DN.app.selectColony(col);
+    if (resumeOrbitTimer) clearTimeout(resumeOrbitTimer);
+    resumeOrbitTimer = setTimeout(function () {
+      resumeOrbitTimer = null;
+      DN.camera.autoRotate(true);
+    }, 1800);
+  }
 
   function engineReady() {
     return window.DN && DN.colony && DN.colony.list && DN.colony.list.length &&
@@ -304,7 +321,7 @@
       map[gc.id] = col;
       if (pendingFocus === gc.id) {
         pendingFocus = null;
-        DN.app.selectColony(col);
+        focusColony(col);
       }
     }
     return col;
@@ -720,6 +737,7 @@
     if (!d || typeof d !== 'object' || String(d.type || '').indexOf('aoc:') !== 0) return;
     if (!engineReady()) {
       if (d.type === 'aoc:sync') lastSync = d;
+      else if (d.type === 'aoc:focus') pendingFocus = d.id; // boot race: fly once the engine is up
       return;
     }
     if (d.type === 'aoc:sync') { lastSync = null; applySync(d); }
@@ -730,7 +748,7 @@
     }
     else if (d.type === 'aoc:focus') {
       var col = map[d.id];
-      if (col) DN.app.selectColony(col);
+      if (col) focusColony(col);
       else pendingFocus = d.id; // fly there as soon as the mound is founded
     }
     else if (d.type === 'aoc:overview') {
@@ -739,16 +757,31 @@
     }
     else if (d.type === 'aoc:interactive') {
       document.body.classList.toggle('aoc-live', Boolean(d.on));
-      if (d.on) DN.camera.autoRotate(false);
+      // Keep the ambient orbit alive — it only stops when the user actually
+      // grabs the world (pointerdown below), not on the handshake.
     }
   }
   addEventListener('message', onMessage);
+
+  // The world should feel alive until the user takes the camera themselves.
+  addEventListener('pointerdown', function stopSpin() {
+    removeEventListener('pointerdown', stopSpin);
+    if (window.DN && DN.camera) DN.camera.autoRotate(false);
+  }, { passive: true });
 
   // Engine boots asynchronously — replay the freshest sync once it's up.
   var poll = setInterval(function () {
     if (!engineReady()) return;
     clearInterval(poll);
     if (lastSync) { applySync(lastSync); lastSync = null; }
+    // Reloads skip the founding cinematic (mounds already exist), so aim the
+    // camera explicitly: queued focus wins, otherwise frame the match cluster.
+    if (pendingFocus && map[pendingFocus]) {
+      focusColony(map[pendingFocus]);
+      pendingFocus = null;
+    } else if (!DN.app.selection && Object.keys(map).length) {
+      frameMatch(2.2);
+    }
   }, 400);
 })();
 </script>

@@ -827,6 +827,11 @@ body {
   .colony-command-disclosure { animation: none; }
   .doctrine-card { transition: none; }
   .doctrine-card[data-active="true"] { transform: none; }
+  .broadcast-score,
+  .cockpit-right .colony-race.is-hero,
+  .cockpit-right .match-pulse,
+  .cockpit-left .admin-colony-switcher,
+  .cockpit-dock { transition: none; }
 }
 
 /* parchment bottom tab bar */
@@ -2287,153 +2292,197 @@ body {
 .match-pulse-empty p { margin-top: 4px; font-size: 11px; color: rgba(255,249,232,.55); }
 
 @media (min-width: 1280px) {
-  .cockpit-desktop-grid {
-    grid-template-columns: minmax(0, 1fr) clamp(310px, 23vw, 380px) !important;
-    overflow: hidden;
+  /* Frame composition: cards live at the edges (left/right sidebars, a
+     bottom dock) around an open center stage, so the world reads as the
+     scene and the HUD reads as a frame around it, not a wall on top of it. */
+  .cockpit-desktop { gap: 32px; }
+  .cockpit-desktop,
+  .cockpit-frame,
+  .cockpit-left,
+  .cockpit-center,
+  .cockpit-right { pointer-events: none; }
+  .cockpit-desktop > header,
+  .cockpit-desktop > footer,
+  .cockpit-left > *,
+  .cockpit-center > *,
+  .cockpit-right > *,
+  .cockpit-dock,
+  .cockpit-frame-empty { pointer-events: auto; }
+  .cockpit-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: fit-content;
+    max-width: 100%;
+    min-height: 0;
+    margin-inline: 0 auto;
+    padding: 3px 12px;
   }
-  .cockpit-desktop-grid.is-admin-wide {
-    grid-template-columns: minmax(0, 1fr) !important;
+  .cockpit-topbar .icon-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
   }
-  .cockpit-main { grid-template-rows: minmax(0, 1.08fr) minmax(228px, .92fr); }
-  .cockpit-sidebar {
+  .cockpit-topbar .hud-title { font-size: 11px; line-height: 1.1; text-shadow: none; }
+  .cockpit-topbar .text-center p { font-size: 9px; line-height: 1.1; }
+  .cockpit-topbar .status-pill { padding: 3px 8px; font-size: 9px; }
+  /* The footer pill floated with a gap under the dock and empty space beneath
+     it (and was already hidden below 840px tall). Drop it on all desktop widths
+     so the dock sits flush at the bottom with no dead band. */
+  .cockpit-footer { display: none; }
+
+  /* Corner-hugging frame: narrow left + right rails pinned to the edges, a
+     wide EMPTY center column so the living 3D world is fully visible in the
+     middle, and a dock spanning the bottom. The chart lives in the right rail,
+     not the center — the center is deliberately open scene, not a panel. */
+  .cockpit-frame {
+    display: grid;
+    min-height: 0;
+    flex: 1;
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(300px, 340px);
+    grid-template-rows: minmax(0, 1fr) auto;
+    column-gap: 24px;
+    row-gap: 24px;
+  }
+  /* The empty center passes clicks through to the world behind it. */
+  .cockpit-center { pointer-events: none; }
+  .cockpit-frame-empty {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+    align-self: center;
+    justify-self: center;
+    width: min(560px, 100%);
+  }
+  .cockpit-left,
+  .cockpit-right {
+    display: grid;
+    min-height: 0;
+    max-height: 100%;
+    align-self: start;
     grid-auto-rows: max-content;
     align-content: start;
+    gap: 24px;
+    overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-  }
-  .cockpit-sidebar,
-  .cockpit-markets-body {
     scrollbar-width: thin;
     scrollbar-color: rgba(116, 85, 30, .44) transparent;
   }
-  .cockpit-sidebar::-webkit-scrollbar,
+  .cockpit-left::-webkit-scrollbar,
+  .cockpit-right::-webkit-scrollbar { width: 7px; }
+  .cockpit-left::-webkit-scrollbar-thumb,
+  .cockpit-right::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: rgba(116, 85, 30, .44);
+  }
+  .cockpit-left {
+    grid-column: 1;
+    grid-row: 1;
+    gap: 16px;
+  }
+  .cockpit-center { grid-column: 2; grid-row: 1; }
+  .cockpit-right {
+    grid-column: 3;
+    grid-row: 1;
+    gap: 16px;
+  }
+  .cockpit-dock { grid-column: 1 / -1; grid-row: 2; }
+
+  /* Admin control + Match Center both live in the ~300px left rail. Compact
+     them so the two cards fully fit the column height with the 24px gap
+     visible — otherwise the stack overflows and Match Center's metrics clip.
+     The descriptive copy wraps to three cramped lines here, so it's dropped. */
+  .cockpit-left .admin-colony-switcher { padding: 12px !important; }
+  .cockpit-left .admin-colony-copy { display: none; }
+  .cockpit-left .admin-colony-switcher > div { gap: 10px; }
+  .cockpit-left .admin-colony-switcher .admin-control-seal { width: 44px; height: 44px; }
+  .cockpit-left .admin-colony-switcher .admin-colony-select,
+  .cockpit-left .admin-colony-switcher .admin-colony-step { min-height: 38px; }
+  .cockpit-left .broadcast-score { gap: 6px; padding: 10px; }
+  .cockpit-left .broadcast-score-teams { -webkit-line-clamp: 1; }
+  .cockpit-left .broadcast-score-core { padding: 5px 7px; }
+  .cockpit-left .broadcast-score-core > strong { font-size: 30px; }
+  .cockpit-left .broadcast-score-clock .smooth-match-clock { font-size: 22px; }
+
+  /* Sugar Race now lives in the right rail as a compact card, not the center. */
+  .cockpit-right .colony-race.is-hero { padding: 12px 14px; }
+  .cockpit-right .colony-race.is-hero .colony-race-head h3 { font-size: 15px; }
+  .cockpit-right .colony-race.is-hero .colony-race-plot {
+    min-height: 110px;
+    height: auto;
+  }
+  .cockpit-right .colony-race.is-hero .colony-race-legend {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 3px 10px;
+  }
+  /* Keep the Match Pulse signal card tight so the chart below it fits fully. */
+  .cockpit-right .match-pulse .match-pulse-recent li:nth-child(n+2) { display: none; }
+
+  /* Match Pulse stays a compact signal card, not a tall panel. The base
+     layout is a 2-column grid built for a much wider card (the old 3-up
+     broadcast row / mobile sheet) — this sidebar is far narrower, so stack
+     the latest signal above the recent list instead of splitting columns. */
+  .cockpit-right .match-pulse { padding: 14px; }
+  .cockpit-right .match-pulse-layout { grid-template-columns: 1fr; gap: 10px; }
+  .cockpit-right .match-pulse-latest { min-height: 0; }
+  .cockpit-right .match-pulse .match-pulse-recent li:nth-child(n+3) { display: none; }
+
+  /* Bottom dock: thinner than a regular card, tabs on top, content capped. */
+  /* Dock keeps a consistent height across tabs: the Live market ticket fits
+     fully within the body's max-height (no scroll), and the taller Feed /
+     Settled lists cap to that same height and scroll internally — so clicking
+     Feed never stretches the card past its initial Live height. */
+  .cockpit-markets { gap: 8px; padding: 10px 14px; max-height: none; }
+  .cockpit-markets-head { align-items: center; }
+  .cockpit-markets-head h2 { font-size: 20px; }
+  .cockpit-markets-controls { flex: 1; }
+  .cockpit-markets-controls .seg { flex: 1; padding: 3px; }
+  .cockpit-markets-controls .seg button { padding-block: 7px; }
+  .cockpit-markets-body {
+    flex: 1;
+    max-height: min(32vh, 250px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(116, 85, 30, .44) transparent;
+  }
   .cockpit-markets-body::-webkit-scrollbar { width: 7px; }
-  .cockpit-sidebar::-webkit-scrollbar-thumb,
   .cockpit-markets-body::-webkit-scrollbar-thumb {
     border-radius: 999px;
     background: rgba(116, 85, 30, .44);
   }
-  .cockpit-markets-body {
-    flex: 1;
-    overscroll-behavior: contain;
-    scrollbar-gutter: stable;
-  }
-  .cockpit-markets { gap: 8px; padding: 12px; }
-  .cockpit-markets-head { align-items: center; }
-  .cockpit-markets-head h2 { font-size: 20px; }
-  .cockpit-markets-controls { flex: 1; }
-  .cockpit-markets-controls .seg { flex: 1; }
+  .live-market-board { gap: 12px; }
   .live-market-ticket { grid-template-columns: minmax(0, 1.45fr) minmax(230px, .72fr); }
   .live-market-board > .latest-settled { display: none; }
-  .race-broadcast {
-    min-height: 0;
-    grid-template-rows: auto minmax(0, 1fr);
-    gap: 8px;
-    padding: 10px 12px;
+
+  /* Motion: soft floating elevation on hover — nothing flashy. */
+  .broadcast-score,
+  .cockpit-right .colony-race.is-hero,
+  .cockpit-right .match-pulse,
+  .cockpit-left .admin-colony-switcher,
+  .cockpit-dock {
+    transition: transform .18s ease, box-shadow .18s ease;
   }
-  .race-broadcast-head p:last-child { display: none; }
-  .race-broadcast-stage {
-    min-height: 0;
-    grid-template-columns: minmax(180px, .62fr) minmax(0, 1.45fr) minmax(240px, .85fr);
-    align-items: stretch;
-  }
-  .race-broadcast-stage > .colony-race {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-  }
-  .race-broadcast-stage > .colony-race.is-hero { padding: 10px; }
-  .race-broadcast-stage .colony-race.is-hero .colony-race-plot {
-    min-height: 96px;
-    height: auto;
-    flex: 1;
-  }
-  .race-broadcast-stage .colony-race.is-hero .colony-race-legend {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 5px 12px;
-  }
-  .race-broadcast-stage > .match-pulse {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    padding: 8px;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-head { margin-bottom: 6px; }
-  .race-broadcast-stage > .match-pulse .match-pulse-layout {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest {
-    min-height: 78px;
-    flex: 1;
-    padding: 9px 10px 8px 14px;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest > strong {
-    margin-top: 9px;
-    font-size: clamp(14px, 1.3vw, 19px);
-    line-height: 1.25;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest > p {
-    margin-top: 4px;
-    font-size: 10px;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest > small { margin-top: 6px; }
-  .race-broadcast-stage > .match-pulse .match-pulse-recent {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-recent li:nth-child(n+3) { display: none; }
-  .race-broadcast-stage > .match-pulse .match-pulse-recent li {
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 6px;
-    min-height: 28px;
-    padding: 4px 6px;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-recent em { display: none; }
-  .race-broadcast-stage > .match-pulse .match-pulse-glyph {
-    min-width: 34px;
-    height: 24px;
-    font-size: 8px;
+  .broadcast-score:hover,
+  .cockpit-right .colony-race.is-hero:hover,
+  .cockpit-right .match-pulse:hover,
+  .cockpit-left .admin-colony-switcher:hover,
+  .cockpit-dock:hover {
+    transform: translateY(-3px);
   }
 }
 
 @media (min-width: 1280px) and (max-width: 1399px) {
   .cockpit-markets-controls > div:first-child { display: none; }
-  .race-broadcast-head h2 { font-size: 16px; }
-  .race-broadcast-stage {
-    grid-template-columns: minmax(175px, .62fr) minmax(0, 1.35fr) minmax(225px, .78fr);
-    gap: 8px;
-  }
-  .race-broadcast-stage .colony-race-head h3 {
-    max-width: 200px;
-    overflow: hidden;
-    font-size: 13px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .race-broadcast-stage .colony-race-lead { padding: 4px 6px; font-size: 9px; }
-  .race-broadcast-stage > .match-pulse .match-pulse-recent { display: none; }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest > strong {
-    margin-top: 6px;
-    -webkit-line-clamp: 4;
-    font-size: 13px;
-    line-height: 1.2;
-  }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest > p { -webkit-line-clamp: 1; }
-  .race-broadcast-stage > .match-pulse .match-pulse-latest > small { display: none; }
 }
 
-@media (min-width: 1280px) and (max-height: 760px) {
-  .cockpit-desktop { gap: 10px; }
-  .cockpit-desktop-grid,
-  .cockpit-main,
-  .cockpit-sidebar { gap: 10px; }
+@media (min-width: 1280px) and (max-height: 840px) {
+  .cockpit-desktop { gap: 18px; }
+  .cockpit-frame { column-gap: 20px; row-gap: 20px; }
+  .cockpit-left,
+  .cockpit-right { gap: 16px; }
+  .cockpit-markets { max-height: none; }
   .cockpit-desktop > footer { display: none; }
-  .admin-colony-switcher.is-dense { padding-block: 6px !important; }
-  .admin-colony-switcher.is-dense .admin-control-seal { width: 40px; height: 40px; }
-  .admin-colony-switcher.is-dense .admin-colony-select,
-  .admin-colony-switcher.is-dense .admin-colony-step { min-height: 38px; }
   .cockpit-markets-head h2 { font-size: 18px; }
   .market-selector-card { min-height: 42px; }
   .live-market-ticket-main { gap: 6px; padding: 8px 10px; }
@@ -2444,7 +2493,7 @@ body {
   .broadcast-score-core { padding-block: 5px; }
   .broadcast-score-core > strong { font-size: 26px; }
   .broadcast-score-clock .smooth-match-clock { font-size: 20px; }
-  .race-broadcast-stage .colony-race.is-hero .colony-race-plot { min-height: 86px; }
+  .cockpit-right .colony-race.is-hero .colony-race-plot { min-height: 110px; }
 }
 
 @media (max-width: 1279px) {

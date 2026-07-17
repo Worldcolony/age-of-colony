@@ -693,8 +693,8 @@ function CockpitRun({ id }: { id: string }) {
   return (
     <>
     {mobileShell}
-    <div className="cockpit-desktop flex h-[calc(100dvh-36px)] w-full flex-col gap-4 overflow-hidden pb-2 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
-      <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
+    <div className="cockpit-desktop flex h-[calc(100dvh-16px)] w-full flex-col gap-4 overflow-hidden max-xl:hidden xl:relative xl:left-1/2 xl:w-[calc(100vw-48px)] xl:-translate-x-1/2">
+      <header className="cockpit-topbar glass">
         <button className="icon-btn" aria-label={adminRoom ? "Back to admin" : "Back"} onClick={() => router.push(cockpitExitHref)}>←</button>
         <div className="text-center">
           <h1 className="hud-title text-[13px]">Live cockpit</h1>
@@ -706,119 +706,119 @@ function CockpitRun({ id }: { id: string }) {
         </span>
       </header>
 
-      {adminRoom && mine && (
-        <AdminColonySwitcher
-          colonies={sorted}
-          colonyId={mine.colonyId}
-          onSelect={selectAdminColony}
-          onManage={() => setDesktopAdminCommandOpen(true)}
-          dense
-        />
-      )}
+      <div className="cockpit-frame">
+        {status === "created" ? (
+          <section className="glass cockpit-frame-empty flex min-w-0 flex-col gap-3 p-5 text-center">
+            <p className="eyebrow">Simulation dashboard</p>
+            <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
+            <p className="mx-auto max-w-md text-sm text-ink-soft">
+              {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
+            </p>
+            <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(cockpitExitHref)}>
+              {adminRoom ? "Back to admin" : "Back to room"}
+            </button>
+          </section>
+        ) : (
+          <>
+            <div className="cockpit-left">
+              {adminRoom && mine && (
+                <AdminColonySwitcher
+                  colonies={sorted}
+                  colonyId={mine.colonyId}
+                  onSelect={selectAdminColony}
+                  onManage={() => setDesktopAdminCommandOpen(true)}
+                  compact
+                />
+              )}
+              {desktopMatchSummary}
+              {!adminRoom && (
+                mine && ownColony ? (
+                  <ColonyCommandPanel
+                    gameId={id}
+                    status={status}
+                    colony={mine}
+                    anonymousId={identity.anonymousId}
+                    controlMode="player"
+                    compactLayout
+                    onGameChange={setGame}
+                    initialScope="ants"
+                    rank={rank}
+                  />
+                ) : (
+                  <ColonyResourceCard colony={mine} rank={rank} spectator={false} compact />
+                )
+              )}
+            </div>
 
-      <div className={`cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${adminRoom ? "is-admin-wide" : ""}`}>
-        <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
-          {status === "created" ? (
-            <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:row-span-2 xl:min-h-[360px] xl:justify-center">
-              <p className="eyebrow">Simulation dashboard</p>
-              <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
-              <p className="mx-auto max-w-md text-sm text-ink-soft">
-                {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
-              </p>
-              <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(cockpitExitHref)}>
-                {adminRoom ? "Back to admin" : "Back to room"}
-              </button>
+            {/* Center stays empty on purpose — the living 3D world is the
+                scene, and the HUD frames it from the corners. */}
+            <div className="cockpit-center" aria-hidden="true" />
+
+            <div className="cockpit-right">
+              <MatchPulseTimeline events={events} />
+              <ColonyRaceChart colonies={sorted} events={events} hero />
+            </div>
+
+            <section className="cockpit-markets cockpit-dock glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
+              <div className="cockpit-markets-head">
+                <div>
+                  <p className="eyebrow">Colony decisions</p>
+                  <h2 className="text-2xl font-bold">Live markets</h2>
+                </div>
+                <div className="cockpit-markets-controls">
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <span className="status-pill">{openMarkets.length} live</span>
+                    <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+                  </div>
+                  <CockpitTabs
+                    active={activeTab}
+                    counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+                    onChange={setActiveTab}
+                  />
+                </div>
+              </div>
+
+              <div className="cockpit-markets-body min-h-0 overflow-y-auto">
+                {activeTab === "live" && (
+                  <LiveTab
+                    openMarkets={openMarkets}
+                    openSummary={openSummary}
+                    selectedMarket={selectedMarket}
+                    selectedMarketId={effectiveSelectedMarketId}
+                    settledMarkets={settledMarkets}
+                    colony={mine}
+                    colonyLabel={colonyFocusLabel}
+                    waitingForKickoff={txlineWaiting}
+                    matchStateLabel={txlineStateLabel}
+                    onSelectMarket={setSelectedMarketId}
+                    onSelectSettled={(marketId) => {
+                      setSelectedSettledId(marketId);
+                      setActiveTab("settled");
+                    }}
+                  />
+                )}
+
+                {activeTab === "settled" && (
+                  <SettledTab
+                    settledMarkets={settledMarkets}
+                    selectedSettled={selectedSettled}
+                    selectedSettledId={effectiveSelectedSettledId}
+                    colony={mine}
+                    colonyLabel={colonyFocusLabel}
+                    onSelectSettled={setSelectedSettledId}
+                  />
+                )}
+
+                {activeTab === "feed" && (
+                  <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
+                )}
+              </div>
             </section>
-          ) : (
-            <>
-              <RaceBroadcastPanel
-                colonies={sorted}
-                events={events}
-                matchSummary={desktopMatchSummary}
-                onOpenRanks={() => router.push(resultsHref)}
-              />
-
-              <section className="cockpit-markets glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
-                <div className="cockpit-markets-head">
-                  <div>
-                    <p className="eyebrow">Colony decisions</p>
-                    <h2 className="text-2xl font-bold">Live markets</h2>
-                  </div>
-                  <div className="cockpit-markets-controls">
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      <span className="status-pill">{openMarkets.length} live</span>
-                      <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
-                    </div>
-                    <CockpitTabs
-                      active={activeTab}
-                      counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-                      onChange={setActiveTab}
-                    />
-                  </div>
-                </div>
-
-                <div className="cockpit-markets-body min-h-0 overflow-y-auto">
-                  {activeTab === "live" && (
-                    <LiveTab
-                      openMarkets={openMarkets}
-                      openSummary={openSummary}
-                      selectedMarket={selectedMarket}
-                      selectedMarketId={effectiveSelectedMarketId}
-                      settledMarkets={settledMarkets}
-                      colony={mine}
-                      colonyLabel={colonyFocusLabel}
-                      waitingForKickoff={txlineWaiting}
-                      matchStateLabel={txlineStateLabel}
-                      onSelectMarket={setSelectedMarketId}
-                      onSelectSettled={(marketId) => {
-                        setSelectedSettledId(marketId);
-                        setActiveTab("settled");
-                      }}
-                    />
-                  )}
-
-                  {activeTab === "settled" && (
-                    <SettledTab
-                      settledMarkets={settledMarkets}
-                      selectedSettled={selectedSettled}
-                      selectedSettledId={effectiveSelectedSettledId}
-                      colony={mine}
-                      colonyLabel={colonyFocusLabel}
-                      onSelectSettled={setSelectedSettledId}
-                    />
-                  )}
-
-                  {activeTab === "feed" && (
-                    <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
-                  )}
-                </div>
-              </section>
-            </>
-          )}
-        </main>
-
-        {!adminRoom && (
-          <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
-            {mine && ownColony ? (
-              <ColonyCommandPanel
-                gameId={id}
-                status={status}
-                colony={mine}
-                anonymousId={identity.anonymousId}
-                controlMode="player"
-                compactLayout
-                onGameChange={setGame}
-                initialScope="ants"
-                rank={rank}
-              />
-            ) : (
-              <ColonyResourceCard colony={mine} rank={rank} spectator={false} compact />
-            )}
-          </aside>
+          </>
         )}
       </div>
 
-      <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
+      <footer className="cockpit-footer text-xs font-bold text-ink-faint">
         <span>
           {status === "finished"
             ? "Match finished"
