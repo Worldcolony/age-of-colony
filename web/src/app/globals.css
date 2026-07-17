@@ -340,7 +340,6 @@ body {
   body:has(.admin-page.is-launch) .app-shell {
     height: 100dvh;
     min-height: 0;
-    overflow: hidden;
     padding-bottom: 12px;
   }
   .admin-page.is-launch {
