@@ -8,7 +8,7 @@ import { worldLink } from "@/three/worldLink";
 // for the page's content. While the sheet is down, touches go to the world.
 
 export interface DockButton {
-  icon: string;
+  icon: ReactNode;
   label: string;
   onClick: () => void;
   active?: boolean;
@@ -16,7 +16,7 @@ export interface DockButton {
 }
 
 export interface ResourcePill {
-  icon: string;
+  icon: ReactNode;
   value: ReactNode;
   title?: string;
 }

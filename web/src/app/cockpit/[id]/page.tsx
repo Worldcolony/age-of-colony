@@ -1,6 +1,5 @@
 "use client";
-import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
@@ -13,10 +12,10 @@ import { GameShell, GameToasts, useGameToasts } from "@/components/GameShell";
 import { AdminColonySwitcher } from "@/components/AdminColonySwitcher";
 import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
-import { ColonyRaceChart } from "@/components/ColonyRaceChart";
 import { SmoothMatchClock } from "@/components/SmoothMatchClock";
 import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
 import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
+import { optionLabel, STYLE_OPTIONS } from "@/lib/strategy";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, game_started: 3 };
@@ -137,7 +136,7 @@ function CockpitRun({ id }: { id: string }) {
   const [streamState, setStreamState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<CockpitTab>("live");
-  const [sheetOpen, setSheetOpen] = useState(false); // map first — this is the game screen
+  const [sheetOpen, setSheetOpen] = useState(true);
   const [mobileSheetView, setMobileSheetView] = useState<"board" | "colony">("board");
   const [cockpitLoading, setCockpitLoading] = useState(true);
   const [cockpitError, setCockpitError] = useState("");
@@ -146,7 +145,6 @@ function CockpitRun({ id }: { id: string }) {
   const [watchedColonyId, setWatchedColonyId] = useState<string | null>(null);
   const [mobileAdminCommandDirty, setMobileAdminCommandDirty] = useState(false);
   const [desktopAdminCommandDirty, setDesktopAdminCommandDirty] = useState(false);
-  const [desktopAdminCommandOpen, setDesktopAdminCommandOpen] = useState(false);
   const defaultAdminColonyIdRef = useRef<string | null>(null);
   const seen = useRef<Set<number>>(new Set());
   const snapshotRequestSequence = useRef(0);
@@ -395,6 +393,8 @@ function CockpitRun({ id }: { id: string }) {
   }, [game?.colonies]);
   const aggregatedFeed = useMemo(() => aggregateFeed(usefulEvents, colonyNames), [usefulEvents, colonyNames]);
   const feedRows = aggregatedFeed.slice(0, activeTab === "feed" ? 18 : 5);
+  const desktopFeedRows = aggregatedFeed.slice(0, 32);
+  const desktopDecisionTab = activeTab === "feed" ? "live" : activeTab;
 
   useEffect(() => {
     const nextColonyId = ownColony?.colonyId ?? null;
@@ -422,15 +422,6 @@ function CockpitRun({ id }: { id: string }) {
     const t = window.setTimeout(() => worldLink.focusColony(mine.colonyId), 900);
     return () => window.clearTimeout(t);
   }, [mine?.colonyId]);
-
-  useEffect(() => {
-    if (!desktopAdminCommandOpen) return;
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setDesktopAdminCommandOpen(false);
-    }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [desktopAdminCommandOpen]);
 
   if (!game || lastSyncAt === null) {
     return (
@@ -478,7 +469,7 @@ function CockpitRun({ id }: { id: string }) {
         >
           <span className="rk">#{index + 1}</span>
           <span className="truncate">{colony.name}</span>
-          <span className="text-xs text-ink-faint">🍬{colonySugar(colony)}</span>
+          <span className="text-xs text-ink-faint">{colonySugar(colony)} Sugar</span>
         </button>
       ))}
     </div>
@@ -486,12 +477,15 @@ function CockpitRun({ id }: { id: string }) {
 
   const mobileTabs = (
     <>
-      <RaceBroadcastPanel
-        colonies={sorted}
-        events={events}
-        compact
-        onOpenRanks={() => router.push(resultsHref)}
+      <StrategyShortcut
+        colony={mine}
+        admin={adminRoom}
+        onOpen={() => {
+          setMobileSheetView("colony");
+          setSheetOpen(true);
+        }}
       />
+      <MatchPulseTimeline events={events} />
       <CockpitTabs
         active={activeTab}
         counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
@@ -530,7 +524,7 @@ function CockpitRun({ id }: { id: string }) {
   );
 
   const mobileShell = (
-    <div className="xl:hidden">
+    <div className="cockpit-mobile-v2 xl:hidden">
       <GameShell
         chip={
           <>
@@ -554,16 +548,16 @@ function CockpitRun({ id }: { id: string }) {
           </>
         }
         resources={[
-          { icon: "🏆", value: rank ? `#${rank}` : "—", title: "Rank" },
-          { icon: "🐜", value: mine?.size ?? 20, title: "Fixed ant voters" },
-          { icon: "🍬", value: mine ? colonySugar(mine) : "—", title: "Sugar" },
+          { icon: <CockpitGlyph name="trophy" />, value: rank ? `#${rank}` : "—", title: "Rank" },
+          { icon: <CockpitGlyph name="ant" />, value: mine?.size ?? 20, title: "Fixed ant voters" },
+          { icon: <CockpitGlyph name="sugar" />, value: mine ? colonySugar(mine) : "—", title: "Sugar" },
         ]}
         nav={[
-          { icon: adminRoom ? "👑" : "🏟️", label: adminRoom ? "Admin" : "Room", onClick: () => router.push(cockpitExitHref) },
-          { icon: "🏆", label: "Ranks", onClick: () => router.push(resultsHref) },
+          { icon: <CockpitGlyph name={adminRoom ? "crown" : "room"} />, label: adminRoom ? "Admin" : "Room", onClick: () => router.push(cockpitExitHref) },
+          { icon: <CockpitGlyph name="trophy" />, label: "Ranks", onClick: () => router.push(resultsHref) },
           {
-            icon: adminRoom ? "👑" : "🍬",
-            label: adminRoom ? "Control" : "Colony",
+            icon: <CockpitGlyph name="strategy" />,
+            label: "Strategy",
             active: sheetOpen && mobileSheetView === "colony",
             disabled: !mine || (!ownColony && !adminRoom),
             onClick: () => {
@@ -586,11 +580,11 @@ function CockpitRun({ id }: { id: string }) {
             }}
           >
             {mobileSheetView === "colony"
-              ? openMarkets.length ? `🎯 Markets · ${openMarkets.length}` : "📊 Decision board"
-              : sheetOpen ? "⛰️ View the map" : openMarkets.length ? `🎯 Markets · ${openMarkets.length} live` : "📊 Decision board"}
+              ? <><CockpitGlyph name="markets" /> {openMarkets.length ? `Markets · ${openMarkets.length}` : "Decision board"}</>
+              : sheetOpen ? <><CockpitGlyph name="map" /> View the map</> : <><CockpitGlyph name="activity" /> {openMarkets.length ? `Cockpit · ${openMarkets.length} live` : "Open cockpit"}</>}
           </button>
         }
-        sheetTitle={mobileSheetView === "colony" ? (adminRoom ? "Admin colony control" : "Your colony") : "Decision board"}
+        sheetTitle={mobileSheetView === "colony" ? (adminRoom ? "Admin colony control" : "Your colony") : "Live colony cockpit"}
         open={sheetOpen}
         onOpenChange={(open) => {
           setSheetOpen(open);
@@ -634,7 +628,7 @@ function CockpitRun({ id }: { id: string }) {
           </div>
         ) : (
           <>
-            <p className="loop-strip">🐜 ants vote → 🤝 consensus enters → 🍬 results change Sugar → 🏆 most Sugar wins</p>
+            <p className="loop-strip">20 ants vote → consensus enters → results change Sugar → most Sugar wins</p>
             {colonyRail}
             {mobileTabs}
           </>
@@ -654,252 +648,170 @@ function CockpitRun({ id }: { id: string }) {
     </div>
   );
 
-  const desktopMatchSummary = (
-    <section className="broadcast-score match-card-media" aria-label={`${p1} versus ${p2}`}>
-      <div className="broadcast-score-status">
-        <p className="eyebrow">Match center</p>
-        {txlineProof && (
-          <span
-            className={txlineProof.verified ? "is-verified" : txlineProof.status === "pending" ? "is-pending" : "is-unavailable"}
-            title={txlineProof.dailyScoresPda || txlineProof.reason || undefined}
-          >
-            {txlineProof.verified ? "✓ TxLINE verified" : txlineProof.status === "pending" ? "TxLINE pending" : "TxLINE unavailable"}
-          </span>
-        )}
-      </div>
-      <h3 className="broadcast-score-teams">{p1} <span>vs</span> {p2}</h3>
-      <div className="broadcast-score-core">
-        <strong>{fmtScore(game?.match?.score)}</strong>
-        <div className="broadcast-score-clock">
-          <SmoothMatchClock
-            match={game?.match}
-            status={status}
-            mode={game?.mode}
-            replayTimeScale={game?.replayTimeScale}
-            replayClockTargetSeconds={game?.replayClockTargetSeconds}
-            showLiveDot
-          />
-          <p>{game?.match?.possessionLabel || txlineStateLabel}</p>
-        </div>
-      </div>
-      <div className="broadcast-score-metrics">
-        <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
-        <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
-        <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
-      </div>
-    </section>
-  );
-
   return (
     <>
     {mobileShell}
-    <div className="cockpit-desktop flex h-[calc(100dvh-36px)] w-full flex-col gap-4 overflow-hidden pb-2 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
-      <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
-        <button className="icon-btn" aria-label={adminRoom ? "Back to admin" : "Back"} onClick={() => router.push(cockpitExitHref)}>←</button>
-        <div className="text-center">
-          <h1 className="hud-title text-[13px]">Live cockpit</h1>
-          <p className="text-xs text-ink-faint">{lastSyncAt ? `Synced ${formatClock(lastSyncAt)}` : "Syncing..."}</p>
+    <div className="cockpit-desktop cockpit-v2 max-xl:hidden">
+      <header className="cockpit-v2-topbar">
+        <div className="cockpit-v2-brand">
+          <button
+            type="button"
+            className="cockpit-v2-icon-button"
+            aria-label={adminRoom ? "Back to admin" : "Back"}
+            onClick={() => router.push(cockpitExitHref)}
+          >
+            <CockpitGlyph name="arrow-left" />
+          </button>
+          <span className="cockpit-v2-brand-mark" aria-hidden="true"><CockpitGlyph name="ant" /></span>
+          <span className="min-w-0">
+            <span className="eyebrow block">Age of Colony</span>
+            <h1>Command cockpit</h1>
+          </span>
         </div>
-        <span className={`status-pill ${RUNNING.has(status) ? "!border-rust/50 !text-rust" : ""}`} aria-live="polite">
-          {RUNNING.has(status) && <span className="live-dot" />}
-          {streamState === "reconnecting" ? "reconnect" : status === "created" ? "not started" : status.replace("_", " ") || "live"}
-        </span>
+
+        <section className="cockpit-v2-score" aria-label={`${p1} versus ${p2}`}>
+          <span className="cockpit-v2-team">{p1}</span>
+          <strong>{fmtScore(game?.match?.score)}</strong>
+          <span className="cockpit-v2-team">{p2}</span>
+          <span className="cockpit-v2-clock">
+            <SmoothMatchClock
+              match={game?.match}
+              status={status}
+              mode={game?.mode}
+              replayTimeScale={game?.replayTimeScale}
+              replayClockTargetSeconds={game?.replayClockTargetSeconds}
+              showLiveDot
+            />
+            <small>{game?.match?.possessionLabel || txlineStateLabel}</small>
+          </span>
+        </section>
+
+        <div className="cockpit-v2-connection">
+          {txlineProof && (
+            <span className="cockpit-v2-proof" data-verified={txlineProof.verified}>
+              {txlineProof.verified ? "TXLINE VERIFIED" : txlineProof.status === "pending" ? "TXLINE PENDING" : "TXLINE OFFLINE"}
+            </span>
+          )}
+          <span className="cockpit-v2-live" aria-live="polite">
+            {RUNNING.has(status) && <span className="live-dot" />}
+            {streamState === "reconnecting" ? "Reconnecting" : status === "created" ? "Not started" : status.replace("_", " ") || "Live"}
+          </span>
+          <small>{lastSyncAt ? `Synced ${formatClock(lastSyncAt)}` : "Syncing..."}</small>
+        </div>
       </header>
 
-      {adminRoom && mine && (
-        <AdminColonySwitcher
-          colonies={sorted}
-          colonyId={mine.colonyId}
-          onSelect={selectAdminColony}
-          onManage={() => setDesktopAdminCommandOpen(true)}
-          dense
-        />
-      )}
+      <main className="cockpit-v2-grid">
+        <aside className="cockpit-v2-panel cockpit-v2-control-pane" aria-label="Colony control">
+          <header className="cockpit-v2-pane-head">
+            <span className="cockpit-v2-pane-icon" aria-hidden="true"><CockpitGlyph name="strategy" /></span>
+            <span className="min-w-0">
+              <span className="eyebrow block">Command center</span>
+              <h2>Colony strategy</h2>
+              <p>Change the entry doctrine before the next market.</p>
+            </span>
+          </header>
 
-      <div className={`cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${adminRoom ? "is-admin-wide" : ""}`}>
-        <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
-          {status === "created" ? (
-            <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:row-span-2 xl:min-h-[360px] xl:justify-center">
-              <p className="eyebrow">Simulation dashboard</p>
-              <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
-              <p className="mx-auto max-w-md text-sm text-ink-soft">
-                {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
-              </p>
-              <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(cockpitExitHref)}>
-                {adminRoom ? "Back to admin" : "Back to room"}
-              </button>
-            </section>
-          ) : (
-            <>
-              <RaceBroadcastPanel
+          <div className="cockpit-v2-control-scroll">
+            {adminRoom && mine && (
+              <AdminColonySwitcher
+                compact
                 colonies={sorted}
-                events={events}
-                matchSummary={desktopMatchSummary}
-                onOpenRanks={() => router.push(resultsHref)}
+                colonyId={mine.colonyId}
+                onSelect={selectAdminColony}
               />
+            )}
 
-              <section className="cockpit-markets glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
-                <div className="cockpit-markets-head">
-                  <div>
-                    <p className="eyebrow">Colony decisions</p>
-                    <h2 className="text-2xl font-bold">Live markets</h2>
-                  </div>
-                  <div className="cockpit-markets-controls">
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      <span className="status-pill">{openMarkets.length} live</span>
-                      <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
-                    </div>
-                    <CockpitTabs
-                      active={activeTab}
-                      counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-                      onChange={setActiveTab}
-                    />
-                  </div>
-                </div>
-
-                <div className="cockpit-markets-body min-h-0 overflow-y-auto">
-                  {activeTab === "live" && (
-                    <LiveTab
-                      openMarkets={openMarkets}
-                      openSummary={openSummary}
-                      selectedMarket={selectedMarket}
-                      selectedMarketId={effectiveSelectedMarketId}
-                      settledMarkets={settledMarkets}
-                      colony={mine}
-                      colonyLabel={colonyFocusLabel}
-                      waitingForKickoff={txlineWaiting}
-                      matchStateLabel={txlineStateLabel}
-                      onSelectMarket={setSelectedMarketId}
-                      onSelectSettled={(marketId) => {
-                        setSelectedSettledId(marketId);
-                        setActiveTab("settled");
-                      }}
-                    />
-                  )}
-
-                  {activeTab === "settled" && (
-                    <SettledTab
-                      settledMarkets={settledMarkets}
-                      selectedSettled={selectedSettled}
-                      selectedSettledId={effectiveSelectedSettledId}
-                      colony={mine}
-                      colonyLabel={colonyFocusLabel}
-                      onSelectSettled={setSelectedSettledId}
-                    />
-                  )}
-
-                  {activeTab === "feed" && (
-                    <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
-                  )}
-                </div>
-              </section>
-            </>
-          )}
-        </main>
-
-        {!adminRoom && (
-          <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
-            {mine && ownColony ? (
+            {mine && (adminRoom || ownColony) ? (
               <ColonyCommandPanel
                 gameId={id}
                 status={status}
                 colony={mine}
                 anonymousId={identity.anonymousId}
-                controlMode="player"
+                controlMode={adminRoom ? "admin" : "player"}
                 compactLayout
+                expandedByDefault
+                onDirtyChange={adminRoom ? setDesktopAdminCommandDirty : undefined}
                 onGameChange={setGame}
-                initialScope="ants"
+                initialScope="colony"
                 rank={rank}
               />
             ) : (
-              <ColonyResourceCard colony={mine} rank={rank} spectator={false} compact />
+              <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} compact />
             )}
-          </aside>
-        )}
-      </div>
-
-      <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
-        <span>
-          {status === "finished"
-            ? "Match finished"
-            : status === "stopped" || status === "error"
-              ? "Match interrupted"
-              : streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}
-        </span>
-        <button className="quiet-link" onClick={() => router.push(resultsHref)}>
-          {status === "finished" ? "View final results" : "Ranks"}
-        </button>
-      </footer>
-    </div>
-
-    {adminRoom && desktopAdminCommandOpen && mine && createPortal((
-      <div
-        className="admin-command-drawer-layer max-xl:hidden"
-        role="presentation"
-        onMouseDown={(event) => {
-          if (event.currentTarget === event.target) setDesktopAdminCommandOpen(false);
-        }}
-      >
-        <aside
-          className="admin-command-drawer"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Manage orders for ${mine.name}`}
-        >
-          <ColonyCommandPanel
-            gameId={id}
-            status={status}
-            colony={mine}
-            anonymousId={identity.anonymousId}
-            controlMode="admin"
-            compactLayout
-            expandedByDefault
-            onRequestClose={() => setDesktopAdminCommandOpen(false)}
-            onDirtyChange={setDesktopAdminCommandDirty}
-            onGameChange={setGame}
-            initialScope="colony"
-            rank={rank}
-          />
+          </div>
         </aside>
-      </div>
-    ), document.body)}
+
+        <section className="cockpit-v2-panel cockpit-v2-decisions" aria-labelledby="decision-title">
+          <header className="cockpit-v2-pane-head cockpit-v2-pane-head-split">
+            <span className="cockpit-v2-pane-icon" aria-hidden="true"><CockpitGlyph name="markets" /></span>
+            <span className="min-w-0">
+              <span className="eyebrow block">Decision engine</span>
+              <h2 id="decision-title">Markets</h2>
+              <p>Watch the vote converge and the colony’s current call.</p>
+            </span>
+            <span className="cockpit-v2-counts" aria-label={`${openMarkets.length} open and ${settledMarkets.length} settled markets`}>
+              <b>{openMarkets.length}<small>Open</small></b>
+              <b>{settledMarkets.length}<small>Settled</small></b>
+            </span>
+          </header>
+
+          <DecisionTabs
+            active={desktopDecisionTab}
+            counts={{ live: openMarkets.length, settled: settledMarkets.length }}
+            onChange={setActiveTab}
+          />
+
+          <div className="cockpit-v2-decision-scroll">
+            {status === "created" ? (
+              <div className="cockpit-v2-empty">
+                <CockpitGlyph name="activity" />
+                <h2>{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
+                <p>{adminRoom ? "Set the colony doctrine now, then return to admin setup to launch." : "Set your strategy now. Markets will appear after the room starts."}</p>
+                <button className="btn btn-primary" onClick={() => router.push(cockpitExitHref)}>
+                  {adminRoom ? "Back to admin" : "Back to room"}
+                </button>
+              </div>
+            ) : desktopDecisionTab === "live" ? (
+              <LiveTab
+                openMarkets={openMarkets}
+                openSummary={openSummary}
+                selectedMarket={selectedMarket}
+                selectedMarketId={effectiveSelectedMarketId}
+                settledMarkets={settledMarkets}
+                colony={mine}
+                colonyLabel={colonyFocusLabel}
+                waitingForKickoff={txlineWaiting}
+                matchStateLabel={txlineStateLabel}
+                onSelectMarket={setSelectedMarketId}
+                onSelectSettled={(marketId) => {
+                  setSelectedSettledId(marketId);
+                  setActiveTab("settled");
+                }}
+              />
+            ) : (
+              <SettledTab
+                settledMarkets={settledMarkets}
+                selectedSettled={selectedSettled}
+                selectedSettledId={effectiveSelectedSettledId}
+                colony={mine}
+                colonyLabel={colonyFocusLabel}
+                onSelectSettled={setSelectedSettledId}
+              />
+            )}
+          </div>
+        </section>
+
+        <EventRail
+          events={events}
+          feedRows={desktopFeedRows}
+          onOpenRanks={() => router.push(resultsHref)}
+        />
+      </main>
+    </div>
 
     {spotlight && <MatchEventSpotlight spotlight={spotlight} />}
 
     </>
-  );
-}
-
-function RaceBroadcastPanel({
-  colonies,
-  events,
-  compact = false,
-  matchSummary,
-  onOpenRanks,
-}: {
-  colonies: Colony[];
-  events: GameEvent[];
-  compact?: boolean;
-  matchSummary?: ReactNode;
-  onOpenRanks: () => void;
-}) {
-  return (
-    <section className={`race-broadcast ${compact ? "is-compact" : ""}`}>
-      <div className="race-broadcast-head">
-        <div>
-          <p className="eyebrow">Live colony race</p>
-          <h2>Who is winning the match?</h2>
-          <p>Every settled call moves Sugar. Match events explain why markets open.</p>
-        </div>
-        <button className="quiet-link text-sm" onClick={onOpenRanks}>Full rankings →</button>
-      </div>
-
-      <div className="race-broadcast-stage">
-        {matchSummary}
-        <ColonyRaceChart colonies={colonies} events={events} hero />
-        <MatchPulseTimeline events={events} />
-      </div>
-    </section>
   );
 }
 
@@ -958,6 +870,98 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
         </div>
       )}
     </section>
+  );
+}
+
+function StrategyShortcut({
+  colony,
+  admin,
+  onOpen,
+}: {
+  colony?: Colony;
+  admin: boolean;
+  onOpen: () => void;
+}) {
+  const doctrine = colony ? optionLabel(STYLE_OPTIONS, colony.style) : "No colony selected";
+  return (
+    <button
+      type="button"
+      className="mobile-strategy-shortcut"
+      disabled={!colony}
+      onClick={onOpen}
+      aria-label={colony ? `Change ${colony.name} strategy. Current doctrine: ${doctrine}` : "No colony available"}
+    >
+      <span className="mobile-strategy-icon" aria-hidden="true"><CockpitGlyph name="strategy" /></span>
+      <span className="min-w-0 text-left">
+        <small>{admin ? "Controlled colony" : "Your strategy"}</small>
+        <strong>{colony?.name ?? "No colony"}</strong>
+        <span>{doctrine} doctrine · applies next market</span>
+      </span>
+      <span className="mobile-strategy-action">Change <CockpitGlyph name="arrow-right" /></span>
+    </button>
+  );
+}
+
+function DecisionTabs({
+  active,
+  counts,
+  onChange,
+}: {
+  active: "live" | "settled";
+  counts: { live: number; settled: number };
+  onChange: (tab: "live" | "settled") => void;
+}) {
+  return (
+    <div className="cockpit-v2-decision-tabs" role="tablist" aria-label="Market views">
+      <button type="button" role="tab" aria-selected={active === "live"} data-active={active === "live"} onClick={() => onChange("live")}>
+        <span className="live-dot" aria-hidden="true" /> Live markets <b>{counts.live}</b>
+      </button>
+      <button type="button" role="tab" aria-selected={active === "settled"} data-active={active === "settled"} onClick={() => onChange("settled")}>
+        Settled <b>{counts.settled}</b>
+      </button>
+    </div>
+  );
+}
+
+function EventRail({
+  events,
+  feedRows,
+  onOpenRanks,
+}: {
+  events: GameEvent[];
+  feedRows: FeedRow[];
+  onOpenRanks: () => void;
+}) {
+  return (
+    <aside className="cockpit-v2-panel cockpit-v2-events" aria-label="Live events">
+      <header className="cockpit-v2-pane-head cockpit-v2-pane-head-split">
+        <span className="cockpit-v2-pane-icon" aria-hidden="true"><CockpitGlyph name="activity" /></span>
+        <span className="min-w-0">
+          <span className="eyebrow block">Signal stream</span>
+          <h2>Live events</h2>
+          <p>Match actions and colony outcomes, newest first.</p>
+        </span>
+        <button type="button" className="cockpit-v2-ranks" onClick={onOpenRanks}>
+          <CockpitGlyph name="trophy" /> Ranks
+        </button>
+      </header>
+
+      <MatchPulseTimeline events={events} />
+
+      <section className="cockpit-v2-feed" aria-label="Recent event feed">
+        <header>
+          <span>Timeline</span>
+          <b>{feedRows.length} recent</b>
+        </header>
+        <div className="cockpit-v2-feed-scroll">
+          {feedRows.length ? feedRows.map((row) => (
+            <FeedRowLine key={row.key} row={row} />
+          )) : (
+            <p className="cockpit-v2-feed-empty">Waiting for the first live signal.</p>
+          )}
+        </div>
+      </section>
+    </aside>
   );
 }
 
@@ -1247,7 +1251,7 @@ function SettledRail({
             type="button"
             aria-pressed={selected}
             onClick={() => onSelect(market.id)}
-            className={`min-w-[132px] rounded-md border-2 p-3 text-left transition ${
+            className={`settled-market-card min-w-[132px] rounded-md border-2 p-3 text-left transition ${
               selected
                 ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] text-ink shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
                 : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] text-ink-soft"
@@ -2365,6 +2369,37 @@ function compactEventMessage(event: GameEvent) {
   }
   if (event.kind === "settlement") return message.replace(/^Result /, "");
   return `${kindIcon(event.kind)} ${message}`;
+}
+
+type CockpitGlyphName =
+  | "activity"
+  | "ant"
+  | "arrow-left"
+  | "arrow-right"
+  | "crown"
+  | "map"
+  | "markets"
+  | "room"
+  | "strategy"
+  | "sugar"
+  | "trophy";
+
+function CockpitGlyph({ name }: { name: CockpitGlyphName }) {
+  return (
+    <svg className="cockpit-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {name === "activity" && <><path d="M3 12h4l2.2-5 4.1 10 2.3-5H21" /><path d="M4 20h16" /></>}
+      {name === "ant" && <><circle cx="12" cy="7" r="2.2" /><ellipse cx="12" cy="13" rx="3" ry="3.6" /><ellipse cx="12" cy="19" rx="3.8" ry="2.5" /><path d="m10.4 5.3-2-2M13.6 5.3l2-2M9.4 11 5 8m4 6-5 1m5.6 2.5L6 21m8.6-10L19 8m-4 6 5 1m-5.6 2.5L18 21" /></>}
+      {name === "arrow-left" && <><path d="m15 18-6-6 6-6" /><path d="M9 12h11" /></>}
+      {name === "arrow-right" && <><path d="m9 18 6-6-6-6" /><path d="M4 12h11" /></>}
+      {name === "crown" && <><path d="m4 8 4 4 4-7 4 7 4-4-2 10H6L4 8Z" /><path d="M7 21h10" /></>}
+      {name === "map" && <><path d="m3 6 5-3 8 3 5-3v15l-5 3-8-3-5 3V6Z" /><path d="M8 3v15m8-12v15" /></>}
+      {name === "markets" && <><path d="M4 19V9m6 10V5m6 14v-7m4 7V3" /><path d="M2 21h20" /></>}
+      {name === "room" && <><path d="m3 11 9-8 9 8" /><path d="M5 10v11h14V10M9 21v-7h6v7" /></>}
+      {name === "strategy" && <><path d="M4 5h10M18 5h2M4 12h2m4 0h10M4 19h8m4 0h4" /><circle cx="16" cy="5" r="2" /><circle cx="8" cy="12" r="2" /><circle cx="14" cy="19" r="2" /></>}
+      {name === "sugar" && <><path d="m8 3 8 1 4 7-4 8-8 2-5-7 1-7 4-4Z" /><path d="m8 8 4-2 4 3-1 5-5 2-3-3 1-5Z" /></>}
+      {name === "trophy" && <><path d="M8 4h8v4c0 4-1.8 6-4 6S8 12 8 8V4Z" /><path d="M8 6H4v2c0 2.2 1.8 4 4 4m8-6h4v2c0 2.2-1.8 4-4 4m-4 2v4m-4 2h8" /></>}
+    </svg>
+  );
 }
 
 function formatClock(ms: number) {
