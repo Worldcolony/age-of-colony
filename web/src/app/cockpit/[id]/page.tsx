@@ -786,7 +786,7 @@ function CockpitRun({ id }: { id: string }) {
         </main>
 
         <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
-          {mine && (ownColony || adminRoom) && (
+          {mine && (ownColony || adminRoom) ? (
             <ColonyCommandPanel
               gameId={id}
               status={status}
@@ -797,9 +797,11 @@ function CockpitRun({ id }: { id: string }) {
               onDirtyChange={adminRoom ? setDesktopAdminCommandDirty : undefined}
               onGameChange={setGame}
               initialScope={adminRoom ? "colony" : "ants"}
+              rank={rank}
             />
+          ) : (
+            <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} compact />
           )}
-          <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} compact />
         </aside>
       </div>
 

@@ -346,6 +346,147 @@ body {
   container-name: colony-command;
   container-type: inline-size;
 }
+.colony-command-panel.is-compact {
+  gap: 10px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(176, 126, 28, .1), transparent 42%),
+    rgba(243, 235, 211, .97);
+}
+.colony-console-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.colony-console-head h2 {
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.colony-console-head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.colony-console-state {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(116, 85, 30, .3);
+  border-radius: 999px;
+  padding: 4px 7px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+}
+.colony-console-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.colony-console-state.is-live { border-color: rgba(78, 126, 42, .42); color: var(--color-green); }
+.colony-console-state.is-dirty { border-color: rgba(176, 126, 28, .5); color: var(--color-gold-deep); }
+.colony-console-state.is-locked { color: var(--color-ink-faint); }
+.colony-console-rank {
+  display: grid;
+  min-width: 32px;
+  min-height: 28px;
+  place-items: center;
+  border: 1px solid rgba(78, 126, 42, .42);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--color-green);
+}
+.colony-console-manage {
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 5px 3px 5px 7px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--color-gold-deep);
+  cursor: pointer;
+}
+.colony-console-manage:hover { color: var(--color-rust); }
+.colony-console-manage:focus-visible {
+  outline: 3px solid rgba(176, 126, 28, .3);
+  outline-offset: 2px;
+}
+.colony-console-score {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1.25fr) repeat(2, minmax(58px, .72fr));
+  align-items: stretch;
+  overflow: hidden;
+  border: 2px solid rgba(74, 58, 30, .72);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 0 50%, rgba(240, 212, 136, .14), transparent 48%),
+    #2d2f25;
+  color: #fff9e8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+.colony-console-score-main {
+  min-width: 0;
+  padding: 8px 10px;
+}
+.colony-console-score-main > span,
+.colony-console-score-stat > span {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: rgba(255, 249, 232, .5);
+}
+.colony-console-score-main p {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 2px;
+}
+.colony-console-score-main strong {
+  font-family: var(--font-mono);
+  font-size: 27px;
+  line-height: 1;
+  color: #f0d488;
+}
+.colony-console-score-main b {
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+.colony-console-score-main b.is-positive { color: #b9ef6a; }
+.colony-console-score-main b.is-negative { color: #ff8b72; }
+.colony-console-score-stat {
+  display: grid;
+  min-width: 0;
+  place-content: center;
+  border-left: 1px solid rgba(240, 212, 136, .17);
+  padding: 7px 5px;
+  text-align: center;
+}
+.colony-console-score-stat strong {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: #fff9e8;
+}
 .colony-command-panel.is-compact .command-summary-icon {
   display: grid;
   width: 30px;
@@ -354,6 +495,16 @@ body {
   border: 1px solid rgba(116, 85, 30, .24);
   border-radius: 7px;
   background: rgba(255, 250, 236, .58);
+  color: var(--color-gold-deep);
+}
+.colony-command-panel.is-compact .command-summary-icon svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .colony-command-panel.is-compact .command-summary-copy > span {
   display: -webkit-box;
@@ -361,6 +512,26 @@ body {
   white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+.colony-command-panel.is-compact .command-summary-card {
+  border-color: rgba(116, 85, 30, .27);
+  background: rgba(255, 250, 236, .58);
+  box-shadow: none;
+}
+.colony-command-panel.is-compact .command-summary-card:hover {
+  border-color: rgba(176, 126, 28, .66);
+  background: rgba(255, 248, 219, .9);
+}
+.command-summary-arrow {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--color-gold-deep);
+}
+.colony-console-note {
+  padding: 0 2px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-ink-faint);
 }
 .colony-command-disclosure { animation: command-unfold 160ms ease-out both; }
 .ant-order-editor { background: rgba(249, 243, 226, 0.58); }

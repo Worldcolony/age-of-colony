@@ -22,6 +22,12 @@ import {
   strategySummary,
   type StyleDoctrine,
 } from "@/lib/strategy";
+import {
+  colonyAvailableSugar,
+  colonyReservedSugar,
+  colonySugar,
+  colonySugarNet,
+} from "@/lib/sugar";
 import type {
   AnalysisRole,
   Ant,
@@ -46,6 +52,7 @@ export interface ColonyCommandPanelProps {
   initialScope?: CommandScope;
   expandedByDefault?: boolean;
   onRequestClose?: () => void;
+  rank?: number;
 }
 
 type CommandScope = "colony" | "ants";
@@ -68,6 +75,7 @@ function ColonyCommandPanelState({
   initialScope = "ants",
   expandedByDefault = false,
   onRequestClose,
+  rank = 0,
 }: ColonyCommandPanelProps) {
   const disclosureId = useId();
   const requestSequence = useRef(0);
@@ -108,6 +116,10 @@ function ColonyCommandPanelState({
     return !ant || !sameAntCommand(entry.value, ant);
   });
   const commandDirty = globalDirty || antDraftDirty;
+  const sugar = colonySugar(colony);
+  const sugarAvailable = colonyAvailableSugar(colony);
+  const sugarReserved = colonyReservedSugar(colony);
+  const sugarNet = colonySugarNet(colony);
   const roleCounts = useMemo(() => Object.fromEntries(
     ANALYSIS_ROLE_OPTIONS.map((option) => [
       option.value,
@@ -358,31 +370,78 @@ function ColonyCommandPanelState({
 
   return (
     <section className={`colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3 ${compactLayout ? "is-compact" : ""}`} aria-labelledby={`${disclosureId}-title`}>
-      <div className="colony-command-head flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="eyebrow">{adminControl ? "Selected admin colony" : "Your colony"}</p>
-          <h2 id={`${disclosureId}-title`} className={`${compactLayout ? "leading-snug" : "truncate"} text-base font-bold`}>Control {colony.name}</h2>
-          <p className="mt-1 text-xs leading-relaxed text-ink-faint">
-            {adminControl
-              ? "These controls affect only this admin colony. New orders apply to the next market."
-              : "Change the whole colony or choose one ant. New orders apply to the next market."}
-          </p>
+      {compactLayout ? (
+        <>
+          <div className="colony-console-head">
+            <div className="min-w-0">
+              <p className="eyebrow">{adminControl ? "Admin colony" : "Your colony"}</p>
+              <h2 id={`${disclosureId}-title`}>{colony.name}</h2>
+            </div>
+            <div className="colony-console-head-actions">
+              <span className={`colony-console-state ${commandDirty ? "is-dirty" : editable ? "is-live" : "is-locked"}`}>
+                <i aria-hidden="true" />
+                {commandDirty ? "Draft" : editable ? "Live" : "Locked"}
+              </span>
+              <span className="colony-console-rank">#{rank || "–"}</span>
+              <button
+                type="button"
+                className="colony-console-manage"
+                aria-expanded={expanded}
+                aria-controls={disclosureId}
+                onClick={toggleExpanded}
+              >
+                {expanded ? "Close" : "Manage"}
+              </button>
+            </div>
+          </div>
+
+          <div className="colony-console-score" aria-label={`${sugar} Sugar, ${sugarAvailable} available, ${sugarReserved} committed`}>
+            <div className="colony-console-score-main">
+              <span>Sugar</span>
+              <p aria-live="polite" aria-atomic="true">
+                <strong>{sugar}</strong>
+                <b className={sugarNet < 0 ? "is-negative" : "is-positive"}>
+                  Δ {sugarNet > 0 ? "+" : ""}{sugarNet}
+                </b>
+              </p>
+            </div>
+            <div className="colony-console-score-stat">
+              <span>Available</span>
+              <strong>{sugarAvailable}</strong>
+            </div>
+            <div className="colony-console-score-stat">
+              <span>Committed</span>
+              <strong>{sugarReserved}</strong>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="colony-command-head flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="eyebrow">{adminControl ? "Selected admin colony" : "Your colony"}</p>
+            <h2 id={`${disclosureId}-title`} className="truncate text-base font-bold">Control {colony.name}</h2>
+            <p className="mt-1 text-xs leading-relaxed text-ink-faint">
+              {adminControl
+                ? "These controls affect only this admin colony. New orders apply to the next market."
+                : "Change the whole colony or choose one ant. New orders apply to the next market."}
+            </p>
+          </div>
+          <div className="colony-command-actions flex shrink-0 items-center gap-2">
+            <span className={`status-pill ${commandDirty ? "!border-gold/60 !text-gold-deep" : editable ? "!border-green/50 !text-green" : ""}`}>
+              {commandDirty ? "Unsaved draft" : editable ? "Live changes" : "Read-only"}
+            </span>
+            <button
+              type="button"
+              className="quiet-link min-h-11 rounded-md px-2 text-sm"
+              aria-expanded={expanded}
+              aria-controls={disclosureId}
+              onClick={toggleExpanded}
+            >
+              {expanded ? "Close" : "Manage"}
+            </button>
+          </div>
         </div>
-        <div className="colony-command-actions flex shrink-0 items-center gap-2">
-          <span className={`status-pill ${commandDirty ? "!border-gold/60 !text-gold-deep" : editable ? "!border-green/50 !text-green" : ""}`}>
-            {commandDirty ? "Unsaved draft" : editable ? "Live changes" : "Read-only"}
-          </span>
-          <button
-            type="button"
-            className="quiet-link min-h-11 rounded-md px-2 text-sm"
-            aria-expanded={expanded}
-            aria-controls={disclosureId}
-            onClick={toggleExpanded}
-          >
-            {expanded ? "Close" : "Manage"}
-          </button>
-        </div>
-      </div>
+      )}
 
       {!expanded && (
         <div className={`colony-command-summary grid gap-2 ${compactLayout ? "is-compact" : "sm:grid-cols-2"}`}>
@@ -390,35 +449,45 @@ function ColonyCommandPanelState({
             type="button"
             className={`command-summary-card well group text-left transition hover:border-gold/60 focus-visible:border-gold ${
               compactLayout
-                ? "is-compact grid min-h-[58px] grid-cols-[30px_minmax(0,1fr)] items-center gap-2 p-2"
+                ? "is-compact grid min-h-[58px] grid-cols-[30px_minmax(0,1fr)_auto] items-center gap-2 p-2"
                 : "grid min-h-24 gap-1 p-3"
             }`}
             onClick={() => openScope("colony")}
           >
-            <span className="command-summary-icon text-lg" aria-hidden="true">👑</span>
+            <span className="command-summary-icon" aria-hidden="true">
+              {compactLayout ? <CommandSummaryIcon kind="strategy" /> : "👑"}
+            </span>
             <span className="command-summary-copy min-w-0">
               <strong className="block text-sm">Colony strategy</strong>
               <span className="block text-xs leading-snug text-ink-faint">
                 Doctrine {optionLabel(STYLE_OPTIONS, colony.style)}
               </span>
             </span>
+            {compactLayout && <span className="command-summary-arrow" aria-hidden="true">→</span>}
           </button>
           <button
             type="button"
             className={`command-summary-card well group text-left transition hover:border-gold/60 focus-visible:border-gold ${
               compactLayout
-                ? "is-compact grid min-h-[58px] grid-cols-[30px_minmax(0,1fr)] items-center gap-2 p-2"
+                ? "is-compact grid min-h-[58px] grid-cols-[30px_minmax(0,1fr)_auto] items-center gap-2 p-2"
                 : "grid min-h-24 gap-1 p-3"
             }`}
             onClick={() => openScope("ants")}
           >
-            <span className="command-summary-icon text-lg" aria-hidden="true">🐜</span>
+            <span className="command-summary-icon" aria-hidden="true">
+              {compactLayout ? <CommandSummaryIcon kind="ants" /> : "🐜"}
+            </span>
             <span className="command-summary-copy min-w-0">
               <strong className="block text-sm">{antsLabel}</strong>
               <span className="block text-xs leading-snug text-ink-faint">{colony.antsAlive} alive · select one to change its orders</span>
             </span>
+            {compactLayout && <span className="command-summary-arrow" aria-hidden="true">→</span>}
           </button>
         </div>
+      )}
+
+      {compactLayout && !expanded && (
+        <p className="colony-console-note">Orders apply to the next market.</p>
       )}
 
       {announcement && (
@@ -650,6 +719,24 @@ function ColonyCommandPanelState({
         </div>
       )}
     </section>
+  );
+}
+
+function CommandSummaryIcon({ kind }: { kind: "strategy" | "ants" }) {
+  if (kind === "strategy") {
+    return (
+      <svg viewBox="0 0 24 24" role="presentation">
+        <path d="M4 7.5 8.5 12 12 5l3.5 7L20 7.5l-1.4 10h-13L4 7.5Z" />
+        <path d="M6 20h12" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" role="presentation">
+      <circle cx="12" cy="7" r="2.5" />
+      <ellipse cx="12" cy="14" rx="3.5" ry="4.5" />
+      <path d="m8.8 11-4-2m4 5H4m4.8 3-4 2m10.4-8 4-2m-4 5H20m-4.8 3 4 2M9.8 5 7.5 2.5M14.2 5l2.3-2.5" />
+    </svg>
   );
 }
 
