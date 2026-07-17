@@ -698,10 +698,9 @@ function CockpitRun({ id }: { id: string }) {
                 </span>
               </div>
             )}
-            <div className="flex items-center justify-between gap-3">
-              <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p1)}</span>
-              <div className="min-w-0 flex-1 overflow-hidden text-center">
-                <p className="truncate text-sm font-bold text-ink-soft">{p1} vs {p2}</p>
+            <div className="min-w-0">
+              <div className="min-w-0 w-full overflow-hidden text-center">
+                <p className="mx-auto max-w-full text-xs font-bold leading-tight text-ink-soft">{p1} vs {p2}</p>
                 <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
                 <div className="match-clock-panel">
                   <SmoothMatchClock
@@ -715,7 +714,6 @@ function CockpitRun({ id }: { id: string }) {
                   <p className="truncate">{game?.match?.possessionLabel || txlineStateLabel}</p>
                 </div>
               </div>
-              <span className="plate grid h-10 w-12 place-items-center text-xl">{flag(p2)}</span>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
               <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
@@ -724,8 +722,6 @@ function CockpitRun({ id }: { id: string }) {
             </div>
           </section>
 
-          <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} />
-          <RunStatusCard gameId={id} status={status} streamState={streamState} lastSyncAt={lastSyncAt} />
         </aside>
 
         <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
@@ -820,6 +816,7 @@ function CockpitRun({ id }: { id: string }) {
               initialScope={adminRoom ? "colony" : "ants"}
             />
           )}
+          <ColonyResourceCard colony={mine} rank={rank} spectator={adminRoom} compact />
         </aside>
       </div>
 
@@ -840,36 +837,6 @@ function CockpitRun({ id }: { id: string }) {
     {spotlight && <MatchEventSpotlight spotlight={spotlight} />}
 
     </>
-  );
-}
-
-function RunStatusCard({
-  gameId,
-  status,
-  streamState,
-  lastSyncAt,
-}: {
-  gameId: string;
-  status: string;
-  streamState: "connecting" | "live" | "reconnecting";
-  lastSyncAt: number | null;
-}) {
-  const runLabel = status ? status.replace(/_/g, " ") : "live";
-  const streamLabel = streamState === "reconnecting" ? "reconnect" : streamState;
-  const shortId = gameId.length > 8 ? `${gameId.slice(0, 4)}...${gameId.slice(-4)}` : gameId;
-  return (
-    <section className="glass flex min-w-0 flex-col gap-3 p-3">
-      <div>
-        <p className="eyebrow">Run state</p>
-        <h2 className="text-base font-bold">Replay control</h2>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <MiniStat label="Mode" value={runLabel} tone={RUNNING.has(status) ? "gold" : undefined} />
-        <MiniStat label="Stream" value={streamLabel} tone={streamState === "live" ? "green" : undefined} />
-        <MiniStat label="Game" value={shortId} />
-        <MiniStat label="Sync" value={lastSyncAt ? formatClock(lastSyncAt) : "..."} />
-      </div>
-    </section>
   );
 }
 
@@ -1697,16 +1664,6 @@ function EventSpotlightGlyph({ glyph }: { glyph: EventSpotlight["glyph"] }) {
     resolved: "✓",
   };
   return <span className="match-spotlight-glyph" aria-hidden="true">{labels[glyph]}</span>;
-}
-
-function MiniStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "green" }) {
-  const color = tone === "gold" ? "text-gold" : tone === "green" ? "text-green" : "text-ink";
-  return (
-    <div className="well px-2 py-2">
-      <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
-      <p className={`truncate font-mono text-base font-bold ${color}`}>{value}</p>
-    </div>
-  );
 }
 
 function EmptyState({ title, body }: { title: string; body: string }) {

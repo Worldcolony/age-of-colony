@@ -1763,9 +1763,9 @@ body {
     gap: 8px;
   }
   .race-broadcast-stage .colony-race-head h3 {
-    max-width: 150px;
+    max-width: 200px;
     overflow: hidden;
-    font-size: 14px;
+    font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }

@@ -6,10 +6,12 @@ export function ColonyResourceCard({
   colony,
   rank,
   spectator = false,
+  compact = false,
 }: {
   colony?: Colony;
   rank: number;
   spectator?: boolean;
+  compact?: boolean;
 }) {
   if (!colony) {
     return <div className="glass p-4 text-center text-sm text-ink-faint">Create a colony to compete for Sugar.</div>;
@@ -20,6 +22,38 @@ export function ColonyResourceCard({
   const available = colonyAvailableSugar(colony);
   const net = colonySugarNet(colony);
   const temperament = optionLabel(STYLE_OPTIONS, colony.style);
+
+  if (compact) {
+    return (
+      <section className="glass bracket overflow-hidden p-3" aria-labelledby="colony-sugar-summary-title">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="eyebrow">Colony score</p>
+            <h2 id="colony-sugar-summary-title" className="truncate text-base font-bold">{colony.name}</h2>
+          </div>
+          <span className="status-pill !border-green/50 !text-green">#{rank || "–"}</span>
+        </div>
+
+        <div className="resource-granary mt-3 rounded-md border-2 border-[color:rgba(176,126,28,0.48)] p-3">
+          <div className="flex min-w-0 items-end justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-mono text-[9px] uppercase tracking-[0.12em] text-gold-deep">Sugar</p>
+              <p className="mt-1 flex min-w-0 items-baseline gap-2" aria-live="polite" aria-atomic="true">
+                <strong className="font-mono text-3xl text-ink">{sugar}</strong>
+                <span className={`truncate font-mono text-[10px] font-bold ${net < 0 ? "text-rust" : "text-green"}`}>
+                  {net > 0 ? "+" : ""}{net} this match
+                </span>
+              </p>
+            </div>
+            <div className="shrink-0 text-right text-[10px] font-bold text-ink-faint">
+              <p>{available} available</p>
+              <p>{reserved > 0 ? `${reserved} committed` : "None committed"}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="glass bracket overflow-hidden p-4" aria-labelledby="colony-sugar-title">
