@@ -1294,6 +1294,109 @@ body {
   gap: 12px;
 }
 
+.broadcast-score {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  border: 2px solid rgba(74, 58, 30, 0.34);
+  border-radius: var(--radius-glass);
+  background:
+    radial-gradient(circle at 50% -20%, rgba(240, 212, 136, 0.32), transparent 48%),
+    linear-gradient(180deg, rgba(255, 253, 245, 0.98), rgba(232, 222, 197, 0.95));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.62), 2px 2px 0 rgba(74,58,30,.14);
+  padding: 10px;
+}
+.broadcast-score-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.broadcast-score-status > span {
+  overflow: hidden;
+  border: 1px solid rgba(116, 85, 30, .28);
+  border-radius: 999px;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.broadcast-score-status > span.is-verified { color: var(--color-green); background: rgba(185,239,106,.12); }
+.broadcast-score-status > span.is-pending { color: var(--color-gold-deep); background: rgba(240,212,136,.18); }
+.broadcast-score-status > span.is-unavailable { color: var(--color-rust); background: rgba(194,90,58,.1); }
+.broadcast-score-teams {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: clamp(12px, 1vw, 16px);
+  font-weight: 800;
+  line-height: 1.3;
+  text-align: center;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.broadcast-score-teams span { color: var(--color-ink-faint); font-size: .82em; }
+.broadcast-score-core {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  justify-items: center;
+  gap: 4px;
+  min-width: 0;
+  border: 2px solid rgba(135, 96, 18, .32);
+  border-radius: 7px;
+  background: rgba(255, 252, 238, .74);
+  padding: 5px 7px;
+}
+.broadcast-score-core > strong {
+  font-family: var(--font-mono);
+  font-size: clamp(26px, 2.4vw, 38px);
+  line-height: 1;
+  color: var(--color-gold-deep);
+  white-space: nowrap;
+}
+.broadcast-score-clock {
+  width: 100%;
+  min-width: 0;
+  border-top: 1px solid rgba(116, 85, 30, .2);
+  padding-top: 4px;
+  text-align: center;
+}
+.broadcast-score-clock .smooth-match-clock {
+  max-width: 100%;
+  font-size: clamp(20px, 1.8vw, 29px);
+  line-height: 1;
+}
+.broadcast-score-clock .smooth-match-clock-value { min-width: 0; }
+.broadcast-score-clock > p {
+  overflow: hidden;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-ink-faint);
+}
+.broadcast-score-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: auto;
+  text-align: center;
+}
+.broadcast-score-metrics .plate { min-width: 0; padding: 4px 3px; }
+.broadcast-score-metrics .plate p:first-child { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.broadcast-score-metrics .plate p:last-child { font-size: 16px; }
+
 .colony-race {
   overflow: hidden;
   border: 2px solid rgba(74, 58, 30, 0.34);
@@ -1655,7 +1758,7 @@ body {
 
 @media (min-width: 1280px) {
   .cockpit-desktop-grid {
-    grid-template-columns: clamp(250px, 20vw, 320px) minmax(0, 1fr) clamp(280px, 22vw, 360px) !important;
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 360px) !important;
     overflow: hidden;
   }
   .cockpit-main { grid-template-rows: minmax(0, 1.18fr) minmax(170px, .82fr); }
@@ -1692,7 +1795,7 @@ body {
   .race-broadcast-head p:last-child { display: none; }
   .race-broadcast-stage {
     min-height: 0;
-    grid-template-columns: minmax(0, 1.28fr) minmax(260px, .72fr);
+    grid-template-columns: minmax(180px, .62fr) minmax(0, 1.45fr) minmax(240px, .85fr);
     align-items: stretch;
   }
   .race-broadcast-stage > .colony-race {
@@ -1702,7 +1805,7 @@ body {
   }
   .race-broadcast-stage > .colony-race.is-hero { padding: 10px; }
   .race-broadcast-stage .colony-race.is-hero .colony-race-plot {
-    min-height: 112px;
+    min-height: 96px;
     height: auto;
     flex: 1;
   }
@@ -1759,7 +1862,7 @@ body {
 @media (min-width: 1280px) and (max-width: 1399px) {
   .race-broadcast-head h2 { font-size: 16px; }
   .race-broadcast-stage {
-    grid-template-columns: minmax(0, 1fr) minmax(225px, .6fr);
+    grid-template-columns: minmax(175px, .62fr) minmax(0, 1.35fr) minmax(225px, .78fr);
     gap: 8px;
   }
   .race-broadcast-stage .colony-race-head h3 {
@@ -1791,6 +1894,10 @@ body {
   .admin-colony-switcher.is-dense .admin-control-seal { width: 40px; height: 40px; }
   .admin-colony-switcher.is-dense .admin-colony-select,
   .admin-colony-switcher.is-dense .admin-colony-step { min-height: 38px; }
+  .broadcast-score { gap: 6px; padding: 8px; }
+  .broadcast-score-core { padding-block: 5px; }
+  .broadcast-score-core > strong { font-size: 26px; }
+  .broadcast-score-clock .smooth-match-clock { font-size: 20px; }
   .race-broadcast-stage .colony-race.is-hero .colony-race-plot { min-height: 86px; }
 }
 

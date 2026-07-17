@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
@@ -643,6 +643,42 @@ function CockpitRun({ id }: { id: string }) {
     </div>
   );
 
+  const desktopMatchSummary = (
+    <section className="broadcast-score match-card-media" aria-label={`${p1} versus ${p2}`}>
+      <div className="broadcast-score-status">
+        <p className="eyebrow">Match center</p>
+        {txlineProof && (
+          <span
+            className={txlineProof.verified ? "is-verified" : txlineProof.status === "pending" ? "is-pending" : "is-unavailable"}
+            title={txlineProof.dailyScoresPda || txlineProof.reason || undefined}
+          >
+            {txlineProof.verified ? "✓ TxLINE verified" : txlineProof.status === "pending" ? "TxLINE pending" : "TxLINE unavailable"}
+          </span>
+        )}
+      </div>
+      <h3 className="broadcast-score-teams">{p1} <span>vs</span> {p2}</h3>
+      <div className="broadcast-score-core">
+        <strong>{fmtScore(game?.match?.score)}</strong>
+        <div className="broadcast-score-clock">
+          <SmoothMatchClock
+            match={game?.match}
+            status={status}
+            mode={game?.mode}
+            replayTimeScale={game?.replayTimeScale}
+            replayClockTargetSeconds={game?.replayClockTargetSeconds}
+            showLiveDot
+          />
+          <p>{game?.match?.possessionLabel || txlineStateLabel}</p>
+        </div>
+      </div>
+      <div className="broadcast-score-metrics">
+        <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
+        <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
+        <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
+      </div>
+    </section>
+  );
+
   return (
     <>
     {mobileShell}
@@ -668,65 +704,10 @@ function CockpitRun({ id }: { id: string }) {
         />
       )}
 
-      <div className="cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(270px,0.72fr)_minmax(620px,1.62fr)_minmax(300px,0.76fr)] 2xl:grid-cols-[320px_minmax(680px,1fr)_360px]">
-        <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
-          <section className="glass match-card-media flex min-w-0 flex-col gap-3 p-4">
-            {txlineProof && (
-              <div
-                className={`flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2 ${
-                  txlineProof.verified
-                    ? "border-lime/40 bg-lime/10"
-                    : txlineProof.status === "pending"
-                      ? "border-gold/40 bg-gold/10"
-                      : "border-red-500/40 bg-red-500/10"
-                }`}
-                title={txlineProof.dailyScoresPda || txlineProof.reason || undefined}
-              >
-                <span className={`text-xs font-bold ${
-                  txlineProof.verified
-                    ? "text-lime"
-                    : txlineProof.status === "pending" ? "text-gold-deep" : "text-red-700"
-                }`}>
-                  {txlineProof.verified
-                    ? "✓ TxLINE final score verified"
-                    : txlineProof.status === "pending"
-                      ? "⏳ TxLINE proof pending"
-                      : "⚠ TxLINE verification unavailable"}
-                </span>
-                <span className="truncate font-mono text-[9px] uppercase tracking-wide text-ink-faint">
-                  {txlineProof.verified ? `seq ${txlineProof.seq ?? "—"} · ${txlineProof.network}` : txlineProof.network}
-                </span>
-              </div>
-            )}
-            <div className="min-w-0">
-              <div className="min-w-0 w-full overflow-hidden text-center">
-                <p className="mx-auto max-w-full text-xs font-bold leading-tight text-ink-soft">{p1} vs {p2}</p>
-                <p className="font-mono text-4xl font-bold text-gold">{fmtScore(game?.match?.score)}</p>
-                <div className="match-clock-panel">
-                  <SmoothMatchClock
-                    match={game?.match}
-                    status={status}
-                    mode={game?.mode}
-                    replayTimeScale={game?.replayTimeScale}
-                    replayClockTargetSeconds={game?.replayClockTargetSeconds}
-                    showLiveDot
-                  />
-                  <p className="truncate">{game?.match?.possessionLabel || txlineStateLabel}</p>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
-              <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
-              <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
-            </div>
-          </section>
-
-        </aside>
-
+      <div className="cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
         <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
           {status === "created" ? (
-            <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:min-h-[360px] xl:justify-center">
+            <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:row-span-2 xl:min-h-[360px] xl:justify-center">
               <p className="eyebrow">Simulation dashboard</p>
               <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
               <p className="mx-auto max-w-md text-sm text-ink-soft">
@@ -741,6 +722,7 @@ function CockpitRun({ id }: { id: string }) {
               <RaceBroadcastPanel
                 colonies={sorted}
                 events={events}
+                matchSummary={desktopMatchSummary}
                 onOpenRanks={() => router.push(resultsHref)}
               />
 
@@ -844,11 +826,13 @@ function RaceBroadcastPanel({
   colonies,
   events,
   compact = false,
+  matchSummary,
   onOpenRanks,
 }: {
   colonies: Colony[];
   events: GameEvent[];
   compact?: boolean;
+  matchSummary?: ReactNode;
   onOpenRanks: () => void;
 }) {
   return (
@@ -863,6 +847,7 @@ function RaceBroadcastPanel({
       </div>
 
       <div className="race-broadcast-stage">
+        {matchSummary}
         <ColonyRaceChart colonies={colonies} events={events} hero />
         <MatchPulseTimeline events={events} />
       </div>
