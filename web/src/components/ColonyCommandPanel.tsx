@@ -123,7 +123,9 @@ function ColonyCommandPanelState({
   const roleCounts = useMemo(() => Object.fromEntries(
     ANALYSIS_ROLE_OPTIONS.map((option) => [
       option.value,
-      ants.filter((ant) => effectiveAnalysisRole(ant, commandDrafts.ants[ant.antId])).length,
+      ants.filter(
+        (ant) => effectiveAnalysisRole(ant, commandDrafts.ants[ant.antId]) === option.value,
+      ).length,
     ]),
   ) as Record<AnalysisRole, number>, [ants, commandDrafts.ants]);
   const selectedAnt = ants.find((ant) => ant.antId === selectedAntId) ?? null;
@@ -369,7 +371,12 @@ function ColonyCommandPanelState({
   }
 
   return (
-    <section className={`colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3 ${compactLayout ? "is-compact" : ""}`} aria-labelledby={`${disclosureId}-title`}>
+    <section
+      className={`colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3 ${
+        compactLayout ? "is-compact" : ""
+      } ${compactLayout && expanded && scope === "ants" && !selectedAnt ? "is-ants-roster" : ""}`}
+      aria-labelledby={`${disclosureId}-title`}
+    >
       {compactLayout ? (
         <>
           <div className="colony-console-head">
@@ -498,14 +505,16 @@ function ColonyCommandPanelState({
 
       {expanded && (
         <div id={disclosureId} className="colony-command-disclosure grid gap-4 border-t-2 border-[color:var(--brd-soft)] pt-3">
-          <div className="seg" aria-label="Colony command scope">
+          <div className="seg command-scope-tabs" aria-label="Colony command scope">
             <button
               type="button"
               aria-pressed={scope === "ants"}
               data-active={scope === "ants"}
               onClick={() => openScope("ants")}
             >
-              🐜 {antsLabel}{roster ? ` · ${roster.ants.length}` : ""}
+              <span className="command-scope-icon" aria-hidden="true"><CommandSummaryIcon kind="ants" /></span>
+              <span>{antsLabel}</span>
+              {roster && <strong>{roster.ants.length}</strong>}
             </button>
             <button
               type="button"
@@ -513,7 +522,8 @@ function ColonyCommandPanelState({
               data-active={scope === "colony"}
               onClick={() => openScope("colony")}
             >
-              👑 Colony strategy
+              <span className="command-scope-icon" aria-hidden="true"><CommandSummaryIcon kind="strategy" /></span>
+              <span>Colony strategy</span>
             </button>
           </div>
 
@@ -571,8 +581,8 @@ function ColonyCommandPanelState({
           )}
 
           {scope === "ants" && (
-            <section className="grid min-w-0 gap-3" aria-labelledby={`${disclosureId}-ants-title`}>
-              <div className="flex flex-wrap items-end justify-between gap-3">
+            <section className="command-ants-section grid min-w-0 gap-3" aria-labelledby={`${disclosureId}-ants-title`}>
+              <div className="command-ants-intro flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <p className="eyebrow">Individual control</p>
                   <h3 id={`${disclosureId}-ants-title`} className="font-bold">{antsLabel}</h3>
@@ -598,7 +608,7 @@ function ColonyCommandPanelState({
                 </div>
               ) : roster ? (
                 <div className={`command-ant-workspace grid min-w-0 gap-3 ${compactLayout ? "" : "xl:grid-cols-[minmax(250px,0.72fr)_minmax(0,1.28fr)]"}`}>
-                  <div className={`${rosterPaneClass} min-w-0 content-start gap-3`}>
+                  <div className={`${rosterPaneClass} command-ant-roster-pane min-w-0 content-start gap-3`}>
                     <RoleDistribution counts={roleCounts} />
 
                     <div className="grid gap-2">
@@ -614,7 +624,7 @@ function ColonyCommandPanelState({
                       </label>
                     </div>
 
-                    <ul className="grid gap-2 pr-1 xl:max-h-[600px] xl:overflow-y-auto" aria-label="Ant strategy roster">
+                    <ul className="command-ant-list grid gap-2 pr-1 xl:max-h-[600px] xl:overflow-y-auto" aria-label="Ant strategy roster">
                       {visibleAnts.map((ant) => {
                         const selected = selectedAntId === ant.antId;
                         const hasDraft = Boolean(commandDrafts.ants[ant.antId]
@@ -1037,14 +1047,14 @@ function ConsensusGatePreview({
 function RoleDistribution({ counts }: { counts: Record<AnalysisRole, number> }) {
   const titleId = useId();
   return (
-    <section className="grid gap-2" aria-labelledby={titleId}>
+    <section className="command-role-distribution grid gap-2" aria-labelledby={titleId}>
       <div>
         <p className="eyebrow">Role distribution</p>
         <h4 id={titleId} className="text-sm font-bold text-ink">How the ants read each market</h4>
       </div>
-      <dl className="grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
+      <dl className="command-role-distribution-grid grid gap-2 sm:grid-cols-3 xl:grid-cols-1">
         {ANALYSIS_ROLE_OPTIONS.map((option) => (
-          <div key={option.value} className="well grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2">
+          <div key={option.value} className="command-role-distribution-card well grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2">
             <dt className="min-w-0">
               <span className="block truncate text-xs font-bold text-ink">{option.label}</span>
               <span className="block truncate text-[10px] text-ink-faint">{option.shortLabel}</span>

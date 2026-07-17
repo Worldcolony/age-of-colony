@@ -662,6 +662,78 @@ body {
   color: var(--color-ink-faint);
 }
 .colony-command-disclosure { animation: command-unfold 160ms ease-out both; }
+.command-scope-tabs button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.command-scope-tabs button > span:not(.command-scope-icon) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.command-scope-tabs button > strong {
+  display: grid;
+  min-width: 23px;
+  min-height: 23px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding-inline: 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+.command-scope-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+}
+.command-scope-icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.colony-command-panel.is-compact .command-role-distribution-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.colony-command-panel.is-compact .command-role-distribution-card {
+  min-height: 66px;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 2px;
+  padding: 7px 8px;
+}
+.colony-command-panel.is-compact .command-role-distribution-card dd {
+  order: -1;
+  font-size: 18px;
+  line-height: 1;
+}
+.colony-command-panel.is-compact .command-ant-list {
+  height: clamp(168px, calc(100dvh - 540px), 420px);
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(116, 85, 30, .44) transparent;
+}
+.colony-command-panel.is-compact .command-ant-roster-pane {
+  overflow: hidden;
+}
+.colony-command-panel.is-compact .command-ant-list > li {
+  flex: none;
+  min-height: 56px;
+}
+.colony-command-panel.is-compact .command-ant-list button {
+  min-height: 56px;
+}
 .ant-order-editor { background: rgba(249, 243, 226, 0.58); }
 
 /* Strategy is a colony doctrine, not a settings form. The three cards make the
@@ -906,6 +978,9 @@ body {
 .admin-command-drawer > .colony-command-panel {
   min-height: calc(100dvh - 28px);
   overflow: visible;
+}
+.admin-command-drawer > .colony-command-panel.is-ants-roster {
+  overflow: hidden;
 }
 @keyframes admin-drawer-enter {
   from { opacity: 0; transform: translateX(24px); }
@@ -1675,7 +1750,7 @@ body {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
   overflow: hidden;
   border: 2px solid rgba(74, 58, 30, 0.34);
   border-radius: var(--radius-glass);
@@ -1683,7 +1758,7 @@ body {
     radial-gradient(circle at 50% -20%, rgba(240, 212, 136, 0.32), transparent 48%),
     linear-gradient(180deg, rgba(255, 253, 245, 0.98), rgba(232, 222, 197, 0.95));
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.62), 2px 2px 0 rgba(74,58,30,.14);
-  padding: 10px;
+  padding: 8px;
 }
 .broadcast-score-status {
   display: flex;
@@ -1708,52 +1783,79 @@ body {
 .broadcast-score-status > span.is-pending { color: var(--color-gold-deep); background: rgba(240,212,136,.18); }
 .broadcast-score-status > span.is-unavailable { color: var(--color-rust); background: rgba(194,90,58,.1); }
 .broadcast-score-teams {
-  display: -webkit-box;
+  display: grid;
+  width: 100%;
+  min-height: 26px;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
   overflow: hidden;
   font-size: clamp(12px, 1vw, 16px);
   font-weight: 800;
   line-height: 1.3;
   text-align: center;
-  white-space: normal;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
-.broadcast-score-teams span { color: var(--color-ink-faint); font-size: .82em; }
-.broadcast-score-core {
-  display: grid;
-  grid-template-columns: 1fr;
-  align-items: center;
-  justify-items: center;
-  gap: 4px;
+.broadcast-score-team {
+  display: flex;
   min-width: 0;
-  border: 2px solid rgba(135, 96, 18, .32);
-  border-radius: 7px;
-  background: rgba(255, 252, 238, .74);
-  padding: 5px 7px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
 }
-.broadcast-score-core > strong {
+.broadcast-score-team:last-child { justify-content: flex-start; }
+.broadcast-score-team strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.broadcast-score-flag {
+  flex: none;
+  font-family: system-ui, sans-serif;
+  font-size: 1.25em;
+  font-weight: 400;
+  line-height: 1;
+}
+.broadcast-score-result {
   font-family: var(--font-mono);
-  font-size: clamp(26px, 2.4vw, 38px);
+  font-size: clamp(20px, 1.7vw, 24px);
   line-height: 1;
   color: var(--color-gold-deep);
   white-space: nowrap;
 }
+.broadcast-score-core {
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr;
+  align-items: center;
+  justify-items: center;
+  gap: 2px;
+  min-width: 0;
+  border: 2px solid rgba(135, 96, 18, .32);
+  border-radius: 7px;
+  background: rgba(255, 252, 238, .74);
+  padding: 3px 7px;
+}
 .broadcast-score-clock {
+  display: flex;
   width: 100%;
   min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border-top: 1px solid rgba(116, 85, 30, .2);
-  padding-top: 4px;
+  padding-top: 3px;
   text-align: center;
 }
 .broadcast-score-clock .smooth-match-clock {
   max-width: 100%;
-  font-size: clamp(20px, 1.8vw, 29px);
+  font-size: clamp(18px, 1.55vw, 24px);
   line-height: 1;
 }
 .broadcast-score-clock .smooth-match-clock-value { min-width: 0; }
 .broadcast-score-clock > p {
   overflow: hidden;
-  margin-top: 3px;
+  margin-top: 0;
   font-family: var(--font-mono);
   font-size: 8px;
   font-weight: 700;
@@ -1764,14 +1866,14 @@ body {
 }
 .broadcast-score-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
   margin-top: auto;
   text-align: center;
 }
-.broadcast-score-metrics .plate { min-width: 0; padding: 4px 3px; }
-.broadcast-score-metrics .plate p:first-child { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.broadcast-score-metrics .plate p:last-child { font-size: 16px; }
+.broadcast-score-metrics .plate { min-width: 0; padding: 2px 3px; }
+.broadcast-score-metrics .plate p:first-child { overflow: hidden; font-size: 8px; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
+.broadcast-score-metrics .plate p:last-child { font-size: 14px; line-height: 1; }
 
 .cockpit-colony-overview {
   display: flex;

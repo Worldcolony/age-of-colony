@@ -676,9 +676,18 @@ function CockpitRun({ id }: { id: string }) {
           </span>
         )}
       </div>
-      <h3 className="broadcast-score-teams">{p1} <span>vs</span> {p2}</h3>
       <div className="broadcast-score-core">
-        <strong>{fmtScore(game?.match?.score)}</strong>
+        <h3 className="broadcast-score-teams">
+          <span className="broadcast-score-team">
+            <span className="broadcast-score-flag" aria-hidden="true">{flag(p1)}</span>
+            <strong>{p1}</strong>
+          </span>
+          <strong className="broadcast-score-result">{fmtScore(game?.match?.score)}</strong>
+          <span className="broadcast-score-team">
+            <span className="broadcast-score-flag" aria-hidden="true">{flag(p2)}</span>
+            <strong>{p2}</strong>
+          </span>
+        </h3>
         <div className="broadcast-score-clock">
           <SmoothMatchClock
             match={game?.match}
@@ -693,7 +702,6 @@ function CockpitRun({ id }: { id: string }) {
       </div>
       <div className="broadcast-score-metrics">
         <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
-        <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
         <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
       </div>
     </section>

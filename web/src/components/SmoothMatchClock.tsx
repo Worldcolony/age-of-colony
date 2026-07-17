@@ -33,8 +33,8 @@ function isRunningStatus(status?: string | null): boolean {
 
 /**
  * Match snapshots only move when a TXLine event is processed. This clock uses
- * those snapshots as authoritative anchors, then advances locally at the
- * configured replay rate without ever passing the server's next-event bound.
+ * those snapshots as authoritative anchors, then advances locally between
+ * updates so the displayed match time never freezes during a processing batch.
  */
 export function SmoothMatchClock({
   match,
@@ -55,19 +55,25 @@ export function SmoothMatchClock({
   const running = isRunningStatus(status);
   const [displayClock, setDisplayClock] = useState<number | null>(() => rawClock);
   const anchorRef = useRef<ClockPoint | null>(null);
+  const displayClockRef = useRef<number | null>(rawClock);
 
   useEffect(() => {
     if (rawClock == null) {
       anchorRef.current = null;
+      displayClockRef.current = null;
       const clearFrame = window.requestAnimationFrame(() => setDisplayClock(null));
       return () => window.cancelAnimationFrame(clearFrame);
     }
 
     const now = performance.now();
-    anchorRef.current = { clock: rawClock, at: now };
-    const snapFrame = window.requestAnimationFrame(() => setDisplayClock(Math.floor(rawClock)));
+    const nextAnchor = running && displayClockRef.current != null
+      ? Math.max(rawClock, displayClockRef.current)
+      : rawClock;
+    anchorRef.current = { clock: nextAnchor, at: now };
+    displayClockRef.current = Math.floor(nextAnchor);
+    const snapFrame = window.requestAnimationFrame(() => setDisplayClock(Math.floor(nextAnchor)));
     return () => window.cancelAnimationFrame(snapFrame);
-  }, [rawClock, validReplayTarget]);
+  }, [rawClock, running]);
 
   useEffect(() => {
     if (!running || rawClock == null) return;
@@ -79,15 +85,19 @@ export function SmoothMatchClock({
         const configuredReplayRate = Number(replayTimeScale);
         const fallbackRate = Number.isFinite(configuredReplayRate) && configuredReplayRate > 0
           ? configuredReplayRate
-          : 0;
+          : 1;
         const rate = status === "running_live" || mode === "live"
           ? 1
-          : validReplayTarget == null ? 0 : fallbackRate;
+          : fallbackRate;
         const interpolatedClock = anchor.clock + Math.max(0, now - anchor.at) / 1000 * rate;
-        const boundedClock = status === "running_replay" && validReplayTarget != null
-          ? Math.min(interpolatedClock, Math.max(anchor.clock, validReplayTarget))
+        const hasFutureReplayBound = status === "running_replay"
+          && validReplayTarget != null
+          && validReplayTarget > anchor.clock;
+        const boundedClock = hasFutureReplayBound
+          ? Math.min(interpolatedClock, validReplayTarget)
           : interpolatedClock;
         const nextClock = Math.floor(boundedClock);
+        displayClockRef.current = nextClock;
         setDisplayClock((current) => current === nextClock ? current : nextClock);
       }
       frame = window.requestAnimationFrame(tick);
