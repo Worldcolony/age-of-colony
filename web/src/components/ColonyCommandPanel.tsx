@@ -357,11 +357,11 @@ function ColonyCommandPanelState({
   }
 
   return (
-    <section className="colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3" aria-labelledby={`${disclosureId}-title`}>
+    <section className={`colony-command-panel glass relative flex min-w-0 flex-col gap-3 p-3 ${compactLayout ? "is-compact" : ""}`} aria-labelledby={`${disclosureId}-title`}>
       <div className="colony-command-head flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="eyebrow">{adminControl ? "Selected admin colony" : "Your colony"}</p>
-          <h2 id={`${disclosureId}-title`} className="truncate text-base font-bold">Control {colony.name}</h2>
+          <h2 id={`${disclosureId}-title`} className={`${compactLayout ? "leading-snug" : "truncate"} text-base font-bold`}>Control {colony.name}</h2>
           <p className="mt-1 text-xs leading-relaxed text-ink-faint">
             {adminControl
               ? "These controls affect only this admin colony. New orders apply to the next market."
@@ -385,26 +385,38 @@ function ColonyCommandPanelState({
       </div>
 
       {!expanded && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className={`colony-command-summary grid gap-2 ${compactLayout ? "is-compact" : "sm:grid-cols-2"}`}>
           <button
             type="button"
-            className="well group grid min-h-24 gap-1 p-3 text-left transition hover:border-gold/60 focus-visible:border-gold"
+            className={`command-summary-card well group text-left transition hover:border-gold/60 focus-visible:border-gold ${
+              compactLayout
+                ? "is-compact grid min-h-[58px] grid-cols-[30px_minmax(0,1fr)] items-center gap-2 p-2"
+                : "grid min-h-24 gap-1 p-3"
+            }`}
             onClick={() => openScope("colony")}
           >
-            <span className="text-lg" aria-hidden="true">👑</span>
-            <strong className="text-sm">Colony strategy</strong>
-            <span className="truncate text-xs text-ink-faint">
-              Doctrine {optionLabel(STYLE_OPTIONS, colony.style)}
+            <span className="command-summary-icon text-lg" aria-hidden="true">👑</span>
+            <span className="command-summary-copy min-w-0">
+              <strong className="block text-sm">Colony strategy</strong>
+              <span className="block text-xs leading-snug text-ink-faint">
+                Doctrine {optionLabel(STYLE_OPTIONS, colony.style)}
+              </span>
             </span>
           </button>
           <button
             type="button"
-            className="well group grid min-h-24 gap-1 p-3 text-left transition hover:border-gold/60 focus-visible:border-gold"
+            className={`command-summary-card well group text-left transition hover:border-gold/60 focus-visible:border-gold ${
+              compactLayout
+                ? "is-compact grid min-h-[58px] grid-cols-[30px_minmax(0,1fr)] items-center gap-2 p-2"
+                : "grid min-h-24 gap-1 p-3"
+            }`}
             onClick={() => openScope("ants")}
           >
-            <span className="text-lg" aria-hidden="true">🐜</span>
-            <strong className="text-sm">{antsLabel}</strong>
-            <span className="text-xs text-ink-faint">{colony.antsAlive} alive · select one to change its orders</span>
+            <span className="command-summary-icon text-lg" aria-hidden="true">🐜</span>
+            <span className="command-summary-copy min-w-0">
+              <strong className="block text-sm">{antsLabel}</strong>
+              <span className="block text-xs leading-snug text-ink-faint">{colony.antsAlive} alive · select one to change its orders</span>
+            </span>
           </button>
         </div>
       )}

@@ -346,6 +346,22 @@ body {
   container-name: colony-command;
   container-type: inline-size;
 }
+.colony-command-panel.is-compact .command-summary-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(116, 85, 30, .24);
+  border-radius: 7px;
+  background: rgba(255, 250, 236, .58);
+}
+.colony-command-panel.is-compact .command-summary-copy > span {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .colony-command-disclosure { animation: command-unfold 160ms ease-out both; }
 .ant-order-editor { background: rgba(249, 243, 226, 0.58); }
 
@@ -1397,6 +1413,288 @@ body {
 .broadcast-score-metrics .plate p:first-child { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .broadcast-score-metrics .plate p:last-child { font-size: 16px; }
 
+.cockpit-markets-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cockpit-markets-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.cockpit-markets-controls .seg {
+  position: static;
+  min-width: min(390px, 48vw);
+}
+.live-market-board {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.market-selector-rail {
+  display: flex;
+  min-width: 0;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 1px 2px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(116, 85, 30, .42) transparent;
+}
+.market-selector-card {
+  position: relative;
+  display: grid;
+  min-width: 176px;
+  min-height: 46px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  border: 2px solid var(--brd-soft);
+  border-radius: 7px;
+  background: rgba(249, 243, 226, .7);
+  padding: 5px 8px 8px;
+  color: var(--color-ink-soft);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+.market-selector-card:hover { border-color: rgba(176, 126, 28, .66); }
+.market-selector-card:focus-visible {
+  outline: 3px solid rgba(176, 126, 28, .3);
+  outline-offset: 2px;
+}
+.market-selector-card[data-active="true"] {
+  border-color: var(--color-gold-deep);
+  background: rgba(255, 248, 219, .98);
+  color: var(--color-ink);
+  box-shadow: 2px 2px 0 rgba(90, 70, 30, .28);
+}
+.market-selector-count {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-gold-deep);
+}
+.market-selector-track {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  height: 4px;
+  overflow: hidden;
+  background: rgba(74, 58, 30, .14);
+}
+.market-selector-track > span { display: block; height: 100%; }
+.live-market-ticket {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 2px solid var(--color-gold-deep);
+  border-radius: 9px;
+  background:
+    linear-gradient(90deg, rgba(176, 126, 28, .08), transparent 36%),
+    rgba(255, 252, 238, .96);
+  box-shadow: 3px 3px 0 rgba(74, 58, 30, .22);
+}
+.live-market-ticket-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 12px;
+}
+.live-market-ticket-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.live-market-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--color-gold-deep);
+}
+.live-market-kicker > span {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-rust);
+  box-shadow: 0 0 0 3px rgba(194, 90, 58, .14);
+  animation: live-market-pulse 1.4s ease-in-out infinite;
+}
+.live-market-ticket-head h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: clamp(15px, 1.35vw, 20px);
+  font-weight: 800;
+  line-height: 1.2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.live-market-open {
+  flex: none;
+  border: 2px solid var(--color-green);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--color-green);
+}
+.live-market-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.live-market-option {
+  min-width: 0;
+  border: 1px solid rgba(116, 85, 30, .26);
+  border-radius: 6px;
+  background: rgba(74, 58, 30, .055);
+  padding: 6px 8px;
+}
+.live-market-option strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.live-market-option span {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--color-ink-faint);
+}
+.live-market-option.is-waiting { grid-column: 1 / -1; }
+.live-market-ticket-pulse {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  background:
+    radial-gradient(circle at 100% 100%, rgba(240, 212, 136, .12), transparent 45%),
+    #2d2f25;
+  padding: 10px 11px;
+  color: #fff9e8;
+}
+.live-market-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+.live-market-summary span {
+  overflow: hidden;
+  border: 1px solid rgba(240, 212, 136, .22);
+  border-radius: 999px;
+  padding: 3px 4px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #f0d488;
+}
+.live-market-colony-call {
+  min-width: 0;
+  border-left: 3px solid var(--color-gold);
+  padding-left: 8px;
+}
+.live-market-colony-call p {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(255, 249, 232, .55);
+}
+.live-market-colony-call strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-market-colony-call > span {
+  display: block;
+  overflow: hidden;
+  margin-top: 1px;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 249, 232, .62);
+}
+.live-market-votes > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-market-votes > div:first-child strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: #f0d488;
+}
+.live-market-votes > div:first-child span {
+  font-size: 8px;
+  text-transform: uppercase;
+  color: rgba(255, 249, 232, .5);
+}
+.live-market-vote-track {
+  display: flex;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .11);
+}
+.live-market-vote-track > span { display: block; height: 100%; }
+.live-market-vote-legend {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 8px;
+  color: rgba(255, 249, 232, .64);
+}
+.live-market-vote-legend span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-market-vote-legend i {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+}
+@keyframes live-market-pulse {
+  50% { opacity: .45; transform: scale(.72); }
+}
+
 .colony-race {
   overflow: hidden;
   border: 2px solid rgba(74, 58, 30, 0.34);
@@ -1758,10 +2056,10 @@ body {
 
 @media (min-width: 1280px) {
   .cockpit-desktop-grid {
-    grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 360px) !important;
+    grid-template-columns: minmax(0, 1fr) clamp(310px, 23vw, 380px) !important;
     overflow: hidden;
   }
-  .cockpit-main { grid-template-rows: minmax(0, 1.18fr) minmax(170px, .82fr); }
+  .cockpit-main { grid-template-rows: minmax(0, 1.08fr) minmax(228px, .92fr); }
   .cockpit-sidebar {
     grid-auto-rows: max-content;
     align-content: start;
@@ -1785,7 +2083,13 @@ body {
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
   }
-  .cockpit-markets { padding: 12px; }
+  .cockpit-markets { gap: 8px; padding: 12px; }
+  .cockpit-markets-head { align-items: center; }
+  .cockpit-markets-head h2 { font-size: 20px; }
+  .cockpit-markets-controls { flex: 1; }
+  .cockpit-markets-controls .seg { flex: 1; }
+  .live-market-ticket { grid-template-columns: minmax(0, 1.45fr) minmax(230px, .72fr); }
+  .live-market-board > .latest-settled { display: none; }
   .race-broadcast {
     min-height: 0;
     grid-template-rows: auto minmax(0, 1fr);
@@ -1860,6 +2164,7 @@ body {
 }
 
 @media (min-width: 1280px) and (max-width: 1399px) {
+  .cockpit-markets-controls > div:first-child { display: none; }
   .race-broadcast-head h2 { font-size: 16px; }
   .race-broadcast-stage {
     grid-template-columns: minmax(175px, .62fr) minmax(0, 1.35fr) minmax(225px, .78fr);
@@ -1894,11 +2199,27 @@ body {
   .admin-colony-switcher.is-dense .admin-control-seal { width: 40px; height: 40px; }
   .admin-colony-switcher.is-dense .admin-colony-select,
   .admin-colony-switcher.is-dense .admin-colony-step { min-height: 38px; }
+  .cockpit-markets-head h2 { font-size: 18px; }
+  .market-selector-card { min-height: 42px; }
+  .live-market-ticket-main { gap: 6px; padding: 8px 10px; }
+  .live-market-ticket-head h2 { font-size: 14px; -webkit-line-clamp: 1; }
+  .live-market-ticket-pulse { gap: 6px; padding: 8px 9px; }
+  .live-market-option { padding-block: 5px; }
   .broadcast-score { gap: 6px; padding: 8px; }
   .broadcast-score-core { padding-block: 5px; }
   .broadcast-score-core > strong { font-size: 26px; }
   .broadcast-score-clock .smooth-match-clock { font-size: 20px; }
   .race-broadcast-stage .colony-race.is-hero .colony-race-plot { min-height: 86px; }
+}
+
+@media (max-width: 1279px) {
+  .cockpit-markets-head,
+  .cockpit-markets-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cockpit-markets-controls .seg { width: 100%; min-width: 0; }
+  .live-market-ticket { grid-template-columns: 1fr; }
 }
 
 /* A single broadcast-style impact moment is the signature motion for this UI.

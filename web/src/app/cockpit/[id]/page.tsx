@@ -727,24 +727,25 @@ function CockpitRun({ id }: { id: string }) {
               />
 
               <section className="cockpit-markets glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="cockpit-markets-head">
                   <div>
                     <p className="eyebrow">Colony decisions</p>
                     <h2 className="text-2xl font-bold">Live markets</h2>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="status-pill">{openMarkets.length} live</span>
-                    <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+                  <div className="cockpit-markets-controls">
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <span className="status-pill">{openMarkets.length} live</span>
+                      <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+                    </div>
+                    <CockpitTabs
+                      active={activeTab}
+                      counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+                      onChange={setActiveTab}
+                    />
                   </div>
                 </div>
 
-                <CockpitTabs
-                  active={activeTab}
-                  counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-                  onChange={setActiveTab}
-                />
-
-                <div className="cockpit-markets-body min-h-0 overflow-y-auto pr-1">
+                <div className="cockpit-markets-body min-h-0 overflow-y-auto">
                   {activeTab === "live" && (
                     <LiveTab
                       openMarkets={openMarkets}
@@ -1015,22 +1016,19 @@ function LiveTab({
   onSelectSettled: (marketId: string) => void;
 }) {
   return (
-    <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-3 gap-2">
-        <CompactStat label="Live markets" value={openSummary.markets} tone="gold" />
-        <CompactStat label="Answers" value={openSummary.answers} tone="cyan" />
-        <CompactStat label="Abstain" value={openSummary.abstain} />
-      </div>
-
+    <div className="live-market-board">
       {openMarkets.length ? (
         <>
-          <MarketRail markets={openMarkets} selectedId={selectedMarketId} onSelect={onSelectMarket} />
           {selectedMarket && (
             <FocusedMarketPanel
               market={selectedMarket}
               colony={colony}
               colonyLabel={colonyLabel}
+              summary={openSummary}
             />
+          )}
+          {openMarkets.length > 1 && (
+            <MarketRail markets={openMarkets} selectedId={selectedMarketId} onSelect={onSelectMarket} />
           )}
         </>
       ) : (
@@ -1041,7 +1039,7 @@ function LiveTab({
       )}
 
       {settledMarkets.length > 0 && (
-        <div className="well p-3">
+        <div className="latest-settled well p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold">Latest settled</p>
@@ -1135,16 +1133,6 @@ function normalizeMatchState(value: unknown) {
   return String(value ?? "").trim().toLowerCase().replace(/[-\s]+/g, "_");
 }
 
-function CompactStat({ label, value, tone }: { label: string; value: number | string; tone?: "gold" | "cyan" }) {
-  const color = tone === "gold" ? "text-gold" : tone === "cyan" ? "text-cyan" : "text-ink";
-  return (
-    <div className="plate px-2 py-2 text-center">
-      <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
-      <p className={`font-mono text-lg font-bold ${color}`}>{value}</p>
-    </div>
-  );
-}
-
 function MarketRail({
   markets,
   selectedId,
@@ -1155,7 +1143,7 @@ function MarketRail({
   onSelect: (marketId: string) => void;
 }) {
   return (
-    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Active markets">
+    <div className="market-selector-rail" aria-label="Active markets">
       {markets.map((market) => {
         const distribution = aggregateVotes(market.votes);
         const selected = selectedId === market.id;
@@ -1165,15 +1153,15 @@ function MarketRail({
             type="button"
             aria-pressed={selected}
             onClick={() => onSelect(market.id)}
-            className={`min-w-[124px] rounded-md border-2 p-3 text-left transition ${
-              selected
-                ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] text-ink shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
-                : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] text-ink-soft"
-            }`}
+            className="market-selector-card"
+            data-active={selected}
           >
-            <span className="block truncate font-mono text-[10px] uppercase text-gold-deep">{compactMarketName(market)}</span>
-            <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
-            <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-[rgba(74,58,30,0.18)]">
+            <span className="min-w-0">
+              <span className="block truncate font-mono text-[9px] uppercase text-gold-deep">{compactMarketName(market)}</span>
+              <span className="block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
+            </span>
+            <strong className="market-selector-count">{distribution.total}</strong>
+            <span className="market-selector-track">
               {distribution.rows.length ? distribution.rows.map((row) => (
                 <span
                   key={row.key}
@@ -1245,41 +1233,93 @@ function FocusedMarketPanel({
   market,
   colony,
   colonyLabel,
+  summary,
 }: {
   market: MarketModel;
   colony?: Colony;
   colonyLabel: string;
+  summary: ReturnType<typeof summarizeOpenMarkets>;
 }) {
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
   const pending = pendingAntCount(market, distribution.total);
+  const decision = colonyDecisionSummary(activity);
+  const commit = colonyCommitSummary(activity);
+  const options = (market.opportunity?.options ?? []).slice(0, 3);
   return (
-    <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.95)] p-3 shadow-[3px_3px_0_rgba(74,58,30,0.25)]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="eyebrow">Selected market</p>
-          <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
-          <p className="mt-1 text-xs text-ink-faint">Aggregated across all colonies.</p>
-          <p className="mt-1 font-mono text-[10px] uppercase text-gold-deep">{marketLabelPrefix(market)}</p>
+    <article className="live-market-ticket">
+      <div className="live-market-ticket-main">
+        <div className="live-market-ticket-head">
+          <div className="min-w-0">
+            <p className="live-market-kicker">
+              <span aria-hidden="true" />
+              {compactMarketName(market)}
+            </p>
+            <h2>{cleanMarketLabel(market.label)}</h2>
+          </div>
+          <span className="live-market-open">Open</span>
         </div>
-        <span className="rounded-full border-2 border-[color:var(--color-green)] px-2 py-1 font-mono text-[10px] uppercase text-green">open</span>
+
+        <div className="live-market-options" aria-label="Market options">
+          {options.length ? options.map((option) => {
+            const reward = optionRewardSugar(option);
+            const risk = optionRiskSugar(option);
+            return (
+              <div key={option.optionId || option.label} className="live-market-option">
+                <strong>{option.label || option.value}</strong>
+                {(reward != null || risk != null) && (
+                  <span>+{reward ?? 0} / −{risk ?? 0} Sugar</span>
+                )}
+              </div>
+            );
+          }) : (
+            <div className="live-market-option is-waiting">
+              <strong>Calls incoming</strong>
+              <span>Waiting for ant decisions</span>
+            </div>
+          )}
+        </div>
       </div>
 
-      <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="open" />
+      <aside className="live-market-ticket-pulse">
+        <div className="live-market-summary">
+          <span>{summary.markets} live</span>
+          <span>{summary.answers} answers</span>
+          <span>{summary.abstain} pass</span>
+        </div>
 
-      <OptionPreview opportunity={market.opportunity} />
-      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="All colonies vote split" />}
+        <div className="live-market-colony-call">
+          <p>{colonyLabel}</p>
+          <strong>{decision.value}</strong>
+          <span>{decision.detail} · {commit.value}</span>
+        </div>
 
-      <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-ink-faint">
-        <span className="rounded-full bg-[rgba(176,126,28,0.14)] px-2 py-1 text-gold-deep">
-          {distribution.total ? `${distribution.total} total ant votes` : "Waiting for ants"}
-        </span>
-        <span className="rounded-full bg-[rgba(74,58,30,0.1)] px-2 py-1">
-          {market.votes.length}/{Math.max(1, market.starts.length || market.votes.length)} colonies reported
-        </span>
-        {pending > 0 && <span className="rounded-full bg-[rgba(74,58,30,0.1)] px-2 py-1">{pending} calls pending</span>}
-      </div>
-
+        <div className="live-market-votes">
+          <div>
+            <strong>{distribution.total}</strong>
+            <span>{pending > 0 ? `${pending} pending` : "all reported"}</span>
+          </div>
+          <span className="live-market-vote-track" aria-label={`Vote distribution, ${distribution.total} ants`}>
+            {distribution.rows.length ? distribution.rows.map((row) => (
+              <span
+                key={row.key}
+                style={{
+                  width: `${Math.max(4, Math.round((row.count / Math.max(1, distribution.total)) * 100))}%`,
+                  background: row.color,
+                }}
+              />
+            )) : <span className="w-1/3 bg-gold/50" />}
+          </span>
+          <div className="live-market-vote-legend">
+            {distribution.rows.slice(0, 3).map((row) => (
+              <span key={row.key}>
+                <i style={{ background: row.color }} />
+                {row.label} {row.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      </aside>
     </article>
   );
 }
@@ -1520,36 +1560,6 @@ function Distribution({ distribution, title }: { distribution: ReturnType<typeof
             <p className="text-[11px] text-ink-faint">{Math.round((row.count / Math.max(1, distribution.total)) * 100)}%</p>
           </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-function OptionPreview({ opportunity }: { opportunity?: Opportunity }) {
-  const options = opportunity?.options ?? [];
-  if (!options.length) {
-    return <p className="well mt-3 p-3 text-sm text-ink-faint">Waiting for ant decisions...</p>;
-  }
-  return (
-    <div className="mt-3 grid gap-2">
-      <p className="text-xs leading-relaxed text-ink-faint">
-        Ant support decides whether the colony enters. It never changes the fixed Sugar stake.
-      </p>
-      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, options.length)}, minmax(0, 1fr))` }}>
-      {options.slice(0, 3).map((option) => {
-        const reward = optionRewardSugar(option);
-        const risk = optionRiskSugar(option);
-        return (
-          <div key={option.optionId || option.label} className="well p-2 text-center text-xs font-bold text-ink-soft">
-            <span className="block">{option.label || option.value}</span>
-            {(reward != null || risk != null) && (
-              <span className="mt-1 block font-mono text-[10px] text-ink-faint">
-                Colony position: correct +{reward ?? 0} Sugar · miss −{risk ?? 0} Sugar
-              </span>
-            )}
-          </div>
-        );
-      })}
       </div>
     </div>
   );
