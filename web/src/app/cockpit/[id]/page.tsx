@@ -1318,16 +1318,29 @@ function SettledTab({
     return <EmptyState title="No settled market yet" body="Results will appear here as markets expire or resolve." />;
   }
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
+    <div className="settled-workspace">
+      <div className="settled-workspace-head">
         <div>
           <h2 className="text-lg font-bold">Settled markets</h2>
-          <p className="text-xs text-ink-faint">Select a result instead of scrolling the journal.</p>
+          <p className="text-xs text-ink-faint">Choose a result and keep its full decision in view.</p>
         </div>
         <span className="status-pill">{settledMarkets.length}</span>
       </div>
-      <SettledRail markets={settledMarkets} selectedId={selectedSettledId} onSelect={onSelectSettled} />
-      {selectedSettled && <SettledDetailPanel market={selectedSettled} colony={colony} colonyLabel={colonyLabel} />}
+      <div className="settled-workspace-grid">
+        <aside className="settled-market-browser">
+          <div className="settled-market-browser-head">
+            <span>Result history</span>
+            <span>Newest first</span>
+          </div>
+          <SettledRail
+            markets={settledMarkets}
+            selectedId={selectedSettledId}
+            onSelect={onSelectSettled}
+            stacked
+          />
+        </aside>
+        {selectedSettled && <SettledDetailPanel market={selectedSettled} colony={colony} colonyLabel={colonyLabel} />}
+      </div>
     </div>
   );
 }
@@ -1422,14 +1435,19 @@ function SettledRail({
   selectedId,
   onSelect,
   compact = false,
+  stacked = false,
 }: {
   markets: MarketModel[];
   selectedId: string | null;
   onSelect: (marketId: string) => void;
   compact?: boolean;
+  stacked?: boolean;
 }) {
   return (
-    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Settled markets">
+    <div
+      className={`settled-market-rail ${compact ? "is-compact" : ""} ${stacked ? "is-stacked" : ""}`}
+      aria-label="Settled markets"
+    >
       {markets.map((market) => {
         const summary = settlementSummary(market);
         const outcome = marketOutcomeSummary(market);
@@ -1440,26 +1458,25 @@ function SettledRail({
             type="button"
             aria-pressed={selected}
             onClick={() => onSelect(market.id)}
-            className={`min-w-[132px] rounded-md border-2 p-3 text-left transition ${
-              selected
-                ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] text-ink shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
-                : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] text-ink-soft"
-            }`}
+            className="settled-market-card"
+            data-active={selected}
           >
-            <span className="block font-mono text-[10px] uppercase text-gold-deep">{compactMarketName(market)}</span>
-            <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
+            <span className="settled-market-copy">
+              <span className="settled-market-kicker">{compactMarketName(market)}</span>
+              <span className="settled-market-title">{cleanMarketLabel(market.label)}</span>
+              {!compact && (
+                <span className="settled-market-outcome">
+                  Result · {outcome.label}
+                </span>
+              )}
+            </span>
             {!compact && (
-              <span className="mt-1 block truncate text-[11px] font-bold text-green">
-                Outcome: {outcome.label}
-              </span>
-            )}
-            {!compact && (
-              <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
-                <b className={`rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 ${summary.resourceDelta < 0 ? "text-rust" : "text-green"}`}>
-                  {signedValue(summary.resourceDelta)} 🍬
-                </b>
-                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-rust">{summary.losses}</b>
-                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-ink">{summary.voided}</b>
+              <span
+                className={`settled-market-delta ${summary.resourceDelta < 0 ? "is-loss" : "is-gain"}`}
+                aria-label={`${signedValue(summary.resourceDelta)} Sugar across all colonies`}
+              >
+                <strong>{signedValue(summary.resourceDelta)}</strong>
+                <small>Sugar</small>
               </span>
             )}
           </button>
@@ -1584,10 +1601,12 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
   const outcome = marketOutcomeSummary(market);
+  const decision = colonyDecisionSummary(activity);
+  const commit = colonyCommitSummary(activity);
+  const colonyResult = colonyResultSummary(activity, "settled");
   return (
-    <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] p-3 shadow-[4px_4px_0_rgba(74,58,30,0.28)]">
-      <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gold/40" />
-      <div className="flex items-start justify-between gap-3">
+    <article className="settled-detail-panel">
+      <header className="settled-detail-head">
         <div className="min-w-0">
           <p className="eyebrow">Settled market</p>
           <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
@@ -1596,28 +1615,50 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
         <span className={`rounded-full border-2 px-2 py-1 font-mono text-[10px] uppercase ${summary.tone}`}>
           {summary.label}
         </span>
+      </header>
+
+      <div className="settled-detail-glance">
+        <DecisionCell label="Outcome" value={outcome.label} detail={outcome.detail} tone={outcome.tone} />
+        <DecisionCell label="Ant consensus" value={decision.value} detail={decision.detail} tone={decision.tone} />
+        <DecisionCell label="Colony action" value={commit.value} detail={commit.detail} tone={commit.tone} />
+        <DecisionCell label="Sugar result" value={colonyResult.value} detail={colonyResult.detail} tone={colonyResult.cellTone} />
       </div>
 
-      <MarketOutcomePanel outcome={outcome} />
-
-      <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
-
-      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <PulseMetric
-          label="All colonies Sugar"
-          value={signedValue(summary.resourceDelta)}
-          tone={summary.resourceDelta >= 0 ? "green" : undefined}
-        />
-        <PulseMetric label="Losses" value={summary.losses} />
-        <PulseMetric label="Void" value={summary.voided} />
+      <div className="settled-detail-votes">
+        {distribution.rows.length > 0 && (
+          <Distribution distribution={distribution} title="All colonies" compact />
+        )}
+        {activity.distribution.rows.length > 0 && (
+          <Distribution distribution={activity.distribution} title={`${colonyLabel} votes`} compact />
+        )}
       </div>
 
-      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="All colonies vote split" />}
+      <div className="settled-detail-expanded">
+        <div className="settled-detail-summary">
+          <MarketOutcomePanel outcome={outcome} />
 
-      <div className="mt-3 flex flex-col gap-1">
+          <div className="settled-detail-metrics">
+            <PulseMetric
+              label="All colonies Sugar"
+              value={signedValue(summary.resourceDelta)}
+              tone={summary.resourceDelta >= 0 ? "green" : undefined}
+            />
+            <PulseMetric label="Losses" value={summary.losses} />
+            <PulseMetric label="Void" value={summary.voided} />
+          </div>
+
+          {distribution.rows.length > 0 && (
+            <Distribution distribution={distribution} title="All colonies vote split" compact />
+          )}
+        </div>
+
+        <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
+      </div>
+
+      <div className="settled-event-notes">
         {[...personalResultEvents(activity), ...market.settlements, ...market.voids, ...market.closures]
           .filter(uniqueEventByIndex)
-          .slice(0, 4)
+          .slice(0, 3)
           .map((event) => (
           <p key={event.index} className="text-xs leading-snug text-ink-soft">{compactEventMessage(event)}</p>
         ))}
@@ -1635,7 +1676,7 @@ function MarketOutcomePanel({ outcome }: { outcome: MarketOutcome }) {
         ? "border-[color:rgba(176,126,28,0.5)] bg-[rgba(176,126,28,0.1)] text-gold-deep"
         : "border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] text-ink-faint";
   return (
-    <section className={`mt-3 rounded-md border-2 p-3 ${tone}`}>
+    <section className={`settled-outcome-panel rounded-md border-2 p-3 ${tone}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="eyebrow">Outcome</p>
@@ -1669,8 +1710,8 @@ function ColonyDecisionPanel({
   const commit = colonyCommitSummary(activity);
   const result = colonyResultSummary(activity, mode);
   return (
-    <section className="mt-3 rounded-md border-2 border-[color:rgba(78,126,42,0.42)] bg-[rgba(78,126,42,0.08)] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+    <section className="colony-decision-panel rounded-md border-2 border-[color:rgba(78,126,42,0.42)] bg-[rgba(78,126,42,0.08)] p-3">
+      <div className="colony-decision-head flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="eyebrow !text-green">{title}</p>
           <h3 className="truncate text-base font-bold text-ink">{activity.colony.name}</h3>
@@ -1678,14 +1719,14 @@ function ColonyDecisionPanel({
         <span className={`status-pill ${result.tone}`}>{result.badge}</span>
       </div>
 
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
+      <div className="colony-decision-cells mt-3 grid gap-2 md:grid-cols-3">
         <DecisionCell label="Ant consensus" value={decision.value} detail={decision.detail} tone={decision.tone} />
         <DecisionCell label="Colony action" value={commit.value} detail={commit.detail} tone={commit.tone} />
         <DecisionCell label="Sugar result" value={result.value} detail={result.detail} tone={result.cellTone} />
       </div>
 
       {activity.distribution.rows.length > 0 && (
-        <div className="mt-3">
+        <div className="colony-decision-votes mt-3">
           <div className="mb-1 flex items-center justify-between gap-3 text-xs font-bold text-ink-faint">
             <span>Colony vote split</span>
             <span>{activity.distribution.total} ants</span>
@@ -1726,7 +1767,7 @@ function DecisionCell({
         ? "text-rust"
         : "text-ink";
   return (
-    <div className="well min-w-0 px-3 py-2">
+    <div className="decision-cell well min-w-0 px-3 py-2">
       <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
       <p className={`truncate text-sm font-bold ${color}`}>{value}</p>
       <p className="mt-1 truncate text-[11px] text-ink-faint">{detail}</p>
@@ -1777,9 +1818,17 @@ function PulseMetric({ label, value, tone }: { label: string; value: number | st
   );
 }
 
-function Distribution({ distribution, title }: { distribution: ReturnType<typeof aggregateVotes>; title?: string }) {
+function Distribution({
+  distribution,
+  title,
+  compact = false,
+}: {
+  distribution: ReturnType<typeof aggregateVotes>;
+  title?: string;
+  compact?: boolean;
+}) {
   return (
-    <div className="mt-3">
+    <div className={`distribution ${compact ? "is-compact" : ""}`}>
       {title && <p className="mb-2 text-xs font-bold text-ink-faint">{title}</p>}
       <div className="flex h-3 overflow-hidden rounded-full bg-[rgba(74,58,30,0.18)]" aria-label={`Vote distribution, ${distribution.total} ants`}>
         {distribution.rows.map((row) => (
@@ -1792,15 +1841,27 @@ function Distribution({ distribution, title }: { distribution: ReturnType<typeof
           />
         ))}
       </div>
-      <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, distribution.rows.length)}, minmax(0, 1fr))` }}>
-        {distribution.rows.map((row) => (
-          <div key={row.key} className="well px-2 py-2">
-            <p className="truncate text-xs font-bold" style={{ color: row.color }}>{row.label}</p>
-            <p className="font-mono text-xl font-bold">{row.count}</p>
-            <p className="text-[11px] text-ink-faint">{Math.round((row.count / Math.max(1, distribution.total)) * 100)}%</p>
-          </div>
-        ))}
-      </div>
+      {compact ? (
+        <div className="distribution-compact-legend">
+          {distribution.rows.slice(0, 3).map((row) => (
+            <span key={row.key}>
+              <i style={{ background: row.color }} />
+              <b>{row.label}</b>
+              {row.count}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, distribution.rows.length)}, minmax(0, 1fr))` }}>
+          {distribution.rows.map((row) => (
+            <div key={row.key} className="well px-2 py-2">
+              <p className="truncate text-xs font-bold" style={{ color: row.color }}>{row.label}</p>
+              <p className="font-mono text-xl font-bold">{row.count}</p>
+              <p className="text-[11px] text-ink-faint">{Math.round((row.count / Math.max(1, distribution.total)) * 100)}%</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
