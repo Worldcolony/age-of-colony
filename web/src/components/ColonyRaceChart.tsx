@@ -14,6 +14,22 @@ interface RacePoint {
   changedColonyId?: string;
 }
 
+interface EndMarker {
+  colonyId: string;
+  name: string;
+  value: number;
+  color: string;
+  pointY: number;
+}
+
+interface EndLabel {
+  key: string;
+  names: string[];
+  value: number;
+  colors: string[];
+  pointY: number;
+}
+
 export function ColonyRaceChart({
   colonies,
   events,
@@ -31,11 +47,7 @@ export function ColonyRaceChart({
   const ranked = [...colonies].sort((a, b) => colonySugar(b) - colonySugar(a));
   const points = buildRacePoints(ranked, events);
   const allValues = points.flatMap((point) => ranked.map((colony) => point.values[colony.colonyId] ?? colonySugar(colony)));
-  const rawMin = Math.min(...allValues);
-  const rawMax = Math.max(...allValues);
-  const padding = Math.max(2, Math.ceil((rawMax - rawMin) * 0.18));
-  const minValue = Math.max(0, rawMin - padding);
-  const maxValue = Math.max(minValue + 4, rawMax + padding);
+  const { minValue, maxValue } = focusedChartBounds(allValues);
   const firstIndex = points[0]?.index ?? 0;
   const lastIndex = points.at(-1)?.index ?? firstIndex + 1;
   const leader = ranked[0];
@@ -56,10 +68,28 @@ export function ColonyRaceChart({
     return HEIGHT - PAD_Y - ((value - minValue) / (maxValue - minValue)) * (HEIGHT - PAD_Y * 2);
   }
 
+  function visualOffsetFor(colonyIndex: number): number {
+    return allSeriesLevel ? (colonyIndex - (ranked.length - 1) / 2) * 4 : 0;
+  }
+
+  const endPoint = points.at(-1);
+  const endMarkers = ranked.map((colony, colonyIndex) => {
+    const value = endPoint?.values[colony.colonyId] ?? colonySugar(colony);
+    const pointY = yFor(value) + visualOffsetFor(colonyIndex);
+    return {
+      colonyId: colony.colonyId,
+      name: colony.name,
+      value,
+      color: CHART_COLORS[colonyIndex % CHART_COLORS.length],
+      pointY,
+    };
+  });
+  const endLabels = groupEndMarkers(endMarkers);
+
   return (
     <section
       className={`colony-race ${compact ? "is-compact" : ""} ${hero ? "is-hero" : ""}`}
-      aria-label={tied ? `Sugar race. ${tiedLeaders.length} colonies are tied at ${colonySugar(leader)} Sugar.` : `Sugar race. ${leader.name} leads by ${lead} Sugar.`}
+      aria-label={`Sugar race. ${tied ? `${tiedLeaders.length} colonies are tied at ${colonySugar(leader)} Sugar.` : `${leader.name} leads by ${lead} Sugar.`} Focused chart scale from ${minValue} to ${maxValue} Sugar.`}
     >
       <div className="colony-race-head">
         <div>
@@ -90,7 +120,7 @@ export function ColonyRaceChart({
           })}
           {ranked.map((colony, colonyIndex) => {
             const color = CHART_COLORS[colonyIndex % CHART_COLORS.length];
-            const visualOffset = allSeriesLevel ? (colonyIndex - (ranked.length - 1) / 2) * 4 : 0;
+            const visualOffset = visualOffsetFor(colonyIndex);
             const path = points.map((point, pointIndex) => `${pointIndex ? "L" : "M"} ${xFor(point.index)} ${yFor(point.values[colony.colonyId] ?? colonySugar(colony)) + visualOffset}`).join(" ");
             const end = points.at(-1);
             const endX = xFor(end?.index ?? lastIndex);
@@ -125,6 +155,27 @@ export function ColonyRaceChart({
             );
           })}
         </svg>
+        <div className="colony-race-end-labels" aria-hidden="true">
+          {endLabels.map((label) => (
+            <span
+              key={label.key}
+              className="colony-race-end-tag"
+              title={`${label.names.join(" + ")}: ${label.value} Sugar`}
+              style={{
+                "--marker-y": `${label.pointY / HEIGHT * 100}%`,
+                "--series-color": label.colors[0],
+              } as CSSProperties}
+            >
+              <span className="colony-race-end-series">
+                {label.colors.map((color) => (
+                  <i key={color} style={{ "--series-color": color } as CSSProperties} />
+                ))}
+              </span>
+              <span>{label.names.join(" + ")}</span>
+              <b>{label.value}</b>
+            </span>
+          ))}
+        </div>
         <span className="colony-race-axis top">{maxValue}</span>
         <span className="colony-race-axis bottom">{minValue}</span>
         <span className="colony-race-x start">Start</span>
@@ -146,6 +197,42 @@ export function ColonyRaceChart({
       </div>
     </section>
   );
+}
+
+function focusedChartBounds(values: number[]): { minValue: number; maxValue: number } {
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const rawRange = rawMax - rawMin;
+  const padding = Math.max(1, Math.ceil(rawRange * 0.12));
+  let minValue = Math.max(0, rawMin - padding);
+  let maxValue = rawMax + padding;
+  const minimumVisibleSpan = 6;
+
+  if (maxValue - minValue < minimumVisibleSpan) {
+    const missing = minimumVisibleSpan - (maxValue - minValue);
+    const addBelow = Math.min(minValue, Math.floor(missing / 2));
+    minValue -= addBelow;
+    maxValue += missing - addBelow;
+  }
+
+  return { minValue, maxValue };
+}
+
+function groupEndMarkers(markers: EndMarker[]): EndLabel[] {
+  const groups = new Map<number, EndMarker[]>();
+  for (const marker of markers) {
+    groups.set(marker.value, [...(groups.get(marker.value) ?? []), marker]);
+  }
+
+  return [...groups.entries()]
+    .map(([value, groupedMarkers]) => ({
+      key: groupedMarkers.map((marker) => marker.colonyId).join("-"),
+      names: groupedMarkers.map((marker) => marker.name),
+      value,
+      colors: groupedMarkers.map((marker) => marker.color),
+      pointY: groupedMarkers.reduce((total, marker) => total + marker.pointY, 0) / groupedMarkers.length,
+    }))
+    .sort((left, right) => left.pointY - right.pointY);
 }
 
 function buildRacePoints(colonies: Colony[], events: GameEvent[]): RacePoint[] {
