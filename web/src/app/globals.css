@@ -1645,6 +1645,182 @@ body {
 .broadcast-score-metrics .plate p:first-child { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .broadcast-score-metrics .plate p:last-child { font-size: 16px; }
 
+.cockpit-colony-overview {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  border: 2px solid rgba(74, 58, 30, 0.34);
+  border-radius: var(--radius-glass);
+  background:
+    linear-gradient(135deg, rgba(176, 126, 28, .1), transparent 42%),
+    rgba(243, 235, 211, .97);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.62), 2px 2px 0 rgba(74,58,30,.14);
+  padding: 10px;
+}
+.cockpit-colony-overview-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cockpit-colony-overview-head h3 {
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cockpit-colony-overview-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+.cockpit-colony-overview-orders {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.cockpit-colony-overview-orders > div {
+  min-width: 0;
+  border: 1px solid rgba(116, 85, 30, .24);
+  border-radius: 6px;
+  background: rgba(255, 250, 236, .58);
+  padding: 7px 8px;
+}
+.cockpit-colony-overview-orders span {
+  display: block;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--color-ink-faint);
+}
+.cockpit-colony-overview-orders strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-ink);
+}
+.cockpit-colony-overview > .admin-colony-manage-button {
+  width: 100%;
+  min-height: 38px;
+  margin-top: auto;
+}
+
+.cockpit-live-activity {
+  gap: 8px;
+  padding: 10px 12px;
+}
+.cockpit-live-activity-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cockpit-live-activity-head h2 {
+  margin-top: 2px;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.cockpit-live-activity-head p:last-child {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-ink-faint);
+}
+.cockpit-live-activity-grid {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(300px, .7fr) minmax(0, 1.3fr);
+  gap: 10px;
+}
+.cockpit-activity-markets {
+  border: 2px solid rgba(74, 58, 30, 0.34);
+  border-radius: var(--radius-glass);
+  background:
+    radial-gradient(circle at 100% 0, rgba(240, 212, 136, .18), transparent 42%),
+    linear-gradient(180deg, rgba(255, 253, 245, .96), rgba(232, 222, 197, .94));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.62), 2px 2px 0 rgba(74,58,30,.14);
+  padding: 9px 10px;
+}
+
+.cockpit-main.is-admin-preview {
+  display: block;
+}
+.cockpit-admin-variant {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1.86fr) minmax(330px, .74fr);
+  gap: 16px;
+}
+.cockpit-admin-primary,
+.cockpit-admin-rail {
+  min-width: 0;
+  min-height: 0;
+  gap: 16px;
+}
+.cockpit-admin-primary,
+.cockpit-admin-rail {
+  display: grid;
+}
+.cockpit-admin-variant .cockpit-activity-markets {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+.cockpit-admin-primary {
+  grid-template-rows: minmax(235px, .88fr) minmax(260px, 1.12fr);
+}
+.cockpit-admin-rail {
+  grid-template-rows: minmax(170px, .62fr) minmax(0, 1.38fr);
+}
+.cockpit-admin-variant .race-broadcast-stage {
+  grid-template-columns: minmax(190px, .58fr) minmax(0, 1.42fr);
+}
+.cockpit-admin-rail > .match-pulse {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+.cockpit-admin-rail > .match-pulse .match-pulse-layout {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.cockpit-admin-rail > .match-pulse .match-pulse-latest {
+  min-height: 150px;
+  flex: 1;
+}
+.cockpit-admin-rail > .match-pulse .match-pulse-recent {
+  grid-template-columns: 1fr;
+}
+.cockpit-admin-rail > .match-pulse .match-pulse-recent li:nth-child(n+4) {
+  display: none;
+}
+
 .cockpit-markets-head {
   display: flex;
   align-items: flex-start;
@@ -2222,6 +2398,57 @@ body {
   text-transform: uppercase;
   color: rgba(255,249,232,.42);
 }
+.match-pulse-market-link {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--pulse) 50%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--pulse) 9%, rgba(255,255,255,.03));
+  padding: 6px 8px;
+  text-align: left;
+  color: #fff9e8;
+  cursor: pointer;
+}
+.match-pulse-market-link:hover {
+  border-color: var(--pulse);
+  background: color-mix(in srgb, var(--pulse) 15%, rgba(255,255,255,.04));
+}
+.match-pulse-market-link:focus-visible,
+.match-pulse-recent-link:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--pulse, #f0d488) 50%, transparent);
+  outline-offset: 2px;
+}
+.match-pulse-market-link > span {
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--pulse);
+}
+.match-pulse-market-link > strong {
+  grid-column: 1;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.match-pulse-market-link > i {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-style: normal;
+  color: var(--pulse);
+}
 .match-pulse-recent {
   display: grid;
   align-content: stretch;
@@ -2264,6 +2491,24 @@ body {
   font-style: normal;
   color: rgba(255,249,232,.36);
 }
+.match-pulse-recent-link {
+  min-height: 32px;
+  border: 1px solid color-mix(in srgb, var(--pulse) 36%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--pulse) 8%, transparent);
+  padding: 4px 7px;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--pulse);
+  cursor: pointer;
+}
+.match-pulse-recent-link:hover {
+  border-color: var(--pulse);
+  background: color-mix(in srgb, var(--pulse) 14%, transparent);
+}
 .match-pulse-recent li.is-empty {
   grid-template-columns: 1fr;
   min-height: 100%;
@@ -2295,6 +2540,9 @@ body {
     grid-template-columns: minmax(0, 1fr) !important;
   }
   .cockpit-main { grid-template-rows: minmax(0, 1.08fr) minmax(228px, .92fr); }
+  .cockpit-desktop-grid.is-admin-wide .cockpit-main {
+    grid-template-rows: minmax(220px, .92fr) minmax(250px, 1.08fr);
+  }
   .cockpit-sidebar {
     grid-auto-rows: max-content;
     align-content: start;
@@ -2352,6 +2600,22 @@ body {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 5px 12px;
   }
+  .race-broadcast-stage > .cockpit-colony-overview {
+    min-height: 0;
+    padding: 8px;
+  }
+  .race-broadcast-stage > .cockpit-colony-overview .colony-console-score-main {
+    padding: 7px 8px;
+  }
+  .race-broadcast-stage > .cockpit-colony-overview .colony-console-score-main strong {
+    font-size: 22px;
+  }
+  .race-broadcast-stage > .cockpit-colony-overview .colony-console-score-stat {
+    padding-inline: 3px;
+  }
+  .race-broadcast-stage > .cockpit-colony-overview .colony-console-score-stat strong {
+    font-size: 13px;
+  }
   .race-broadcast-stage > .match-pulse {
     display: flex;
     min-height: 0;
@@ -2396,6 +2660,65 @@ body {
     height: 24px;
     font-size: 8px;
   }
+  .cockpit-live-activity-grid > .match-pulse {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    padding: 8px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-head {
+    margin-bottom: 6px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-layout {
+    display: grid;
+    min-height: 0;
+    flex: 1;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 6px;
+    overflow: hidden;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-latest {
+    min-height: 86px;
+    padding: 9px 10px 8px 14px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-latest > strong {
+    margin-top: 5px;
+    font-size: 14px;
+    line-height: 1.25;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-latest > p {
+    display: none;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-market-link {
+    min-height: 38px;
+    margin-top: 6px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-recent {
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-recent li {
+    min-height: 36px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-recent li:nth-child(n+2) {
+    display: none;
+  }
+  .cockpit-activity-markets .cockpit-markets-head {
+    align-items: center;
+  }
+  .cockpit-activity-markets .cockpit-markets-head h2 {
+    font-size: 18px;
+  }
+  .cockpit-activity-markets .cockpit-markets-controls {
+    flex: 1;
+  }
+  .cockpit-activity-markets .cockpit-markets-controls .seg {
+    flex: 1;
+    min-width: min(260px, 32vw);
+  }
 }
 
 @media (min-width: 1280px) and (max-width: 1399px) {
@@ -2403,6 +2726,10 @@ body {
   .race-broadcast-head h2 { font-size: 16px; }
   .race-broadcast-stage {
     grid-template-columns: minmax(175px, .62fr) minmax(0, 1.35fr) minmax(225px, .78fr);
+    gap: 8px;
+  }
+  .cockpit-live-activity-grid {
+    grid-template-columns: minmax(280px, .64fr) minmax(0, 1.36fr);
     gap: 8px;
   }
   .race-broadcast-stage .colony-race-head h3 {
@@ -2422,6 +2749,8 @@ body {
   }
   .race-broadcast-stage > .match-pulse .match-pulse-latest > p { -webkit-line-clamp: 1; }
   .race-broadcast-stage > .match-pulse .match-pulse-latest > small { display: none; }
+  .cockpit-colony-overview-orders { grid-template-columns: 1fr; }
+  .cockpit-colony-overview-orders > div:last-child { display: none; }
 }
 
 @media (min-width: 1280px) and (max-height: 760px) {
@@ -2429,6 +2758,9 @@ body {
   .cockpit-desktop-grid,
   .cockpit-main,
   .cockpit-sidebar { gap: 10px; }
+  .cockpit-desktop-grid.is-admin-wide .cockpit-main {
+    grid-template-rows: minmax(190px, .95fr) minmax(170px, 1.05fr);
+  }
   .cockpit-desktop > footer { display: none; }
   .admin-colony-switcher.is-dense { padding-block: 6px !important; }
   .admin-colony-switcher.is-dense .admin-control-seal { width: 40px; height: 40px; }
@@ -2445,6 +2777,14 @@ body {
   .broadcast-score-core > strong { font-size: 26px; }
   .broadcast-score-clock .smooth-match-clock { font-size: 20px; }
   .race-broadcast-stage .colony-race.is-hero .colony-race-plot { min-height: 86px; }
+  .cockpit-live-activity-head p:last-child { display: none; }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-latest {
+    min-height: 88px;
+  }
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-latest > p,
+  .cockpit-live-activity-grid > .match-pulse .match-pulse-recent li:nth-child(n+3) {
+    display: none;
+  }
 }
 
 @media (max-width: 1279px) {

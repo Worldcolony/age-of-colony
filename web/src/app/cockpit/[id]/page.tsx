@@ -15,7 +15,15 @@ import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
 import { ColonyRaceChart } from "@/components/ColonyRaceChart";
 import { SmoothMatchClock } from "@/components/SmoothMatchClock";
-import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
+import { optionLabel, STYLE_OPTIONS } from "@/lib/strategy";
+import {
+  colonyAvailableSugar,
+  colonyReservedSugar,
+  colonySugar,
+  colonySugarNet,
+  optionRewardSugar,
+  optionRiskSugar,
+} from "@/lib/sugar";
 import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
@@ -395,6 +403,7 @@ function CockpitRun({ id }: { id: string }) {
   }, [game?.colonies]);
   const aggregatedFeed = useMemo(() => aggregateFeed(usefulEvents, colonyNames), [usefulEvents, colonyNames]);
   const feedRows = aggregatedFeed.slice(0, activeTab === "feed" ? 18 : 5);
+  const desktopActiveTab: CockpitTab = adminRoom && activeTab === "feed" ? "live" : activeTab;
 
   useEffect(() => {
     const nextColonyId = ownColony?.colonyId ?? null;
@@ -690,6 +699,98 @@ function CockpitRun({ id }: { id: string }) {
     </section>
   );
 
+  const desktopColonySummary = adminRoom && mine ? (
+    <ColonyOverviewPanel
+      colony={mine}
+      rank={rank}
+      editable={RUNNING.has(status)}
+      onManage={() => setDesktopAdminCommandOpen(true)}
+    />
+  ) : undefined;
+
+  function selectLinkedMarket(market: MarketModel) {
+    if (market.status === "open") {
+      setSelectedMarketId(market.id);
+      setActiveTab("live");
+      return;
+    }
+    setSelectedSettledId(market.id);
+    setActiveTab("settled");
+  }
+
+  const desktopMarketsWorkspace = (
+    <>
+      <div className="cockpit-markets-head">
+        <div>
+          <p className="eyebrow">{adminRoom ? "Linked decisions" : "Colony decisions"}</p>
+          <h2 className="text-2xl font-bold">Live markets</h2>
+        </div>
+        <div className="cockpit-markets-controls">
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <span className="status-pill">{openMarkets.length} live</span>
+            <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+          </div>
+          <CockpitTabs
+            active={desktopActiveTab}
+            counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+            visibleTabs={adminRoom ? ["live", "settled"] : undefined}
+            onChange={setActiveTab}
+          />
+        </div>
+      </div>
+
+      <div className="cockpit-markets-body min-h-0 overflow-y-auto">
+        {desktopActiveTab === "live" && (
+          <LiveTab
+            openMarkets={openMarkets}
+            openSummary={openSummary}
+            selectedMarket={selectedMarket}
+            selectedMarketId={effectiveSelectedMarketId}
+            settledMarkets={settledMarkets}
+            colony={mine}
+            colonyLabel={colonyFocusLabel}
+            waitingForKickoff={txlineWaiting}
+            matchStateLabel={txlineStateLabel}
+            onSelectMarket={setSelectedMarketId}
+            onSelectSettled={(marketId) => {
+              setSelectedSettledId(marketId);
+              setActiveTab("settled");
+            }}
+          />
+        )}
+
+        {desktopActiveTab === "settled" && (
+          <SettledTab
+            settledMarkets={settledMarkets}
+            selectedSettled={selectedSettled}
+            selectedSettledId={effectiveSelectedSettledId}
+            colony={mine}
+            colonyLabel={colonyFocusLabel}
+            onSelectSettled={setSelectedSettledId}
+          />
+        )}
+
+        {desktopActiveTab === "feed" && (
+          <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
+        )}
+      </div>
+    </>
+  );
+
+  const adminEventsPanel = (
+    <MatchPulseTimeline
+      events={events}
+      markets={markets}
+      onSelectMarket={selectLinkedMarket}
+    />
+  );
+
+  const adminMarketsPanel = (
+    <section className="cockpit-activity-markets flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden">
+      {desktopMarketsWorkspace}
+    </section>
+  );
+
   return (
     <>
     {mobileShell}
@@ -717,7 +818,7 @@ function CockpitRun({ id }: { id: string }) {
       )}
 
       <div className={`cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${adminRoom ? "is-admin-wide" : ""}`}>
-        <main className="cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden">
+        <main className={`cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden ${adminRoom ? "is-admin-preview" : ""}`}>
           {status === "created" ? (
             <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:row-span-2 xl:min-h-[360px] xl:justify-center">
               <p className="eyebrow">Simulation dashboard</p>
@@ -729,6 +830,23 @@ function CockpitRun({ id }: { id: string }) {
                 {adminRoom ? "Back to admin" : "Back to room"}
               </button>
             </section>
+          ) : adminRoom ? (
+            <div className="cockpit-admin-variant">
+              <div className="cockpit-admin-primary">
+                <RaceBroadcastPanel
+                  colonies={sorted}
+                  events={events}
+                  matchSummary={desktopMatchSummary}
+                  sidePanel={null}
+                  onOpenRanks={() => router.push(resultsHref)}
+                />
+                {adminMarketsPanel}
+              </div>
+              <aside className="cockpit-admin-rail">
+                {desktopColonySummary}
+                {adminEventsPanel}
+              </aside>
+            </div>
           ) : (
             <>
               <RaceBroadcastPanel
@@ -739,59 +857,7 @@ function CockpitRun({ id }: { id: string }) {
               />
 
               <section className="cockpit-markets glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
-                <div className="cockpit-markets-head">
-                  <div>
-                    <p className="eyebrow">Colony decisions</p>
-                    <h2 className="text-2xl font-bold">Live markets</h2>
-                  </div>
-                  <div className="cockpit-markets-controls">
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      <span className="status-pill">{openMarkets.length} live</span>
-                      <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
-                    </div>
-                    <CockpitTabs
-                      active={activeTab}
-                      counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-                      onChange={setActiveTab}
-                    />
-                  </div>
-                </div>
-
-                <div className="cockpit-markets-body min-h-0 overflow-y-auto">
-                  {activeTab === "live" && (
-                    <LiveTab
-                      openMarkets={openMarkets}
-                      openSummary={openSummary}
-                      selectedMarket={selectedMarket}
-                      selectedMarketId={effectiveSelectedMarketId}
-                      settledMarkets={settledMarkets}
-                      colony={mine}
-                      colonyLabel={colonyFocusLabel}
-                      waitingForKickoff={txlineWaiting}
-                      matchStateLabel={txlineStateLabel}
-                      onSelectMarket={setSelectedMarketId}
-                      onSelectSettled={(marketId) => {
-                        setSelectedSettledId(marketId);
-                        setActiveTab("settled");
-                      }}
-                    />
-                  )}
-
-                  {activeTab === "settled" && (
-                    <SettledTab
-                      settledMarkets={settledMarkets}
-                      selectedSettled={selectedSettled}
-                      selectedSettledId={effectiveSelectedSettledId}
-                      colony={mine}
-                      colonyLabel={colonyFocusLabel}
-                      onSelectSettled={setSelectedSettledId}
-                    />
-                  )}
-
-                  {activeTab === "feed" && (
-                    <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
-                  )}
-                </div>
+                {desktopMarketsWorkspace}
               </section>
             </>
           )}
@@ -875,12 +941,14 @@ function RaceBroadcastPanel({
   events,
   compact = false,
   matchSummary,
+  sidePanel,
   onOpenRanks,
 }: {
   colonies: Colony[];
   events: GameEvent[];
   compact?: boolean;
   matchSummary?: ReactNode;
+  sidePanel?: ReactNode;
   onOpenRanks: () => void;
 }) {
   return (
@@ -897,19 +965,99 @@ function RaceBroadcastPanel({
       <div className="race-broadcast-stage">
         {matchSummary}
         <ColonyRaceChart colonies={colonies} events={events} hero />
-        <MatchPulseTimeline events={events} />
+        {sidePanel === undefined ? <MatchPulseTimeline events={events} /> : sidePanel}
       </div>
     </section>
   );
 }
 
-function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
+function ColonyOverviewPanel({
+  colony,
+  rank,
+  editable,
+  onManage,
+}: {
+  colony: Colony;
+  rank: number;
+  editable: boolean;
+  onManage: () => void;
+}) {
+  const sugar = colonySugar(colony);
+  const available = colonyAvailableSugar(colony);
+  const committed = colonyReservedSugar(colony);
+  const sugarNet = colonySugarNet(colony);
+
+  return (
+    <section className="cockpit-colony-overview" aria-label={`Colony settings for ${colony.name}`}>
+      <header className="cockpit-colony-overview-head">
+        <div className="min-w-0">
+          <p className="eyebrow">Admin colony</p>
+          <h3>{colony.name}</h3>
+        </div>
+        <div className="cockpit-colony-overview-status">
+          <span className={`colony-console-state ${editable ? "is-live" : "is-locked"}`}>
+            <i aria-hidden="true" />
+            {editable ? "Live" : "Locked"}
+          </span>
+          <span className="colony-console-rank">#{rank || "–"}</span>
+        </div>
+      </header>
+
+      <div className="colony-console-score" aria-label={`${sugar} Sugar, ${available} available, ${committed} committed`}>
+        <div className="colony-console-score-main">
+          <span>Sugar</span>
+          <p>
+            <strong>{sugar}</strong>
+            <b className={sugarNet < 0 ? "is-negative" : "is-positive"}>
+              Δ {sugarNet > 0 ? "+" : ""}{sugarNet}
+            </b>
+          </p>
+        </div>
+        <div className="colony-console-score-stat">
+          <span>Available</span>
+          <strong>{available}</strong>
+        </div>
+        <div className="colony-console-score-stat">
+          <span>Committed</span>
+          <strong>{committed}</strong>
+        </div>
+      </div>
+
+      <div className="cockpit-colony-overview-orders">
+        <div>
+          <span>Colony strategy</span>
+          <strong>{optionLabel(STYLE_OPTIONS, colony.style)}</strong>
+        </div>
+        <div>
+          <span>Colony ants</span>
+          <strong>{colony.antsAlive} alive</strong>
+        </div>
+      </div>
+
+      <button type="button" className="admin-colony-manage-button" onClick={onManage}>
+        <span>Manage orders</span>
+        <span aria-hidden="true">→</span>
+      </button>
+    </section>
+  );
+}
+
+function MatchPulseTimeline({
+  events,
+  markets = [],
+  onSelectMarket,
+}: {
+  events: GameEvent[];
+  markets?: MarketModel[];
+  onSelectMarket?: (market: MarketModel) => void;
+}) {
   const moments = events.flatMap((event) => {
     const spotlight = spotlightFromEvent(event);
     return spotlight ? [{ event, spotlight }] : [];
   });
   const latest = moments[0];
   const recent = moments.slice(1, 5);
+  const latestMarket = latest ? linkedMarket(latest.event, markets) : undefined;
 
   return (
     <section className="match-pulse" aria-label="Latest match and market events">
@@ -930,20 +1078,46 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
             </div>
             <strong>{latest.spotlight.title}</strong>
             <p>{latest.spotlight.detail}</p>
-            <small>Latest signal · #{latest.event.index}</small>
+            {latestMarket && onSelectMarket ? (
+              <button
+                type="button"
+                className="match-pulse-market-link"
+                onClick={() => onSelectMarket(latestMarket)}
+              >
+                <span>{latestMarket.status === "open" ? "Open market" : "Market result"}</span>
+                <strong>{cleanMarketLabel(latestMarket.label)}</strong>
+                <i aria-hidden="true">→</i>
+              </button>
+            ) : (
+              <small>Latest signal · #{latest.event.index}</small>
+            )}
           </article>
 
           <ol className="match-pulse-recent" aria-label="Previous events">
-            {recent.length ? recent.map(({ event, spotlight }) => (
-              <li key={spotlight.key} data-tone={spotlight.tone}>
-                <span className="match-pulse-glyph">{pulseGlyphLabel(spotlight.glyph)}</span>
-                <span className="min-w-0">
-                  <small>{spotlight.kicker}</small>
-                  <b>{spotlight.title}</b>
-                </span>
-                <em>#{event.index}</em>
-              </li>
-            )) : (
+            {recent.length ? recent.map(({ event, spotlight }) => {
+              const market = linkedMarket(event, markets);
+              return (
+                <li key={spotlight.key} data-tone={spotlight.tone}>
+                  <span className="match-pulse-glyph">{pulseGlyphLabel(spotlight.glyph)}</span>
+                  <span className="min-w-0">
+                    <small>{spotlight.kicker}</small>
+                    <b>{spotlight.title}</b>
+                  </span>
+                  {market && onSelectMarket ? (
+                    <button
+                      type="button"
+                      className="match-pulse-recent-link"
+                      aria-label={`Open ${market.status === "open" ? "market" : "market result"}: ${cleanMarketLabel(market.label)}`}
+                      onClick={() => onSelectMarket(market)}
+                    >
+                      {market.status === "open" ? "Market" : "Result"} →
+                    </button>
+                  ) : (
+                    <em>#{event.index}</em>
+                  )}
+                </li>
+              );
+            }) : (
               <li className="is-empty">The next goal, card, substitution or market will appear here.</li>
             )}
           </ol>
@@ -959,6 +1133,12 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
       )}
     </section>
   );
+}
+
+function linkedMarket(event: GameEvent, markets: MarketModel[]) {
+  const opportunityId = eventOpportunityId(event);
+  if (!opportunityId) return undefined;
+  return markets.find((market) => market.id === opportunityId);
 }
 
 function pulseGlyphLabel(glyph: EventSpotlight["glyph"]): string {
@@ -1006,17 +1186,22 @@ function FeedRowLine({ row }: { row: FeedRow }) {
 function CockpitTabs({
   active,
   counts,
+  visibleTabs,
   onChange,
 }: {
   active: CockpitTab;
   counts: Record<CockpitTab, number>;
+  visibleTabs?: CockpitTab[];
   onChange: (tab: CockpitTab) => void;
 }) {
-  const tabs: { id: CockpitTab; label: string }[] = [
+  const allTabs: { id: CockpitTab; label: string }[] = [
     { id: "live", label: "Live" },
     { id: "settled", label: "Settled" },
     { id: "feed", label: "Feed" },
   ];
+  const tabs = visibleTabs
+    ? allTabs.filter((tab) => visibleTabs.includes(tab.id))
+    : allTabs;
   return (
     <div className="seg sticky top-2 z-20 bg-[rgba(228,218,193,0.95)] backdrop-blur-md" role="tablist" aria-label="Cockpit views">
       {tabs.map((tab) => (
