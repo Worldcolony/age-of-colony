@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ColonyRaceChart } from "@/components/ColonyRaceChart";
 import { flag, fmtClockSeconds } from "@/lib/format";
 import { colonySugar } from "@/lib/sugar";
-import type { Colony, GameEvent, GameState, MatchScore, Opportunity } from "@/lib/types";
+import type { Colony, GameEvent, GameState, MatchScore, Opportunity, OpportunityOption } from "@/lib/types";
 
 interface ReplayPoint {
   event: GameEvent;
@@ -16,6 +16,28 @@ interface ReplayEventCard {
   title: string;
   detail: string;
   tone: "match" | "market" | "colony" | "result" | "system";
+}
+
+type ReplayFeedView = "bets" | "all";
+type ReplayBetStatus = "open" | "won" | "lost" | "void";
+
+interface ReplayBetEntry {
+  predictionId: string;
+  colonyName: string;
+  optionLabel: string;
+  status: ReplayBetStatus;
+  sugarAtRisk: number;
+  sugarDelta: number | null;
+  eventIndex: number;
+  resultEventIndex?: number;
+}
+
+interface ReplayBetMarket {
+  id: string;
+  label: string;
+  minute: number | null;
+  lastEventIndex: number;
+  bets: ReplayBetEntry[];
 }
 
 export function SimulationReplay({
@@ -30,6 +52,7 @@ export function SimulationReplay({
   const [position, setPosition] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<1 | 2 | 4>(1);
+  const [feedView, setFeedView] = useState<ReplayFeedView>("bets");
   const positionRef = useRef(0);
   const replayKey = `${game.gameId}:${timeline[0]?.event.index ?? 0}:${timeline.at(-1)?.event.index ?? 0}`;
 
@@ -74,10 +97,20 @@ export function SimulationReplay({
     () => coloniesAtCursor(game.colonies, timeline.map((point) => point.event), visibleEvents),
     [game.colonies, timeline, visibleEvents],
   );
+  const allBetMarkets = useMemo(
+    () => buildReplayBetMarkets(timeline.map((point) => point.event), game.colonies),
+    [game.colonies, timeline],
+  );
+  const visibleBetMarkets = useMemo(
+    () => buildReplayBetMarkets(visibleEvents, game.colonies),
+    [game.colonies, visibleEvents],
+  );
   const currentScore = latestScore(visibleEvents);
   const matchClock = latestMatchClock(visibleEvents);
   const recentPoints = visiblePoints.slice(-7).reverse();
   const progress = duration > 0 ? Math.round(position / duration * 100) : 0;
+  const totalBetCount = allBetMarkets.reduce((total, market) => total + market.bets.length, 0);
+  const visibleBetCount = visibleBetMarkets.reduce((total, market) => total + market.bets.length, 0);
 
   function seek(next: number) {
     const bounded = Math.max(0, Math.min(duration, next));
@@ -157,36 +190,107 @@ export function SimulationReplay({
         <aside className="well min-h-0 p-3" aria-label="Events reached in the replay">
           <div className="flex items-center justify-between gap-2">
             <div>
-              <p className="eyebrow">Replay feed</p>
-              <strong className="text-sm">{visiblePoints.length} / {timeline.length} actions</strong>
+              <p className="eyebrow">{feedView === "bets" ? "Colony bets" : "Replay feed"}</p>
+              <strong className="text-sm">
+                {feedView === "bets"
+                  ? `${visibleBetCount} / ${totalBetCount} bets`
+                  : `${visiblePoints.length} / ${timeline.length} actions`}
+              </strong>
             </div>
             <span className="status-pill">{progress}%</span>
           </div>
-          <ol className="mt-3 max-h-72 space-y-2 overflow-y-auto">
-            {recentPoints.map((point) => {
-              const card = replayEventCard(point.event);
-              return (
-                <li key={point.event.index} className="flex gap-2 border-b border-[color:var(--brd-soft)] pb-2">
-                  <span className="status-pill shrink-0">{card.code}</span>
-                  <div className="min-w-0">
-                    <small className="font-mono text-[10px] text-ink-faint">
-                      {formatReplayDuration(point.offset)} · #{point.event.index}
-                    </small>
-                    <b className="block truncate text-sm">{card.title}</b>
-                    <p className="truncate text-xs text-ink-faint">{card.detail}</p>
+
+          <div className="mt-3 grid grid-cols-2 gap-2" role="group" aria-label="Replay feed filter">
+            <button
+              type="button"
+              className={`btn !min-h-11 py-2 text-xs ${feedView === "bets" ? "btn-primary" : "btn-ghost"}`}
+              aria-pressed={feedView === "bets"}
+              onClick={() => setFeedView("bets")}
+            >
+              Bets · {totalBetCount}
+            </button>
+            <button
+              type="button"
+              className={`btn !min-h-11 py-2 text-xs ${feedView === "all" ? "btn-primary" : "btn-ghost"}`}
+              aria-pressed={feedView === "all"}
+              onClick={() => setFeedView("all")}
+            >
+              All events
+            </button>
+          </div>
+
+          {feedView === "bets" ? (
+            <ol className="mt-3 max-h-72 space-y-2 overflow-y-auto pr-1" aria-label="Colony bets reached in the replay">
+              {visibleBetMarkets.map((market) => (
+                <li key={market.id} className="rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.64)] p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <small className="font-mono text-[10px] uppercase tracking-wide text-ink-faint">
+                        {market.minute != null ? `${Math.floor(market.minute)}'` : "Live"} · #{market.lastEventIndex}
+                      </small>
+                      <b className="block text-sm leading-snug">{market.label}</b>
+                    </div>
+                    <span className="status-pill shrink-0">
+                      {market.bets.length} bet{market.bets.length === 1 ? "" : "s"}
+                    </span>
                   </div>
+                  <ul className="mt-2 space-y-1.5">
+                    {market.bets.map((bet) => (
+                      <li
+                        key={bet.predictionId}
+                        className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-[color:var(--brd-soft)] pt-1.5"
+                      >
+                        <span className={`status-pill ${replayBetStatusTone(bet.status)}`}>
+                          {replayBetStatusLabel(bet.status)}
+                        </span>
+                        <div className="min-w-0">
+                          <b className="block truncate text-xs">{bet.colonyName}</b>
+                          <p className="truncate text-[11px] text-ink-faint">Picked: {bet.optionLabel}</p>
+                        </div>
+                        <span className={`font-mono text-[11px] font-bold ${replayBetSugarTone(bet)}`}>
+                          {replayBetSugarLabel(bet)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </li>
-              );
-            })}
-            {!recentPoints.length && (
-              <li className="py-6 text-center">
-                <b className="block text-sm">Press play to review the simulation</b>
-                <p className="mt-1 text-xs text-ink-faint">
-                  Match events, markets, colony votes and results will appear here.
-                </p>
-              </li>
-            )}
-          </ol>
+              ))}
+              {!visibleBetMarkets.length && (
+                <li className="py-6 text-center">
+                  <b className="block text-sm">No colony bet at this point</b>
+                  <p className="mt-1 text-xs text-ink-faint">
+                    Press play to reveal each market, pick and result.
+                  </p>
+                </li>
+              )}
+            </ol>
+          ) : (
+            <ol className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+              {recentPoints.map((point) => {
+                const card = replayEventCard(point.event);
+                return (
+                  <li key={point.event.index} className="flex gap-2 border-b border-[color:var(--brd-soft)] pb-2">
+                    <span className="status-pill shrink-0">{card.code}</span>
+                    <div className="min-w-0">
+                      <small className="font-mono text-[10px] text-ink-faint">
+                        {formatReplayDuration(point.offset)} · #{point.event.index}
+                      </small>
+                      <b className="block truncate text-sm">{card.title}</b>
+                      <p className="truncate text-xs text-ink-faint">{card.detail}</p>
+                    </div>
+                  </li>
+                );
+              })}
+              {!recentPoints.length && (
+                <li className="py-6 text-center">
+                  <b className="block text-sm">Press play to review the simulation</b>
+                  <p className="mt-1 text-xs text-ink-faint">
+                    Match events, markets, colony votes and results will appear here.
+                  </p>
+                </li>
+              )}
+            </ol>
+          )}
         </aside>
       </div>
     </section>
@@ -251,6 +355,95 @@ function settlementDeltas(events: GameEvent[]): Record<string, number> {
     totals[event.data.colonyId] = (totals[event.data.colonyId] ?? 0) + delta;
   }
   return totals;
+}
+
+function buildReplayBetMarkets(events: GameEvent[], colonies: Colony[]): ReplayBetMarket[] {
+  const colonyNames = new Map(colonies.map((colony) => [colony.colonyId, colony.name]));
+  const opportunities = new Map<string, Opportunity>();
+  const markets = new Map<string, ReplayBetMarket>();
+  const predictions = new Map<string, ReplayBetEntry>();
+
+  function ensureMarket(
+    id: string,
+    opportunity: Opportunity | undefined,
+    event: GameEvent,
+  ): ReplayBetMarket {
+    const existing = markets.get(id);
+    const minute = finiteTimestamp(opportunity?.minute);
+    const label = String(opportunity?.label ?? opportunity?.question ?? event.message ?? "Live market");
+    if (existing) {
+      if (label && existing.label === "Live market") existing.label = label;
+      if (minute != null) existing.minute = minute;
+      existing.lastEventIndex = Math.max(existing.lastEventIndex, event.index);
+      return existing;
+    }
+    const market = {
+      id,
+      label,
+      minute,
+      lastEventIndex: event.index,
+      bets: [],
+    };
+    markets.set(id, market);
+    return market;
+  }
+
+  for (const event of [...events].sort((left, right) => left.index - right.index)) {
+    const data = event.data ?? {};
+
+    if (event.kind === "opportunity") {
+      const opportunity = objectValue<Opportunity>(data.opportunity);
+      const opportunityId = identifier(opportunity?.opportunityId);
+      if (opportunity && opportunityId) opportunities.set(opportunityId, opportunity);
+      continue;
+    }
+
+    if (event.kind === "prediction") {
+      const marketState = objectValue<Opportunity>(data.market);
+      const opportunityId = identifier(data.opportunityId ?? marketState?.opportunityId);
+      const predictionId = identifier(data.predictionId) || `prediction-${event.index}`;
+      if (!opportunityId) continue;
+
+      const opportunity = marketState ?? opportunities.get(opportunityId);
+      const market = ensureMarket(opportunityId, opportunity, event);
+      const option = objectValue<OpportunityOption>(data.option);
+      const colonyId = identifier(data.colonyId);
+      const sugarAtRisk = finiteNumber(data.riskSugar ?? data.sugarReserved ?? data.foodReserved);
+      const bet: ReplayBetEntry = {
+        predictionId,
+        colonyName: String(data.colonyName ?? colonyNames.get(colonyId) ?? "Colony"),
+        optionLabel: String(option?.label ?? "Prediction"),
+        status: "open",
+        sugarAtRisk: sugarAtRisk ?? 0,
+        sugarDelta: null,
+        eventIndex: event.index,
+      };
+      market.bets.push(bet);
+      predictions.set(predictionId, bet);
+      continue;
+    }
+
+    if (!["settlement", "void"].includes(event.kind)) continue;
+    const predictionId = identifier(data.predictionId);
+    const bet = predictions.get(predictionId);
+    if (!bet) continue;
+
+    const delta = finiteNumber(data.sugarDelta ?? data.resourceDelta ?? data.sugar);
+    bet.status = event.kind === "void" ? "void" : Boolean(data.win) ? "won" : "lost";
+    bet.sugarDelta = delta;
+    bet.resultEventIndex = event.index;
+
+    const opportunityId = identifier(data.opportunityId);
+    const market = markets.get(opportunityId);
+    if (market) market.lastEventIndex = Math.max(market.lastEventIndex, event.index);
+  }
+
+  for (const market of markets.values()) {
+    market.bets.sort((left, right) => left.colonyName.localeCompare(right.colonyName));
+  }
+  return [...markets.values()]
+    .filter((market) => market.bets.length > 0)
+    .sort((left, right) => right.lastEventIndex - left.lastEventIndex);
 }
 
 function latestScore(events: GameEvent[]): MatchScore {
@@ -359,6 +552,33 @@ function humanizeKind(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function replayBetStatusLabel(status: ReplayBetStatus): string {
+  if (status === "won") return "Won";
+  if (status === "lost") return "Lost";
+  if (status === "void") return "Void";
+  return "Open";
+}
+
+function replayBetStatusTone(status: ReplayBetStatus): string {
+  if (status === "won") return "!border-lime/50 !text-lime";
+  if (status === "lost") return "!border-rust/50 !text-rust";
+  if (status === "void") return "!border-[color:var(--brd-soft)] !text-ink-faint";
+  return "!border-gold/50 !text-gold-deep";
+}
+
+function replayBetSugarLabel(bet: ReplayBetEntry): string {
+  if (bet.status === "open") return `${bet.sugarAtRisk} at risk`;
+  if (bet.status === "void") return "Returned";
+  const delta = bet.sugarDelta ?? 0;
+  return `${delta > 0 ? "+" : ""}${delta} Sugar`;
+}
+
+function replayBetSugarTone(bet: ReplayBetEntry): string {
+  if (bet.status === "won") return "text-green";
+  if (bet.status === "lost") return "text-rust";
+  return "text-ink-faint";
+}
+
 function formatReplayDuration(value: number): string {
   const seconds = Math.max(0, Math.floor(value));
   const minutes = Math.floor(seconds / 60);
@@ -368,4 +588,17 @@ function formatReplayDuration(value: number): string {
 function finiteTimestamp(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function identifier(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
+function objectValue<T extends object>(value: unknown): T | undefined {
+  return value && typeof value === "object" ? value as T : undefined;
 }
