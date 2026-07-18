@@ -647,22 +647,7 @@ export default function AdminPage() {
     }
   }
 
-  async function rerunGame(game: GameState) {
-    setWorking(`rerun-${game.gameId}`);
-    setMsg(`Rerunning ${matchTitle(game)}...`);
-    try {
-      const replay = await api.rerun(game.gameId, REPLAY_SPEED);
-      resetGame();
-      setGame(replay);
-      router.push(`/cockpit/${replay.gameId}?from=admin`);
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setWorking("");
-    }
-  }
-
-  function openRun(game: GameState) {
+  function inspectAnts(game: GameState) {
     router.push(`/cockpit/${game.gameId}?from=admin`);
   }
 
@@ -727,7 +712,7 @@ export default function AdminPage() {
             running={runningGames.length}
           />
 
-          {runningGames.length > 0 && <ActiveRuns games={runningGames} onOpen={openRun} />}
+          {runningGames.length > 0 && <ActiveRuns games={runningGames} />}
 
           {preparedAdminRooms.length > 0 && (
             <PreparedRoomsPanel
@@ -1018,28 +1003,26 @@ export default function AdminPage() {
                 <MiniRunStat label="Leader" value={leadingColony(game)?.name ?? "—"} />
                 <MiniRunStat label="Events" value={game.eventIndex ?? 0} />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {isPreparedAdminRoom(game) ? (
-                  <button className="btn btn-primary col-span-2 !min-h-11 px-3 py-2 text-sm" disabled={Boolean(working) || loadingFixtures} onClick={() => resumePreparedRoom(game)}>
-                    Resume launch
-                  </button>
-                ) : (
-                  <>
-                    <button className="btn btn-ghost !min-h-11 px-3 py-2 text-sm" onClick={() => openRun(game)}>
-                      {game.status === "finished" && game.players.length === 0 ? "Inspect ants" : "Open cockpit"}
+              {(isPreparedAdminRoom(game) || game.status === "finished") && (
+                <div className="grid grid-cols-2 gap-2">
+                  {isPreparedAdminRoom(game) ? (
+                    <button className="btn btn-primary col-span-2 !min-h-11 px-3 py-2 text-sm" disabled={Boolean(working) || loadingFixtures} onClick={() => resumePreparedRoom(game)}>
+                      Resume launch
                     </button>
-                    {game.status === "finished" ? (
-                      <button className="btn btn-primary !min-h-11 px-3 py-2 text-sm" onClick={() => openReplay(game)}>
+                  ) : (
+                    <>
+                      {game.players.length === 0 && (
+                        <button className="btn btn-ghost !min-h-11 px-3 py-2 text-sm" onClick={() => inspectAnts(game)}>
+                          Inspect ants
+                        </button>
+                      )}
+                      <button className={`btn btn-primary !min-h-11 px-3 py-2 text-sm ${game.players.length === 0 ? "" : "col-span-2"}`} onClick={() => openReplay(game)}>
                         Replay
                       </button>
-                    ) : (
-                      <button className="btn btn-primary !min-h-11 px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
-                        {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
+                    </>
+                  )}
+                </div>
+              )}
               </article>
             ))}
           </div>
@@ -1087,22 +1070,18 @@ export default function AdminPage() {
                         <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working) || loadingFixtures} onClick={() => resumePreparedRoom(game)}>
                           Resume launch
                         </button>
-                      ) : (
+                      ) : game.status === "finished" ? (
                         <>
-                          <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => openRun(game)}>
-                            {game.status === "finished" && game.players.length === 0 ? "Inspect ants" : "Open cockpit"}
-                          </button>
-                          {game.status === "finished" ? (
-                            <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => openReplay(game)}>
-                              Replay
-                            </button>
-                          ) : (
-                            <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
-                              {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
+                          {game.players.length === 0 && (
+                            <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => inspectAnts(game)}>
+                              Inspect ants
                             </button>
                           )}
+                          <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => openReplay(game)}>
+                            Replay
+                          </button>
                         </>
-                      )}
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -1225,7 +1204,7 @@ function AdminStatusStrip({
   );
 }
 
-function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: GameState) => void }) {
+function ActiveRuns({ games }: { games: GameState[] }) {
   return (
     <section className="glass overflow-hidden border-2 !border-rust/45" aria-label="Active simulations">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b-2 border-rust/20 bg-rust/5 px-4 py-3">
@@ -1249,7 +1228,7 @@ function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: Game
                 <span className="status-pill !border-rust/50 !text-rust"><span className="live-dot" /> Live</span>
               </div>
             </div>
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] p-3">
+            <div className="rounded-md border-2 border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] p-3">
               <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
                 <div>
                   <p className="font-mono text-[9px] uppercase tracking-wider text-ink-faint">Score</p>
@@ -1270,9 +1249,6 @@ function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: Game
                   {leadingColony(game) ? `👑 ${leadingColony(game)!.name} leads with ${colonySugar(leadingColony(game)!)} Sugar` : "Waiting for colony standings"}
                 </p>
               </div>
-              <button type="button" className="btn btn-ghost !min-h-10 !w-auto px-3 py-2 text-xs" onClick={() => onOpen(game)}>
-                Open cockpit →
-              </button>
             </div>
           </article>
         ))}
