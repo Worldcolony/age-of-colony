@@ -19,12 +19,11 @@ import { Segmented } from "@/components/Segmented";
 import { worldLink } from "@/three/worldLink";
 import { GameShell, GameChip, GameToasts, useGameToasts } from "@/components/GameShell";
 import { colonySugar } from "@/lib/sugar";
-import type { FavoriteContext, GameState, InfoNeed, Player, Style } from "@/lib/types";
+import type { FavoriteContext, GameState, InfoNeed, Player, Style, TeamRouting } from "@/lib/types";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
 const STYLES: { value: Style; label: string }[] = [
   { value: "cautious", label: "Careful" },
-  { value: "balanced", label: "Steady" },
   { value: "aggressive", label: "Bold" },
 ];
 const DEFAULT_FOCUS: FavoriteContext = "balanced";
@@ -54,7 +53,8 @@ export default function RoomPage() {
   const [copyFeedback, setCopyFeedback] = useState("");
   const [sheetOpen, setSheetOpen] = useState(true);
   const { toasts, push } = useGameToasts();
-  const [style, setStyle] = useState<Style>("balanced");
+  const [style, setStyle] = useState<Style>("cautious");
+  const [teamRouting, setTeamRouting] = useState<TeamRouting>("neutral");
   const previousWallet = useRef<string | null>(identity.wallet);
 
   const p1 = teamName(game?.participant1 ?? mf?.participant1);
@@ -178,6 +178,7 @@ export default function RoomPage() {
           style,
           favoriteContext: DEFAULT_FOCUS,
           infoNeed: DEFAULT_INFO,
+          teamRouting,
           anonymousId: legacyAnonymousIdForPlayer(player, activeIdentity),
         });
       }
@@ -377,6 +378,22 @@ export default function RoomPage() {
             <div className="grid gap-2">
               <Segmented options={STYLES} value={style} onChange={setStyle} />
               <p className="text-xs leading-relaxed text-ink-faint">{TEMPERAMENT_COPY[style]}</p>
+            </div>
+          </Field>
+          <Field label="Team routing">
+            <div className="grid gap-2">
+              <select
+                className="input"
+                value={teamRouting}
+                onChange={(event) => setTeamRouting(event.target.value as TeamRouting)}
+              >
+                <option value="neutral">Neutral · both teams</option>
+                <option value="participant1">{game?.participant1 || "Team 1"}</option>
+                <option value="participant2">{game?.participant2 || "Team 2"}</option>
+              </select>
+              <p className="text-xs leading-relaxed text-ink-faint">
+                Your ants analyze this team first but can still vote against it.
+              </p>
             </div>
           </Field>
           <button className="btn btn-primary" disabled={joining || !game?.gameId || entriesLocked || !walletReadyToJoin} onClick={joinAndCreateColony}>

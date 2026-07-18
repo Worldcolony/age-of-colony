@@ -20,6 +20,7 @@ VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
 VALID_ANALYSIS_ROLES = {"reactive", "statistical", "situational"}
+VALID_TEAM_ROUTINGS = {"neutral", "participant1", "participant2"}
 ANALYSIS_ROLE_BY_ARCHETYPE = {
     "cautious": "statistical",
     "balanced": "situational",
@@ -266,6 +267,22 @@ def normalize_info_need(value: str | None) -> str:
     return INFO_NEED_ALIASES.get(normalize_choice(value), normalize_choice(value))
 
 
+def normalize_team_routing(value: str | None) -> str:
+    normalized = normalize_choice(value).replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": "neutral",
+        "balanced": "neutral",
+        "both": "neutral",
+        "team_1": "participant1",
+        "team1": "participant1",
+        "home": "participant1",
+        "team_2": "participant2",
+        "team2": "participant2",
+        "away": "participant2",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def stable_seed(*parts: Any) -> int:
     payload = "|".join(str(part) for part in parts)
     return int(hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16], 16)
@@ -385,6 +402,7 @@ class ColonyState:
     favorite_context: str
     info_need: str
     seed: int
+    team_routing: str = "neutral"
     player_id: str | None = None
     player_anonymous_id: str | None = None
     player_wallet: str | None = None
@@ -443,6 +461,7 @@ class ColonyState:
             "style": self.style,
             "favoriteContext": self.favorite_context,
             "infoNeed": self.info_need,
+            "teamRouting": self.team_routing,
             "strategyRevision": self.strategy_revision,
             "antsAlive": alive,
             "antsActive": ant_counts["activeCount"],
@@ -898,6 +917,7 @@ class GameHarness:
         favorite_context: str,
         info_need: str,
         *,
+        team_routing: str = "neutral",
         anonymous_id: str | None = None,
         wallet: str | None = None,
         player_id: str | None = None,
@@ -909,12 +929,15 @@ class GameHarness:
         style = normalize_style(style)
         favorite_context = normalize_context(favorite_context)
         info_need = normalize_info_need(info_need)
+        team_routing = normalize_team_routing(team_routing)
         if style not in VALID_STYLES:
             raise ValueError("style must be cautious, balanced or aggressive")
         if favorite_context not in VALID_CONTEXTS:
             raise ValueError("favorite_context must be penalties, corners, momentum, chaos or balanced")
         if info_need not in VALID_INFO_NEEDS:
             raise ValueError("info_need must be low, medium or high")
+        if team_routing not in VALID_TEAM_ROUTINGS:
+            raise ValueError("team_routing must be neutral, participant1 or participant2")
 
         clean_anonymous_id = (anonymous_id or "").strip()[:80] or None
         clean_wallet = (wallet or "").strip()[:80] or None
@@ -945,6 +968,7 @@ class GameHarness:
             favorite_context=favorite_context,
             info_need=info_need,
             seed=seed,
+            team_routing=team_routing,
             player_id=clean_player_id,
             player_anonymous_id=clean_anonymous_id,
             player_wallet=clean_wallet,
@@ -965,6 +989,7 @@ class GameHarness:
                 "style": style,
                 "favoriteContext": favorite_context,
                 "infoNeed": info_need,
+                "teamRouting": team_routing,
                 "wallet": clean_wallet,
             },
         )
@@ -1044,18 +1069,20 @@ class GameHarness:
         style: str | None = None,
         favorite_context: str | None = None,
         info_need: str | None = None,
+        team_routing: str | None = None,
     ) -> ColonyState:
         if self.room.status not in STRATEGY_EDITABLE_STATUSES:
             raise ValueError("strategies can only be changed before or during a match")
         colony = self.room.colonies.get(colony_id)
         if not colony:
             raise ValueError("colony not found")
-        if style is None and favorite_context is None and info_need is None:
+        if style is None and favorite_context is None and info_need is None and team_routing is None:
             raise ValueError("provide at least one colony strategy field")
 
         next_style = colony.style
         next_favorite_context = colony.favorite_context
         next_info_need = colony.info_need
+        next_team_routing = colony.team_routing
         if style is not None:
             style = normalize_style(style)
             if style not in VALID_STYLES:
@@ -1071,25 +1098,32 @@ class GameHarness:
             if info_need not in VALID_INFO_NEEDS:
                 raise ValueError("info_need must be low, medium or high")
             next_info_need = info_need
+        if team_routing is not None:
+            team_routing = normalize_team_routing(team_routing)
+            if team_routing not in VALID_TEAM_ROUTINGS:
+                raise ValueError("team_routing must be neutral, participant1 or participant2")
+            next_team_routing = team_routing
 
         with colony.strategy_lock:
             colony.style = next_style
             colony.favorite_context = next_favorite_context
             colony.info_need = next_info_need
+            colony.team_routing = next_team_routing
             colony.strategy_revision += 1
             revision = colony.strategy_revision
 
         self.room.add_log(
             "strategy_updated",
             (
-                f"{colony.name} strategy updated: {colony.style}, {colony.favorite_context}, "
-                f"info {colony.info_need}. New orders apply from the next decision window."
+                f"{colony.name} strategy updated: {colony.style}, routing {colony.team_routing}. "
+                "New orders apply from the next decision window."
             ),
             {
                 "colonyId": colony.colony_id,
                 "style": colony.style,
                 "favoriteContext": colony.favorite_context,
                 "infoNeed": colony.info_need,
+                "teamRouting": colony.team_routing,
                 "strategyRevision": revision,
             },
         )
@@ -1707,6 +1741,11 @@ class GameHarness:
         agent_market.pop("minute", None)
         if opportunity.context != "penalties":
             agent_market.pop("teamLabel", None)
+        routing_team_label = None
+        if colony.team_routing == "participant1":
+            routing_team_label = self.room.participant1
+        elif colony.team_routing == "participant2":
+            routing_team_label = self.room.participant2
         context = {
             "match": {
                 "fixtureId": self.room.fixture_id,
@@ -1722,6 +1761,11 @@ class GameHarness:
                 "sugarAvailable": max(0, colony.food - colony.food_reserved),
                 "riskPerMarket": MARKET_RISK_SUGAR,
                 "maxReservedSugar": MAX_RESERVED_SUGAR,
+                "teamRouting": {
+                    "scope": colony.team_routing,
+                    "teamLabel": routing_team_label,
+                    "neutral": colony.team_routing == "neutral",
+                },
                 # Backward-compatible aliases for older agent adapters.
                 "food": colony.food,
                 "foodReserved": colony.food_reserved,
@@ -2465,6 +2509,7 @@ def colony_strategy_snapshot(colony: ColonyState) -> dict[str, Any]:
             "style": colony.style,
             "favoriteContext": colony.favorite_context,
             "infoNeed": colony.info_need,
+            "teamRouting": colony.team_routing,
             "ants": {
                 ant.ant_id: dict(ant_strategy_state(ant, colony))
                 for ant in colony.ants

@@ -4,6 +4,7 @@ export type Style = "cautious" | "balanced" | "aggressive";
 export type AnalysisRole = "reactive" | "statistical" | "situational";
 export type FavoriteContext = "penalties" | "corners" | "momentum" | "chaos" | "balanced";
 export type InfoNeed = "low" | "medium" | "high";
+export type TeamRouting = "neutral" | "participant1" | "participant2";
 export type GameStatus = "created" | "waiting_kickoff" | "running_replay" | "running_live" | "finished" | string;
 export type AgentCallMode = "per_ant" | "batch";
 
@@ -11,6 +12,7 @@ export interface ColonyStrategy {
   style: Style;
   favoriteContext: FavoriteContext;
   infoNeed: InfoNeed;
+  teamRouting?: TeamRouting;
 }
 
 export interface AntStrategy extends ColonyStrategy {
@@ -151,6 +153,7 @@ export interface Colony {
   style: Style;
   favoriteContext: FavoriteContext;
   infoNeed: InfoNeed;
+  teamRouting?: TeamRouting;
   strategyRevision?: number;
   score: number;
   accuracy?: number;
@@ -291,6 +294,7 @@ export interface CreateColonyBody {
   style: Style;
   favoriteContext: FavoriteContext;
   infoNeed: InfoNeed;
+  teamRouting?: TeamRouting;
   anonymousId?: string;
 }
 
@@ -298,6 +302,7 @@ export interface StrategyPatch {
   style?: Style;
   favoriteContext?: FavoriteContext;
   infoNeed?: InfoNeed;
+  teamRouting?: TeamRouting;
   anonymousId?: string;
 }
 

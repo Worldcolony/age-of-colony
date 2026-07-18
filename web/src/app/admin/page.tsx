@@ -6,32 +6,19 @@ import { useStore } from "@/store/game";
 import { fixtureId, flag, fmtKickoffLine, fmtScore, teamName } from "@/lib/format";
 import { colonySugar } from "@/lib/sugar";
 import { SmoothMatchClock } from "@/components/SmoothMatchClock";
-import type { CreateColonyBody, FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
+import type { CreateColonyBody, GameState, Style, TeamRouting } from "@/lib/types";
 
 const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "per_ant" as const };
 const ADMIN_LAUNCH_REQUEST_STORAGE_KEY = "age-of-colony:admin-launch-request";
 let volatileLaunchRequest: { setupKey: string; requestKey: string } | null = null;
 const STYLES: { value: Style; label: string }[] = [
   { value: "cautious", label: "Cautious" },
-  { value: "balanced", label: "Balanced" },
   { value: "aggressive", label: "Aggressive" },
 ];
-const GROUNDS: { value: FavoriteContext; label: string }[] = [
-  { value: "penalties", label: "Penalties" },
-  { value: "corners", label: "Corners" },
-  { value: "momentum", label: "Momentum" },
-  { value: "chaos", label: "Chaos" },
-  { value: "balanced", label: "Balanced" },
-];
-const INFO_NEEDS: { value: InfoNeed; label: string }[] = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-];
 const DEFAULT_ADMIN_COLONIES = [
-  { name: "Red Nest", size: 5, style: "cautious", favoriteContext: "penalties", infoNeed: "high" },
-  { name: "Amber Swarm", size: 5, style: "balanced", favoriteContext: "momentum", infoNeed: "medium" },
-  { name: "Black Rush", size: 5, style: "aggressive", favoriteContext: "chaos", infoNeed: "low" },
+  { name: "Red Nest", size: 5, style: "cautious", favoriteContext: "balanced", infoNeed: "medium", teamRouting: "participant1" },
+  { name: "Amber Swarm", size: 5, style: "aggressive", favoriteContext: "balanced", infoNeed: "medium", teamRouting: "neutral" },
+  { name: "Black Rush", size: 5, style: "aggressive", favoriteContext: "balanced", infoNeed: "medium", teamRouting: "participant2" },
 ] satisfies AdminColonyDraft[];
 
 type AdminColonyDraft = Omit<CreateColonyBody, "anonymousId">;
@@ -72,6 +59,7 @@ function adminColonyRosterKey(colonies: AdminColonyDraft[]): string {
     style: colony.style,
     favoriteContext: colony.favoriteContext,
     infoNeed: colony.infoNeed,
+    teamRouting: colony.teamRouting ?? "neutral",
   })));
 }
 
@@ -82,6 +70,7 @@ function gameColonyRosterKey(game: GameState): string {
     style: colony.style,
     favoriteContext: colony.favoriteContext,
     infoNeed: colony.infoNeed,
+    teamRouting: colony.teamRouting ?? "neutral",
   })));
 }
 
@@ -112,6 +101,7 @@ function colonyDraftsFromGame(game: GameState): AdminColonyDraft[] {
     style: colony.style,
     favoriteContext: colony.favoriteContext,
     infoNeed: colony.infoNeed,
+    teamRouting: colony.teamRouting ?? "neutral",
   }));
 }
 
@@ -432,9 +422,10 @@ export default function AdminPage() {
       {
         name: `Scout Nest ${current.length + 1}`,
         size: 5,
-        style: "balanced",
-        favoriteContext: "momentum",
+        style: "aggressive",
+        favoriteContext: "balanced",
         infoNeed: "medium",
+        teamRouting: "neutral",
       },
     ]);
   }
@@ -869,9 +860,9 @@ export default function AdminPage() {
                       </button>
                     </div>
                     <p className="mb-3 text-xs leading-relaxed text-ink-faint">
-                      {adminColonySummary(colony)}
+                      {adminColonySummary(colony, selectedFixture)}
                     </p>
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(170px,1.2fr)_80px_130px_130px_110px]">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(170px,1.2fr)_80px_140px_minmax(170px,0.8fr)]">
                       <Field label="Name">
                         <input
                           className="input !px-3 !py-2 text-sm"
@@ -896,24 +887,16 @@ export default function AdminPage() {
                           {STYLES.map((style) => <option key={style.value} value={style.value}>{style.label}</option>)}
                         </select>
                       </Field>
-                      <Field label="Focus">
+                      <Field label="Team routing">
                         <select
                           className="input !px-3 !py-2 text-sm"
-                          value={colony.favoriteContext}
+                          value={colony.teamRouting ?? "neutral"}
                           disabled={formLocked}
-                          onChange={(e) => updateColony(index, { favoriteContext: e.target.value as FavoriteContext })}
+                          onChange={(e) => updateColony(index, { teamRouting: e.target.value as TeamRouting })}
                         >
-                          {GROUNDS.map((ground) => <option key={ground.value} value={ground.value}>{ground.label}</option>)}
-                        </select>
-                      </Field>
-                      <Field label="Info need">
-                        <select
-                          className="input !px-3 !py-2 text-sm"
-                          value={colony.infoNeed}
-                          disabled={formLocked}
-                          onChange={(e) => updateColony(index, { infoNeed: e.target.value as InfoNeed })}
-                        >
-                          {INFO_NEEDS.map((need) => <option key={need.value} value={need.value}>{need.label}</option>)}
+                          <option value="neutral">Neutral · both teams</option>
+                          <option value="participant1">{teamName(selectedFixture?.participant1, "Team 1")}</option>
+                          <option value="participant2">{teamName(selectedFixture?.participant2, "Team 2")}</option>
                         </select>
                       </Field>
                     </div>
@@ -951,10 +934,10 @@ export default function AdminPage() {
                     Check the launch docket. Creating the room verifies the match and attaches this exact colony roster.
                   </p>
                   {selectedFixture && <SelectedFixture fixture={selectedFixture} />}
-                  <RosterSummary colonies={validColonies} />
+                  <RosterSummary colonies={validColonies} fixture={selectedFixture} />
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <LaunchMetric label="Colonies" value={validColonies.length} detail={`${totalAnts} ants total`} />
-                    <LaunchMetric label="Replay" value="×120" detail="batch ant calls" />
+                    <LaunchMetric label="Replay" value="×120" detail="independent ant calls" />
                     <LaunchMetric label="Payment" value="None" detail="read-only proof" />
                   </div>
                   {selectedFixtureGames.length > 0 && (
@@ -1409,7 +1392,7 @@ function WizardFooter({ children }: { children: ReactNode }) {
   );
 }
 
-function RosterSummary({ colonies }: { colonies: AdminColonyDraft[] }) {
+function RosterSummary({ colonies, fixture }: { colonies: AdminColonyDraft[]; fixture: ReplayFixture | null }) {
   return (
     <section className="mt-3 overflow-hidden rounded-md border-2 border-[color:var(--brd-soft)]" aria-label="Colony roster summary">
       <div className="flex items-center justify-between gap-3 bg-[rgba(116,91,39,0.08)] px-3 py-2">
@@ -1421,7 +1404,7 @@ function RosterSummary({ colonies }: { colonies: AdminColonyDraft[] }) {
           <div key={`${colony.name}-${index}`} className="grid gap-1 bg-[rgba(249,243,226,0.62)] px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3">
             <span className="truncate text-sm font-bold text-ink">{String(index + 1).padStart(2, "0")} · {colony.name}</span>
             <span className="font-mono text-[10px] uppercase tracking-wide text-ink-faint">
-              {colony.style} · {colony.favoriteContext} · {colony.infoNeed} info
+              {colony.style} · {teamRoutingLabel(colony.teamRouting, fixture)}
             </span>
           </div>
         ))}
@@ -1614,18 +1597,23 @@ function Message({ text }: { text: string }) {
   );
 }
 
-function adminColonySummary(colony: AdminColonyDraft): string {
+function teamRoutingLabel(
+  routing: TeamRouting | undefined,
+  fixture: ReplayFixture | null,
+): string {
+  if (routing === "participant1") return teamName(fixture?.participant1, "Team 1");
+  if (routing === "participant2") return teamName(fixture?.participant2, "Team 2");
+  return "Neutral";
+}
+
+function adminColonySummary(
+  colony: AdminColonyDraft,
+  fixture: ReplayFixture | null,
+): string {
   const temper = colony.style === "aggressive"
     ? "commits earlier"
-    : colony.style === "cautious"
-      ? "protects its food"
-      : "balances risk and survival";
-  const evidence = colony.infoNeed === "high"
-    ? "waits for stronger evidence"
-    : colony.infoNeed === "low"
-      ? "acts with lighter evidence"
-      : "uses a medium evidence threshold";
-  return `${colony.size} ants · ${temper} · prioritizes ${colony.favoriteContext} · ${evidence}.`;
+    : "requires unanimous support";
+  return `${colony.size} ants · ${temper} · analyzes ${teamRoutingLabel(colony.teamRouting, fixture)}.`;
 }
 
 function leadingColony(game: GameState): GameState["colonies"][number] | undefined {

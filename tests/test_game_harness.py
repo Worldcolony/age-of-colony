@@ -2986,6 +2986,69 @@ class GameHarnessTest(unittest.TestCase):
         )
         self.assertFalse(room.predictions)
 
+    def test_team_routing_reaches_each_ant_without_forcing_the_routed_team(self):
+        class RoutedAntAgent:
+            def __init__(self):
+                self.context = None
+
+            def decide(self, *, game_id, stage, context):
+                return None
+
+            def decide_ants(self, *, game_id, stage, context, ants):
+                self.context = context
+                return [{"antId": ant["antId"], "vote": "no"} for ant in ants]
+
+        agent = RoutedAntAgent()
+        manager = GameManager(decision_agent=agent)
+        room = manager.create_room(
+            fixture_id=42,
+            participant1="France",
+            participant2="Spain",
+            seed=126,
+            room_kind="admin",
+        )
+        room.mode = "replay"
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony(
+            "France Route",
+            5,
+            "aggressive",
+            "balanced",
+            "medium",
+            team_routing="participant1",
+        )
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 1,
+                "action": "high_danger_possession",
+                "minute": 6,
+                "clockSeconds": 360,
+                "participant": 1,
+                "participantLabel": "France",
+                "score": {"participant1": 0, "participant2": 0},
+                "description": "High danger possession - France",
+            }
+        )
+
+        self.assertEqual(colony.public_state(room.event_index)["teamRouting"], "participant1")
+        self.assertEqual(
+            agent.context["colony"]["teamRouting"],
+            {"scope": "participant1", "teamLabel": "France", "neutral": False},
+        )
+        self.assertNotIn("favoriteContext", agent.context["colony"])
+        self.assertNotIn("infoNeed", agent.context["colony"])
+        prediction = next(iter(room.predictions.values()))
+        self.assertTrue(prediction.option.option_id.endswith("_p2"))
+
+        harness.update_colony_strategy(
+            colony.colony_id,
+            team_routing="participant2",
+        )
+        self.assertEqual(colony.team_routing, "participant2")
+        self.assertEqual(room.log[-1].data["teamRouting"], "participant2")
+
     def test_deepseek_ant_agent_votes_do_not_buy_info(self):
         class FakeAntAgent:
             def decide(self, *, game_id, stage, context):

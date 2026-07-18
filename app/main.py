@@ -219,6 +219,7 @@ class CreateColonyRequest(BaseModel):
     style: str
     favoriteContext: str
     infoNeed: str
+    teamRouting: Literal["neutral", "participant1", "participant2"] = "neutral"
     anonymousId: str | None = None
 
 
@@ -237,6 +238,7 @@ class UpdateColonyStrategyRequest(BaseModel):
     style: str | None = None
     favoriteContext: str | None = None
     infoNeed: str | None = None
+    teamRouting: Literal["neutral", "participant1", "participant2"] | None = None
     anonymousId: str | None = None
 
 
@@ -600,6 +602,7 @@ async def create_colony(game_id: str, payload: CreateColonyRequest, request: Req
             style=payload.style,
             favorite_context=payload.favoriteContext,
             info_need=payload.infoNeed,
+            team_routing=payload.teamRouting,
             anonymous_id=None if wallet else anonymous_id,
             wallet=wallet,
         )
@@ -861,6 +864,7 @@ async def update_colony_strategy(
             style=payload.style,
             favorite_context=payload.favoriteContext,
             info_need=payload.infoNeed,
+            team_routing=payload.teamRouting,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -942,6 +946,7 @@ async def list_colony_ants(
             "style": colony.style,
             "favoriteContext": colony.favorite_context,
             "infoNeed": colony.info_need,
+            "teamRouting": colony.team_routing,
         },
         "ants": [ant_public_state(ant, colony, room.event_index) for ant in colony.ants],
     }
@@ -1302,6 +1307,7 @@ async def rerun_game(game_id: str, payload: StartGameRequest, request: Request) 
             colony.style,
             colony.favorite_context,
             colony.info_need,
+            team_routing=colony.team_routing,
             anonymous_id=colony.player_anonymous_id,
             wallet=colony.player_wallet,
             player_id=colony.player_id,
@@ -1413,6 +1419,7 @@ def _build_admin_room(payload: AdminRoomRequest) -> GameRoom:
                 colony.style,
                 colony.favoriteContext,
                 colony.infoNeed,
+                team_routing=colony.teamRouting,
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2629,6 +2636,7 @@ def _restore_room_from_stored_row(row: dict[str, Any], *, events: list[dict[str,
             favorite_context=str(colony_state.get("favoriteContext") or "balanced"),
             info_need=str(colony_state.get("infoNeed") or "medium"),
             seed=_safe_int(colony_state.get("simulationSeed")) or clean_seed,
+            team_routing=str(colony_state.get("teamRouting") or "neutral"),
             player_id=str(colony_state.get("playerId"))[:80] if colony_state.get("playerId") else None,
             player_anonymous_id=(
                 str(
@@ -3107,6 +3115,7 @@ def _add_run_previous_colonies(harness: Any, colonies: list[CreateColonyRequest]
             colony.style,
             colony.favoriteContext,
             colony.infoNeed,
+            team_routing=colony.teamRouting,
         )
 
 

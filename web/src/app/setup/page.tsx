@@ -11,11 +11,10 @@ import {
 } from "@/lib/playerIdentity";
 import { useStore } from "@/store/game";
 import { Segmented } from "@/components/Segmented";
-import type { FavoriteContext, GameState, InfoNeed, Style } from "@/lib/types";
+import type { FavoriteContext, GameState, InfoNeed, Style, TeamRouting } from "@/lib/types";
 
 const STYLES: { value: Style; label: string }[] = [
   { value: "cautious", label: "Careful" },
-  { value: "balanced", label: "Steady" },
   { value: "aggressive", label: "Bold" },
 ];
 const DEFAULT_FOCUS: FavoriteContext = "balanced";
@@ -34,7 +33,8 @@ export default function SetupPage() {
   const identity = usePlayerIdentity();
 
   const [name, setName] = useState("");
-  const [style, setStyle] = useState<Style>("balanced");
+  const [style, setStyle] = useState<Style>("cautious");
+  const [teamRouting, setTeamRouting] = useState<TeamRouting>("neutral");
   const [busy, setBusy] = useState(false);
   const [hydrating, setHydrating] = useState(false);
   const [msg, setMsg] = useState("");
@@ -126,6 +126,7 @@ export default function SetupPage() {
         style,
         favoriteContext: DEFAULT_FOCUS,
         infoNeed: DEFAULT_INFO,
+        teamRouting,
         anonymousId,
       };
 
@@ -198,6 +199,23 @@ export default function SetupPage() {
           <div className="grid gap-2">
             <Segmented options={STYLES} value={style} onChange={setStyle} />
             <p className="text-xs leading-relaxed text-ink-faint">{TEMPERAMENT_COPY[style]}</p>
+          </div>
+        </Field>
+
+        <Field label="Team routing">
+          <div className="grid gap-2">
+            <select
+              className="input"
+              value={teamRouting}
+              onChange={(event) => setTeamRouting(event.target.value as TeamRouting)}
+            >
+              <option value="neutral">Neutral · both teams</option>
+              <option value="participant1">{game.participant1 || "Team 1"}</option>
+              <option value="participant2">{game.participant2 || "Team 2"}</option>
+            </select>
+            <p className="text-xs leading-relaxed text-ink-faint">
+              Routing selects the team your ants analyze first; it never forces them to back that team.
+            </p>
           </div>
         </Field>
       </section>
