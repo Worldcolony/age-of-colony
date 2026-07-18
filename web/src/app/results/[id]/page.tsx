@@ -5,7 +5,6 @@ import { api } from "@/lib/api";
 import { useStore } from "@/store/game";
 import { useGameStream } from "@/hooks/useGameStream";
 import { colonySugar } from "@/lib/sugar";
-import { legacyAnonymousIdForHost, usePlayerIdentity } from "@/lib/playerIdentity";
 import { ColonyRaceChart } from "@/components/ColonyRaceChart";
 import { SimulationReplay } from "@/components/SimulationReplay";
 import type { GameEvent, GameState } from "@/lib/types";
@@ -22,7 +21,6 @@ export default function ResultsPage() {
 function ResultsRun({ id }: { id: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const identity = usePlayerIdentity();
   const myColonyId = useStore((s) => s.myColonyId);
   const storedGame = useStore((s) => s.game);
   const setStoredGame = useStore((s) => s.setGame);
@@ -65,15 +63,6 @@ function ResultsRun({ id }: { id: string }) {
     : searchParams.get("from") === "admin";
   const cockpitHref = adminContext ? `/cockpit/${id}?from=admin` : `/cockpit/${id}`;
 
-  async function rerun() {
-    try {
-      const g = await api.rerun(id, {
-        anonymousId: adminContext ? undefined : legacyAnonymousIdForHost(game, identity.snapshot),
-      });
-      receiveGame(g);
-      router.push(adminContext ? `/cockpit/${g.gameId}?from=admin` : `/cockpit/${g.gameId}`);
-    } catch { /* */ }
-  }
   async function share() {
     const idx = cols.findIndex((c) => c.colonyId === myColonyId);
     const mine = idx >= 0 ? cols[idx] : cols[0];
@@ -88,7 +77,7 @@ function ResultsRun({ id }: { id: string }) {
 
   const podium = [1, 0, 2];
   return (
-    <div className="flex flex-col gap-3">
+    <div className="results-page flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <button
           className="text-sm font-semibold text-ink-soft"
@@ -99,9 +88,6 @@ function ResultsRun({ id }: { id: string }) {
         {finished && (
           <div className="flex gap-2">
             <button className="btn btn-magenta !min-h-0 !w-auto px-3 py-1 text-sm" onClick={share}>Share</button>
-            {adminContext && (
-              <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-1 text-sm" onClick={rerun}>↻ Rerun</button>
-            )}
           </div>
         )}
       </div>

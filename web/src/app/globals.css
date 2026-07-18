@@ -2731,3 +2731,14 @@ body {
     animation: none;
   }
 }
+
+@media (min-width: 900px) {
+  body:has(.results-page) .app-shell {
+    max-width: min(1440px, calc(100vw - 48px));
+    padding-bottom: 48px;
+  }
+
+  body:has(.results-page) .tabbar {
+    display: none;
+  }
+}
