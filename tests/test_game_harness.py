@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.game.agents import AgentDecisionError, OpenRouterColonyAgent, OpenRouterSettings
 from app.main import (
+    RunPreviousTxRequest,
     StartGameRequest,
     _admin_room_request_cache,
     app,
@@ -6233,6 +6234,15 @@ class DemoRunApiTest(unittest.TestCase):
             ),
             0.8,
         )
+
+    def test_replay_requests_default_to_real_time_without_fixed_delays(self):
+        start_request = StartGameRequest()
+        previous_request = RunPreviousTxRequest()
+
+        self.assertEqual(start_request.replayTimeScale, 1.0)
+        self.assertEqual(start_request.replayDelaySeconds, 0.0)
+        self.assertEqual(previous_request.replayTimeScale, 1.0)
+        self.assertEqual(previous_request.replayDelaySeconds, 0.0)
 
     def test_replay_clock_is_bounded_during_processing_and_between_events(self):
         room = game_manager.create_room(

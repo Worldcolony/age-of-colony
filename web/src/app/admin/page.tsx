@@ -8,7 +8,7 @@ import { colonySugar } from "@/lib/sugar";
 import { SmoothMatchClock } from "@/components/SmoothMatchClock";
 import type { CreateColonyBody, GameState, Style, TeamRouting } from "@/lib/types";
 
-const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 40, agentCallMode: "per_ant" as const };
+const REPLAY_SPEED = { replayDelaySeconds: 0, replayTimeScale: 1, agentCallMode: "per_ant" as const };
 const ADMIN_LAUNCH_REQUEST_STORAGE_KEY = "age-of-colony:admin-launch-request";
 let volatileLaunchRequest: { setupKey: string; requestKey: string } | null = null;
 const STYLES: { value: Style; label: string }[] = [
@@ -937,7 +937,7 @@ export default function AdminPage() {
                   <RosterSummary colonies={validColonies} fixture={selectedFixture} />
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <LaunchMetric label="Colonies" value={validColonies.length} detail={`${totalAnts} ants total`} />
-                    <LaunchMetric label="Replay" value="×40" detail="independent ant calls" />
+                    <LaunchMetric label="Replay" value="×1" detail="real time · no pauses" />
                     <LaunchMetric label="Payment" value="None" detail="read-only proof" />
                   </div>
                   {selectedFixtureGames.length > 0 && (

@@ -285,7 +285,7 @@ class StartGameRequest(BaseModel):
     anonymousId: str | None = None
     agentCallMode: Literal["per_ant", "batch"] | None = "per_ant"
     replayDelaySeconds: float = Field(default=0.0, ge=0.0, le=30.0)
-    replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
+    replayTimeScale: float = Field(default=1.0, gt=0.0, le=3600.0)
 
 
 class FinishGameRequest(BaseModel):
@@ -304,8 +304,8 @@ class RunPreviousTxRequest(BaseModel):
     seed: int | None = None
     stream: bool = False
     agentCallMode: Literal["per_ant", "batch"] | None = "per_ant"
-    replayDelaySeconds: float = Field(default=0.75, ge=0.0, le=30.0)
-    replayTimeScale: float | None = Field(default=None, gt=0.0, le=3600.0)
+    replayDelaySeconds: float = Field(default=0.0, ge=0.0, le=30.0)
+    replayTimeScale: float = Field(default=1.0, gt=0.0, le=3600.0)
     colonies: list[CreateColonyRequest] | None = None
 
 
