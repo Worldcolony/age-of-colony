@@ -329,6 +329,28 @@ body {
   color: var(--color-rust);
   text-shadow: 2px 2px 0 rgba(169, 70, 47, .12);
 }
+.smooth-match-clock[data-processing="true"] {
+  color: var(--color-rust);
+}
+.smooth-match-clock[data-processing="true"] .smooth-match-clock-value {
+  min-width: 0;
+  font-size: .68em;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.smooth-match-clock-thinking-mark {
+  width: 4px;
+  height: 4px;
+  flex: none;
+  background: currentColor;
+  box-shadow: 7px 0 0 currentColor, 14px 0 0 currentColor;
+  animation: pulse 1.1s steps(2, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .smooth-match-clock-thinking-mark {
+    animation: none;
+  }
+}
 
 /* The desktop launch wizard occupies one viewport. Long fixture/roster
    collections scroll inside the parchment card so navigation and actions

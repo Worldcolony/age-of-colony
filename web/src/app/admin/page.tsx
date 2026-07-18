@@ -8,7 +8,7 @@ import { colonySugar } from "@/lib/sugar";
 import { SmoothMatchClock } from "@/components/SmoothMatchClock";
 import type { CreateColonyBody, GameState, Style, TeamRouting } from "@/lib/types";
 
-const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 120, agentCallMode: "per_ant" as const };
+const REPLAY_SPEED = { replayDelaySeconds: 0.8, replayTimeScale: 40, agentCallMode: "per_ant" as const };
 const ADMIN_LAUNCH_REQUEST_STORAGE_KEY = "age-of-colony:admin-launch-request";
 let volatileLaunchRequest: { setupKey: string; requestKey: string } | null = null;
 const STYLES: { value: Style; label: string }[] = [
@@ -937,7 +937,7 @@ export default function AdminPage() {
                   <RosterSummary colonies={validColonies} fixture={selectedFixture} />
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                     <LaunchMetric label="Colonies" value={validColonies.length} detail={`${totalAnts} ants total`} />
-                    <LaunchMetric label="Replay" value="×120" detail="independent ant calls" />
+                    <LaunchMetric label="Replay" value="×40" detail="independent ant calls" />
                     <LaunchMetric label="Payment" value="None" detail="read-only proof" />
                   </div>
                   {selectedFixtureGames.length > 0 && (
@@ -1009,7 +1009,7 @@ export default function AdminPage() {
                 <MiniRunStat label="Score" value={fmtScore(game.match?.score)} />
                 <MiniRunStat
                   label="Match time"
-                  value={<SmoothMatchClock match={game.match} status={game.status} mode={game.mode} replayTimeScale={game.replayTimeScale} replayClockTargetSeconds={game.replayClockTargetSeconds} className="admin-history-clock" />}
+                  value={<SmoothMatchClock match={game.match} status={game.status} mode={game.mode} replayTimeScale={game.replayTimeScale} replayClockTargetSeconds={game.replayClockTargetSeconds} agentProcessing={game.agentProcessing} className="admin-history-clock" />}
                 />
                 <MiniRunStat label="Leader" value={leadingColony(game)?.name ?? "—"} />
                 <MiniRunStat label="Events" value={game.eventIndex ?? 0} />
@@ -1063,6 +1063,7 @@ export default function AdminPage() {
                       mode={game.mode}
                       replayTimeScale={game.replayTimeScale}
                       replayClockTargetSeconds={game.replayClockTargetSeconds}
+                      agentProcessing={game.agentProcessing}
                       className="admin-history-clock"
                     />
                   </td>
@@ -1247,6 +1248,7 @@ function ActiveRuns({ games, onOpen }: { games: GameState[]; onOpen: (game: Game
                     mode={game.mode}
                     replayTimeScale={game.replayTimeScale}
                     replayClockTargetSeconds={game.replayClockTargetSeconds}
+                    agentProcessing={game.agentProcessing}
                     className="admin-live-clock"
                   />
                 </div>

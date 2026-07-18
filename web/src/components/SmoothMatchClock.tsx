@@ -10,6 +10,7 @@ interface SmoothMatchClockProps {
   mode?: GameState["mode"];
   replayTimeScale?: number | null;
   replayClockTargetSeconds?: number | null;
+  agentProcessing?: GameState["agentProcessing"];
   className?: string;
   showLiveDot?: boolean;
 }
@@ -42,6 +43,7 @@ export function SmoothMatchClock({
   mode,
   replayTimeScale,
   replayClockTargetSeconds,
+  agentProcessing,
   className = "",
   showLiveDot = false,
 }: SmoothMatchClockProps) {
@@ -53,6 +55,10 @@ export function SmoothMatchClock({
     ? replayTarget
     : null;
   const running = isRunningStatus(status);
+  const replayBound = status === "running_replay" && rawClock != null && validReplayTarget != null
+    ? Math.max(rawClock, validReplayTarget)
+    : null;
+  const processing = running && Boolean(agentProcessing?.active);
   const [displayClock, setDisplayClock] = useState<number | null>(() => rawClock);
   const anchorRef = useRef<ClockPoint | null>(null);
   const displayClockRef = useRef<number | null>(rawClock);
@@ -66,14 +72,19 @@ export function SmoothMatchClock({
     }
 
     const now = performance.now();
-    const nextAnchor = running && displayClockRef.current != null
-      ? Math.max(rawClock, displayClockRef.current)
-      : rawClock;
+    const currentDisplay = displayClockRef.current;
+    const nextAnchor = status === "running_replay"
+      ? replayBound == null
+        ? rawClock
+        : Math.min(Math.max(rawClock, currentDisplay ?? rawClock), replayBound)
+      : running && currentDisplay != null
+        ? Math.max(rawClock, currentDisplay)
+        : rawClock;
     anchorRef.current = { clock: nextAnchor, at: now };
     displayClockRef.current = Math.floor(nextAnchor);
     const snapFrame = window.requestAnimationFrame(() => setDisplayClock(Math.floor(nextAnchor)));
     return () => window.cancelAnimationFrame(snapFrame);
-  }, [rawClock, running]);
+  }, [rawClock, replayBound, running, status]);
 
   useEffect(() => {
     if (!running || rawClock == null) return;
@@ -90,11 +101,10 @@ export function SmoothMatchClock({
           ? 1
           : fallbackRate;
         const interpolatedClock = anchor.clock + Math.max(0, now - anchor.at) / 1000 * rate;
-        const hasFutureReplayBound = status === "running_replay"
-          && validReplayTarget != null
-          && validReplayTarget > anchor.clock;
-        const boundedClock = hasFutureReplayBound
-          ? Math.min(interpolatedClock, validReplayTarget)
+        const boundedClock = status === "running_replay"
+          ? replayBound == null
+            ? rawClock
+            : Math.min(interpolatedClock, replayBound)
           : interpolatedClock;
         const nextClock = Math.floor(boundedClock);
         displayClockRef.current = nextClock;
@@ -105,25 +115,33 @@ export function SmoothMatchClock({
 
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, [mode, rawClock, replayTimeScale, running, status, validReplayTarget]);
+  }, [mode, rawClock, replayBound, replayTimeScale, running, status]);
 
-  const text = status === "finished"
+  const clockText = status === "finished"
     ? "FT"
     : displayClock == null
       ? fmtMatchTime(match, status)
       : fmtClockSeconds(displayClock);
-  const label = displayClock == null
-    ? `Match time ${text}`
-    : `Match time ${Math.floor(displayClock / 60)} minutes ${displayClock % 60} seconds`;
+  const text = processing
+    ? `${agentProcessing?.antCount ? `${agentProcessing.antCount} ` : ""}ANTS THINKING…`
+    : clockText;
+  const label = processing
+    ? `${agentProcessing?.antCount ?? "Colony"} ants are choosing an order${agentProcessing?.colonyName ? ` for ${agentProcessing.colonyName}` : ""}`
+    : displayClock == null
+      ? `Match time ${clockText}`
+      : `Match time ${Math.floor(displayClock / 60)} minutes ${displayClock % 60} seconds`;
 
   return (
     <span
       className={`smooth-match-clock ${className}`.trim()}
       data-running={running}
+      data-processing={processing}
       role="timer"
       aria-label={label}
     >
-      {showLiveDot && running && <span className="live-dot" aria-hidden="true" />}
+      {processing
+        ? <span className="smooth-match-clock-thinking-mark" aria-hidden="true" />
+        : showLiveDot && running && <span className="live-dot" aria-hidden="true" />}
       <span className="smooth-match-clock-value">{text}</span>
     </span>
   );

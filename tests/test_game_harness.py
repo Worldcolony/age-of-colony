@@ -2987,6 +2987,8 @@ class GameHarnessTest(unittest.TestCase):
         self.assertFalse(room.predictions)
 
     def test_team_routing_reaches_each_ant_without_forcing_the_routed_team(self):
+        processing_states = []
+
         class RoutedAntAgent:
             def __init__(self):
                 self.context = None
@@ -2996,6 +2998,7 @@ class GameHarnessTest(unittest.TestCase):
 
             def decide_ants(self, *, game_id, stage, context, ants):
                 self.context = context
+                processing_states.append(manager.get_room(game_id).public_state()["agentProcessing"])
                 return [{"antId": ant["antId"], "vote": "no"} for ant in ants]
 
         agent = RoutedAntAgent()
@@ -3037,6 +3040,19 @@ class GameHarnessTest(unittest.TestCase):
             agent.context["colony"]["teamRouting"],
             {"scope": "participant1", "teamLabel": "France", "neutral": False},
         )
+        self.assertEqual(len(processing_states), 1)
+        self.assertEqual(
+            {key: value for key, value in processing_states[0].items() if key != "startedAt"},
+            {
+                "active": True,
+                "colonyId": colony.colony_id,
+                "colonyName": "France Route",
+                "antCount": 5,
+                "stage": "pre_info",
+            },
+        )
+        self.assertIsInstance(processing_states[0]["startedAt"], float)
+        self.assertIsNone(room.public_state()["agentProcessing"])
         self.assertNotIn("favoriteContext", agent.context["colony"])
         self.assertNotIn("infoNeed", agent.context["colony"])
         prediction = next(iter(room.predictions.values()))

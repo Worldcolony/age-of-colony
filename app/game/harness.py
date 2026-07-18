@@ -761,6 +761,7 @@ class GameRoom:
     last_opportunity_clock_by_key: dict[str, int] = field(default_factory=dict)
     log: list[GameLogEvent] = field(default_factory=list)
     agent_usage: dict[str, Any] | None = None
+    agent_processing: dict[str, Any] | None = None
     log_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -818,6 +819,7 @@ class GameRoom:
             "colonies": colonies,
             "activeOpportunities": [opportunity.public_state() for opportunity in self.opportunities.values()],
             "agentUsage": self.agent_usage,
+            "agentProcessing": copy.deepcopy(self.agent_processing),
             "logCount": len(self.log),
         }
         if self.room_kind == "player":
@@ -1689,12 +1691,23 @@ class GameHarness:
                 "stage": "post_info" if info_packet else "pre_info",
             },
         )
-        agent_vote = self._ant_agent_vote(
-            colony,
-            opportunity,
-            info_packet=info_packet,
-            strategy_snapshot=strategy_snapshot,
-        )
+        self.room.agent_processing = {
+            "active": True,
+            "colonyId": colony.colony_id,
+            "colonyName": colony.name,
+            "antCount": active_count,
+            "stage": "post_info" if info_packet else "pre_info",
+            "startedAt": time.time(),
+        }
+        try:
+            agent_vote = self._ant_agent_vote(
+                colony,
+                opportunity,
+                info_packet=info_packet,
+                strategy_snapshot=strategy_snapshot,
+            )
+        finally:
+            self.room.agent_processing = None
         if agent_vote:
             self.room.add_log(
                 "ant_agent_vote",

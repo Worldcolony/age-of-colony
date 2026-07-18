@@ -273,6 +273,14 @@ export interface GameState {
   colonies: Colony[];
   activeOpportunities: Opportunity[];
   agentUsage?: unknown;
+  agentProcessing?: {
+    active: boolean;
+    colonyId?: string;
+    colonyName?: string;
+    antCount?: number;
+    stage?: "pre_info" | "post_info" | string;
+    startedAt?: number;
+  } | null;
   logCount?: number;
 }
 
