@@ -88,8 +88,8 @@ function ResultsRun({ id }: { id: string }) {
 
   const podium = [1, 0, 2];
   return (
-    <div className={`results-page flex flex-col gap-3 ${finished ? "is-replay" : ""}`}>
-      <div className="results-page-topbar flex items-center justify-between">
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
         <button
           className="text-sm font-semibold text-ink-soft"
           onClick={() => adminContext ? router.push(cockpitHref) : router.back()}

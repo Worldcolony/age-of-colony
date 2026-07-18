@@ -29,7 +29,7 @@ export function SimulationReplay({
   const duration = timeline.at(-1)?.offset ?? 0;
   const [position, setPosition] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState<1 | 4>(4);
+  const [speed, setSpeed] = useState<1 | 2 | 4>(1);
   const positionRef = useRef(0);
   const replayKey = `${game.gameId}:${timeline[0]?.event.index ?? 0}:${timeline.at(-1)?.event.index ?? 0}`;
 
@@ -97,89 +97,37 @@ export function SimulationReplay({
   if (!timeline.length) return null;
 
   return (
-    <section className="simulation-replay" aria-label="Complete simulation replay">
-      <header className="simulation-replay-head">
+    <section className="glass p-4" aria-label="Complete simulation replay">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p>Simulation tape</p>
-          <h2>Replay everything that happened</h2>
+          <p className="eyebrow">Simulation replay</p>
+          <h2 className="text-xl font-bold">Review the completed run</h2>
         </div>
-        <span data-playing={playing}>{playing ? `Playing ×${speed}` : position >= duration ? "Replay complete" : `Ready · ×${speed}`}</span>
+        <span className="status-pill">
+          {playing ? `Playing ×${speed}` : position >= duration ? "Replay complete" : `Ready · ×${speed}`}
+        </span>
       </header>
 
-      <div className="simulation-replay-score">
-        <span className="simulation-replay-team">
-          <i aria-hidden="true">{flag(game.participant1)}</i>
-          <b>{game.participant1 || "Team 1"}</b>
-        </span>
-        <strong>{currentScore.participant1 ?? 0} – {currentScore.participant2 ?? 0}</strong>
-        <span className="simulation-replay-team is-away">
-          <i aria-hidden="true">{flag(game.participant2)}</i>
-          <b>{game.participant2 || "Team 2"}</b>
-        </span>
-        <span className="simulation-replay-match-clock">{fmtClockSeconds(matchClock)}</span>
-      </div>
-
-      <div className="simulation-replay-stage">
-        <div className="simulation-replay-race">
-          <ColonyRaceChart colonies={replayColonies} events={visibleEvents} hero />
-        </div>
-
-        <aside className="simulation-replay-events" aria-label="Events reached in the replay">
-          <div className="simulation-replay-events-head">
-            <div>
-              <p>Now on tape</p>
-              <strong>{visiblePoints.length} / {timeline.length} actions</strong>
-            </div>
-            <span>{progress}%</span>
-          </div>
-          <ol>
-            {recentPoints.map((point) => {
-              const card = replayEventCard(point.event);
-              return (
-                <li key={point.event.index} data-tone={card.tone}>
-                  <span>{card.code}</span>
-                  <div>
-                    <small>{formatReplayDuration(point.offset)} · #{point.event.index}</small>
-                    <b>{card.title}</b>
-                    <p>{card.detail}</p>
-                  </div>
-                </li>
-              );
-            })}
-            {!recentPoints.length && (
-              <li className="is-empty">
-                <span>READY</span>
-                <div>
-                  <b>Press play to review the simulation</b>
-                  <p>Match events, markets, colony votes and results will appear here.</p>
-                </div>
-              </li>
-            )}
-          </ol>
-        </aside>
-      </div>
-
-      <div className="simulation-replay-controls">
-        <button type="button" className="simulation-replay-play" onClick={togglePlayback}>
-          <span aria-hidden="true">{playing ? "Ⅱ" : position >= duration ? "↺" : "▶"}</span>
-          {playing ? "Pause replay" : position >= duration ? `Replay again ×${speed}` : `Play replay ×${speed}`}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-primary !min-h-0 !w-auto px-4 py-2" onClick={togglePlayback}>
+          <span aria-hidden="true">{playing ? "Ⅱ" : position >= duration ? "↺" : "▶"}</span>{" "}
+          {playing ? "Pause" : position >= duration ? "Replay" : "Play"}
         </button>
-        <div className="simulation-replay-speeds" aria-label="Replay speed">
-          {([1, 4] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              data-active={speed === value}
-              aria-pressed={speed === value}
-              onClick={() => setSpeed(value)}
-            >
-              ×{value}
-            </button>
-          ))}
-        </div>
-        <label className="simulation-replay-scrubber">
+        {([1, 2, 4] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            className={`btn !min-h-0 !w-auto px-3 py-2 ${speed === value ? "btn-primary" : "btn-ghost"}`}
+            aria-pressed={speed === value}
+            onClick={() => setSpeed(value)}
+          >
+            ×{value}
+          </button>
+        ))}
+        <label className="min-w-[180px] flex-1">
           <span className="sr-only">Replay position</span>
           <input
+            className="w-full accent-gold-deep"
             type="range"
             min={0}
             max={Math.max(0.1, duration)}
@@ -188,9 +136,58 @@ export function SimulationReplay({
             onChange={(event) => seek(Number(event.target.value))}
           />
         </label>
-        <span className="simulation-replay-elapsed">
+        <span className="font-mono text-xs text-ink-faint">
           {formatReplayDuration(position)} / {formatReplayDuration(duration)}
         </span>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(260px,.75fr)]">
+        <div className="well p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-bold">
+              {flag(game.participant1)} {game.participant1 || "Team 1"}{" "}
+              {currentScore.participant1 ?? 0} – {currentScore.participant2 ?? 0}{" "}
+              {game.participant2 || "Team 2"} {flag(game.participant2)}
+            </span>
+            <span className="font-mono text-sm font-bold">{fmtClockSeconds(matchClock)}</span>
+          </div>
+          <ColonyRaceChart colonies={replayColonies} events={visibleEvents} hero />
+        </div>
+
+        <aside className="well min-h-0 p-3" aria-label="Events reached in the replay">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="eyebrow">Replay feed</p>
+              <strong className="text-sm">{visiblePoints.length} / {timeline.length} actions</strong>
+            </div>
+            <span className="status-pill">{progress}%</span>
+          </div>
+          <ol className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {recentPoints.map((point) => {
+              const card = replayEventCard(point.event);
+              return (
+                <li key={point.event.index} className="flex gap-2 border-b border-[color:var(--brd-soft)] pb-2">
+                  <span className="status-pill shrink-0">{card.code}</span>
+                  <div className="min-w-0">
+                    <small className="font-mono text-[10px] text-ink-faint">
+                      {formatReplayDuration(point.offset)} · #{point.event.index}
+                    </small>
+                    <b className="block truncate text-sm">{card.title}</b>
+                    <p className="truncate text-xs text-ink-faint">{card.detail}</p>
+                  </div>
+                </li>
+              );
+            })}
+            {!recentPoints.length && (
+              <li className="py-6 text-center">
+                <b className="block text-sm">Press play to review the simulation</b>
+                <p className="mt-1 text-xs text-ink-faint">
+                  Match events, markets, colony votes and results will appear here.
+                </p>
+              </li>
+            )}
+          </ol>
+        </aside>
       </div>
     </section>
   );

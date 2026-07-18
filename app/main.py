@@ -21,7 +21,7 @@ from .game import GameManager
 from .game.agents import OpenRouterColonyAgent, OpenRouterSettings
 from .game.demo import demo_events, demo_fixtures
 from .game.harness import (
-    BASELINE_MARKET_CONTEXTS,
+    LIVE_MARKET_CONTEXTS,
     MARKET_RISK_SUGAR,
     PRIVATE_SNAPSHOT_KEY,
     STANDARD_MARKET_INTERVAL_SECONDS,
@@ -3780,7 +3780,7 @@ async def _open_live_baseline_markets_realtime(
 def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | None) -> bool:
     """Return whether a replacement or five-minute market wave may open."""
 
-    # Keep a player room actionable: replace any of the four agreed rolling
+    # Keep a player room actionable: replace any of the six rolling
     # markets on the next live poll instead of waiting for a five-minute wave.
     if room.room_kind == "player" and room.mode == "live":
         open_contexts = {
@@ -3788,7 +3788,7 @@ def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | Non
             for opportunity in room.opportunities.values()
             if opportunity.context != "penalties"
         }
-        if not open_contexts or any(context not in open_contexts for context in BASELINE_MARKET_CONTEXTS):
+        if not open_contexts or any(context not in open_contexts for context in LIVE_MARKET_CONTEXTS):
             return True
 
     cadence_key = "standard_market_arrival"

@@ -228,18 +228,16 @@ LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
 PENALTY_OUTCOME_SECONDS = 3 * 60
 PENALTY_OUTCOME_EVENTS = 18
-# Product-facing markets are intentionally limited to the five agreed football
-# moments: a penalty when TXLine awards one, plus these four rolling markets.
-# Legacy contexts remain readable for stored games and old tests, but they are
-# no longer opened by the live/replay cadence.
+# Replay cadence keeps its existing four-market rotation.
 BASELINE_MARKET_CONTEXTS = ("goal_next_10", "next_card", "next_substitution", "next_goal_team")
 CORE_LIVE_MARKET_CONTEXTS = ("goal_next_10", "next_goal_team")
-EVENT_LIVE_MARKET_CONTEXTS = ("next_substitution", "next_card")
+EVENT_LIVE_MARKET_CONTEXTS = ("next_substitution", "next_card", "next_corner", "next_foul")
+LIVE_MARKET_CONTEXTS = (*CORE_LIVE_MARKET_CONTEXTS, *EVENT_LIVE_MARKET_CONTEXTS)
 LEGACY_MARKET_CONTEXTS = {"next_corner", "next_free_kick", "next_yellow_card", "next_foul"}
-ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(CORE_LIVE_MARKET_CONTEXTS, LEGACY_MARKET_CONTEXTS)
+ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(LIVE_MARKET_CONTEXTS, LEGACY_MARKET_CONTEXTS)
 NO_DEADLINE_CONTEXTS = ROLLING_WINDOW_CONTEXTS - {"goal_next_10"}
 STANDARD_MARKET_INTERVAL_SECONDS = 5 * 60
-MAX_OPEN_STANDARD_MARKETS = len(BASELINE_MARKET_CONTEXTS)
+MAX_OPEN_STANDARD_MARKETS = len(LIVE_MARKET_CONTEXTS)
 MARKET_COOLDOWN_SECONDS = {
     "penalties": 5 * 60,
     "goal_next_10": 10 * 60,
@@ -2083,7 +2081,7 @@ class GameHarness:
         )
         prioritized_live_market = (
             synthetic_player_live_market
-            and opportunity.context in BASELINE_MARKET_CONTEXTS
+            and opportunity.context in LIVE_MARKET_CONTEXTS
         )
         if opportunity.context in ROLLING_WINDOW_CONTEXTS.union({"penalties"}) and self._has_open_market_slot(key):
             return False
@@ -2096,13 +2094,13 @@ class GameHarness:
 
         # A player-facing live room should not sit empty after a market resolves.
         # The polling loop may immediately request synthetic replacements for
-        # any of the four agreed live markets before the regular five-minute
+        # any of the six live markets before the regular five-minute
         # cadence. Normal event-driven markets and later waves still obey the
         # cooldown below.
         replace_empty_live_slot = synthetic_player_live_market and not self._open_standard_market_contexts()
         replace_missing_live_market = (
             synthetic_player_live_market
-            and opportunity.context in BASELINE_MARKET_CONTEXTS
+            and opportunity.context in LIVE_MARKET_CONTEXTS
         )
 
         # TXLine can emit an award, a VAR confirmation and a result record for
@@ -3237,12 +3235,9 @@ def cadence_market_contexts(event: dict[str, Any]) -> list[str]:
 
 
 def live_baseline_market_contexts(event: dict[str, Any]) -> list[str]:
-    """Keep all four agreed rolling football markets available."""
+    """Keep six complementary rolling football markets available together."""
 
-    return [
-        *CORE_LIVE_MARKET_CONTEXTS,
-        *EVENT_LIVE_MARKET_CONTEXTS,
-    ]
+    return list(LIVE_MARKET_CONTEXTS)
 
 
 def _event_is_penalty_award(event: dict[str, Any]) -> bool:
