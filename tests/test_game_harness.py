@@ -178,8 +178,8 @@ class GameHarnessTest(unittest.TestCase):
 
         self.assertIsNotNone(opportunity)
         self.assertEqual(opportunity.context, "penalties")
-        self.assertIsNone(opportunity.deadline_clock)
-        self.assertIsNone(opportunity.deadline_event_index)
+        self.assertEqual(opportunity.deadline_clock, 3960)
+        self.assertEqual(opportunity.deadline_event_index, 19)
         self.assertEqual(opportunity.info_cost, 3)
         rewards = {option.label: option.reward_sugar for option in opportunity.options}
         self.assertEqual(rewards["yes, penalty scored"], 1)
@@ -338,6 +338,100 @@ class GameHarnessTest(unittest.TestCase):
             {(event.data.get("resolvedOutcome") or {}).get("label") for event in penalty_settlements},
             {"Norway penalty missed or saved"},
         )
+
+    def test_penalty_scored_action_resolves_at_the_timeout_boundary(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("yes"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Spain", seed=124)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Penalty Goal Watch", 5, "aggressive", "balanced", "medium")
+
+        harness.process_event(
+            penalty_event(
+                seq=1,
+                minute=20,
+                clockSeconds=1200,
+                participant=2,
+                participantLabel="Spain",
+                possession=2,
+                possessionLabel="Spain",
+                description="Penalty awarded - Spain",
+            )
+        )
+        harness.process_event(
+            penalty_event(
+                seq=2,
+                action="penalty_scored",
+                type="penalty_result",
+                minute=23,
+                clockSeconds=1380,
+                participant=2,
+                participantLabel="Spain",
+                possession=2,
+                possessionLabel="Spain",
+                score={"participant1": 0, "participant2": 1},
+                description="Penalty scored - Spain",
+            )
+        )
+
+        self.assertEqual(colony.memory.wins, 1)
+        settlement = next(event for event in room.log if event.kind == "settlement")
+        self.assertEqual(settlement.data["resolvedOutcome"]["label"], "Spain penalty scored")
+        self.assertEqual(settlement.data["resolvedOutcome"]["target"], "goal")
+
+    def test_penalty_without_result_expires_as_missed_or_saved_after_three_minutes(self):
+        manager = GameManager(decision_agent=FakeDeepSeekAntAgent("no"))
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Spain", seed=125)
+        harness = manager.harness(room.game_id)
+        colony = harness.add_colony("Penalty Timeout Watch", 5, "aggressive", "balanced", "medium")
+
+        harness.process_event(
+            penalty_event(
+                seq=1,
+                minute=20,
+                clockSeconds=1200,
+                participant=2,
+                participantLabel="Spain",
+                possession=2,
+                possessionLabel="Spain",
+                description="Penalty awarded - Spain",
+            )
+        )
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 2,
+                "action": "clock",
+                "highlights": [],
+                "minute": 22,
+                "clockSeconds": 1379,
+                "score": {"participant1": 0, "participant2": 0},
+                "description": "Clock tick",
+            }
+        )
+        self.assertEqual(colony.memory.wins, 0)
+        self.assertTrue(room.opportunities)
+
+        harness.process_event(
+            {
+                "fixtureId": 42,
+                "seq": 3,
+                "action": "yellow_card",
+                "highlights": ["card", "yellow_card"],
+                "minute": 23,
+                "clockSeconds": 1380,
+                "participant": 1,
+                "participantLabel": "Brazil",
+                "score": {"participant1": 0, "participant2": 0},
+                "description": "Yellow card - Brazil",
+            }
+        )
+
+        self.assertEqual(colony.memory.wins, 1)
+        self.assertFalse(room.opportunities)
+        settlement = next(event for event in room.log if event.kind == "settlement")
+        self.assertEqual(settlement.data["reason"], "expired")
+        self.assertEqual(settlement.data["resolvedOutcome"]["label"], "Spain penalty missed or saved")
+        self.assertEqual(settlement.data["resolvedOutcome"]["target"], "no_goal")
 
     def test_penalty_confirmation_is_deduplicated_without_a_colony_position(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("abstain"))

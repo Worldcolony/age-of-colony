@@ -226,6 +226,8 @@ FOOD_DRAIN_BY_SIZE = {10: 1, 20: 1, 50: 1}
 FOOD_DRAIN_INTERVAL_EVENTS = 24
 LARVAE_INCUBATION_EVENTS = 18
 GOAL_NEXT_10_SECONDS = 10 * 60
+PENALTY_OUTCOME_SECONDS = 3 * 60
+PENALTY_OUTCOME_EVENTS = 18
 # Product-facing markets are intentionally limited to the five agreed football
 # moments: a penalty when TXLine awards one, plus these four rolling markets.
 # Legacy contexts remain readable for stored games and old tests, but they are
@@ -235,7 +237,7 @@ CORE_LIVE_MARKET_CONTEXTS = ("goal_next_10", "next_goal_team")
 EVENT_LIVE_MARKET_CONTEXTS = ("next_substitution", "next_card")
 LEGACY_MARKET_CONTEXTS = {"next_corner", "next_free_kick", "next_yellow_card", "next_foul"}
 ROLLING_WINDOW_CONTEXTS = set(BASELINE_MARKET_CONTEXTS).union(CORE_LIVE_MARKET_CONTEXTS, LEGACY_MARKET_CONTEXTS)
-NO_DEADLINE_CONTEXTS = {"penalties", *ROLLING_WINDOW_CONTEXTS} - {"goal_next_10"}
+NO_DEADLINE_CONTEXTS = ROLLING_WINDOW_CONTEXTS - {"goal_next_10"}
 STANDARD_MARKET_INTERVAL_SECONDS = 5 * 60
 MAX_OPEN_STANDARD_MARKETS = len(BASELINE_MARKET_CONTEXTS)
 MARKET_COOLDOWN_SECONDS = {
@@ -2024,6 +2026,10 @@ class GameHarness:
             opportunity = self.room.opportunities.get(prediction.opportunity_id)
             if not opportunity or opportunity.context in NO_DEADLINE_CONTEXTS:
                 continue
+            # A concrete TXLine penalty result at the exact deadline wins over
+            # the fallback timeout. It will be settled immediately afterwards.
+            if opportunity.context == "penalties" and opportunity_resolved_by_event(opportunity, event):
+                continue
             expired_by_clock = clock is not None and prediction.deadline_clock is not None and clock >= prediction.deadline_clock
             # Event counts are only a fallback for feeds that do not provide a match clock.
             expired_by_events = (
@@ -3121,7 +3127,7 @@ def opportunity_clock_seconds(opportunity: Opportunity) -> int | None:
 
 def opportunity_deadline_seconds(context: str) -> int | None:
     return {
-        "penalties": None,
+        "penalties": PENALTY_OUTCOME_SECONDS,
         "goal_next_10": GOAL_NEXT_10_SECONDS,
         "next_goal_team": None,
         "next_corner": None,
@@ -3135,7 +3141,7 @@ def opportunity_deadline_seconds(context: str) -> int | None:
 
 def opportunity_deadline_events(context: str) -> int | None:
     return {
-        "penalties": None,
+        "penalties": PENALTY_OUTCOME_EVENTS,
         "goal_next_10": 56,
         "next_goal_team": None,
         "next_corner": None,
@@ -3783,6 +3789,13 @@ def resolved_market_outcome(opportunity: Opportunity, event: dict[str, Any] | No
             label = f"{team_label} penalty missed or saved" if team_label else "Penalty missed or saved"
         elif "cancel" in targets:
             label = "Penalty cancelled"
+        elif reason == "expired":
+            target = "no_goal"
+            label = (
+                f"{opportunity.team_label} penalty missed or saved"
+                if opportunity.team_label
+                else "Penalty missed or saved"
+            )
         option = outcome_option(opportunity, target)
 
     elif opportunity.context == "goal_next_10":
@@ -4026,26 +4039,54 @@ def event_targets(event: dict[str, Any]) -> set[str]:
     targets: set[str] = set()
     flags = set(event.get("highlights") or [])
     action = _event_token(event.get("action"))
-    cancelled = "discarded" in flags or _event_has_text(
-        event,
-        "action_discarded",
-        "annule",
-        "overturned",
-        "cancel",
-        "no goal",
-        "no_goal",
+    event_tokens = {
+        _event_token(event.get(key))
+        for key in ("action", "type", "outcome", "goalType")
+        if event.get(key) is not None
+    }
+    penalty_result_event = (
+        "penalty" in flags
+        or any(token.startswith("penalty") for token in event_tokens)
+        or _event_has_text(event, "penalty", "spot kick")
+    )
+    explicit_penalty_no_goal = penalty_result_event and (
+        bool(event_tokens.intersection({"penalty_no_goal", "no_goal"}))
+        or _event_has_text(event, "penalty no goal", "penalty not scored")
+    )
+    cancelled = "discarded" in flags or (
+        not explicit_penalty_no_goal
+        and _event_has_text(
+            event,
+            "action_discarded",
+            "annule",
+            "overturned",
+            "cancel",
+            "no goal",
+            "no_goal",
+        )
     )
     if cancelled:
         targets.add("cancel")
     var_review_without_score = action in {"var", "var_start"} and not _event_score_has_value(event)
+    explicit_penalty_goal = penalty_result_event and (
+        bool(event_tokens.intersection({"penalty_scored", "penalty_goal", "scored", "converted", "successful"}))
+        or _event_has_text(event, "penalty scored", "penalty converted", "spot kick scored")
+    )
     if not cancelled and (
-        "goal" in flags
+        explicit_penalty_goal
+        or "goal" in flags
         or (_event_has_text(event, "goal", "but") and not _event_has_text(event, "goal_kick", "goal kick", "goalkick"))
     ) and not var_review_without_score:
         targets.add("goal")
-    if _event_has_text(event, "miss", "missed", "off target", "off_target", "wide"):
+    if (
+        penalty_result_event
+        and event_tokens.intersection({"penalty_missed", "penalty_failed", "missed", "failed"})
+    ) or explicit_penalty_no_goal or _event_has_text(event, "miss", "missed", "off target", "off_target", "wide"):
         targets.add("miss")
-    if _event_has_text(event, "saved", "save", "stopped", "arrêt", "arrete"):
+    if (
+        penalty_result_event
+        and event_tokens.intersection({"penalty_saved", "saved"})
+    ) or _event_has_text(event, "saved", "save", "stopped", "arrêt", "arrete"):
         targets.add("saved")
     if "yellow_card" in flags or _event_has_text(event, "yellow_card", "yellow card", "carton jaune"):
         targets.add("yellow_card")
