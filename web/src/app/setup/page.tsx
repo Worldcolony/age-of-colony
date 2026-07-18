@@ -122,7 +122,7 @@ export default function SetupPage() {
       const colonyName = name.trim() || identity.name || identity.short || `Colony ${Date.now().toString().slice(-4)}`;
       const payload = {
         name: colonyName,
-        size: 20,
+        size: 5,
         style,
         favoriteContext: DEFAULT_FOCUS,
         infoNeed: DEFAULT_INFO,
@@ -172,7 +172,7 @@ export default function SetupPage() {
 
       <section className="mt-6 text-center">
         <p className="text-lg font-bold text-ink-soft">Build a colony for this match.</p>
-        <p className="mt-2 text-sm text-ink-faint">Every colony starts with 20 fixed ant voters and 20 Sugar.</p>
+        <p className="mt-2 text-sm text-ink-faint">Every colony starts with 5 fixed ant voters and 20 Sugar.</p>
         <p className="mt-1 text-xs font-bold text-gold-deep">Entries lock when live play starts.</p>
       </section>
 

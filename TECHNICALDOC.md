@@ -60,12 +60,13 @@ Phantom wallet ──(sign-in signature)──▶ FastAPI backend ──▶ Supa
 TXLine event → normalize → market moment?
   → open market (≤3 open, ~1 new / 5 match-min; penalty is immediate)
   → each active ant votes via its own LLM call
-  → colony enters if the top vote clears its threshold (cautious 70% / balanced 60% / aggressive 51%)
+  → colony enters if the top vote clears its threshold (cautious 100% / balanced 80% / aggressive 60%)
   → reserve 2 Sugar → settle on the real event → win (+reward) / loss (−2) / void (release)
 ```
 
-Every colony starts with **20 ants** and **20 Sugar**. Any entry reserves **2 Sugar** (max 5 open
-positions); a win adds a fixed reward, a loss burns the 2, a void releases it. Sample rewards:
+Every colony starts with **5 ants** and **20 Sugar**. At least 3 ants must take a side; abstentions
+stay outside consensus. Any entry reserves **2 Sugar** (max 5 open positions); a win adds a fixed
+reward, a loss burns the 2, a void releases it. Sample rewards:
 penalty scored `+1` / missed `+5`, goal in next 10 min `+4`, next corner `+2`, next yellow `+3`.
 
 ## TxLINE Endpoints Used

@@ -35,9 +35,9 @@ const USER_LIVE_LIMIT = "100";
 const LIVE_MATCH_WINDOW_MINUTES = 150;
 const ANON_ID_STORAGE_KEY = "aocAnonymousId";
 const PLAYER_NAME_STORAGE_KEY = "aocPlayerName";
-const FIXED_COLONY_SIZE = 20;
+const FIXED_COLONY_SIZE = 5;
 const COLONY_SIZE_CHOICES = [
-  { value: FIXED_COLONY_SIZE, label: "20 ants + 20 food", profile: "Fair start" },
+  { value: FIXED_COLONY_SIZE, label: "5 ants + 20 food", profile: "Fair start" },
 ];
 const COLONY_STYLE_CHOICES = [
   { value: "cautious", label: "Cautious" },

@@ -243,7 +243,7 @@ class WalletGameAuthIntegrationTest(unittest.TestCase):
             params={"anonymousId": "a-different-browser-id"},
         )
         self.assertEqual(roster.status_code, 200, roster.text)
-        self.assertEqual(len(roster.json()["ants"]), 20)
+        self.assertEqual(len(roster.json()["ants"]), 5)
 
         duplicate = second_client.post(
             f"/api/games/{created['gameId']}/colonies",

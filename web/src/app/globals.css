@@ -737,7 +737,7 @@ body {
 .ant-order-editor { background: rgba(249, 243, 226, 0.58); }
 
 /* Strategy is a colony doctrine, not a settings form. The three cards make the
-   real 20-ant consensus rule visible before the player commits an order. */
+   five-ant consensus rule visible before the player commits an order. */
 .doctrine-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

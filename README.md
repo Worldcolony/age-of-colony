@@ -246,11 +246,11 @@ Fixed V0 rewards:
 
 Starting configuration:
 
-- fair start: every colony begins with exactly `20` ants and `20 Sugar`; requested legacy sizes do not change the roster
+- fair start: every colony begins with exactly `5` ants and `20 Sugar`; requested legacy sizes do not change the roster
 - the V0 player setup asks only for a temperament: `cautious`, `balanced`, or `aggressive`
 - when match score and clock data are usable, ants must take a directional position; abstention remains available as a safety brake for materially incomplete or unreliable signals
-- at least `10/20` active ants must take a side before a colony can enter a market
-- consensus is calculated only among directional votes, excluding abstentions; the top option must reach cautious `70%`, balanced `60%`, or aggressive `51%`, and reaching the threshold exactly is enough
+- at least `3/5` active ants must take a side before a colony can enter a market
+- consensus is calculated only among directional votes, excluding abstentions; the top option must reach cautious `100%`, balanced `80%`, or aggressive `60%`, and reaching the threshold exactly is enough
 - if two options share the top raw vote count, the colony observes and does not enter the market
 - `favoriteContext`, `infoNeed`, live strategy patches, and per-ant overrides remain compatibility/debug API fields; they are not part of the core Sugar V0 player rules
 - each committed ant bet records its supporting ants, selected option, `2 Sugar` exposure, strategy revision, consensus, entry threshold, and final won/lost/void result in the durable game journal

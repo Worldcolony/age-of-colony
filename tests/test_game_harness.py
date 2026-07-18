@@ -87,9 +87,9 @@ def vote_for_option(
     opportunity,
     *,
     option_index=0,
-    support_count=20,
+    support_count=STARTING_COLONY_ANTS,
     dissent_count=0,
-    active_count=20,
+    active_count=STARTING_COLONY_ANTS,
     weight=1.0,
 ):
     """Build a raw ant ballot for deterministic Sugar V0 entry tests."""
@@ -522,7 +522,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(colony.food, STARTING_COLONY_SUGAR)
         self.assertEqual(len(colony.ants), STARTING_COLONY_ANTS)
         self.assertEqual(colony.ants[0].ant_id, "ant_0000")
-        self.assertEqual(colony.ants[-1].ant_id, "ant_0019")
+        self.assertEqual(colony.ants[-1].ant_id, "ant_0004")
         self.assertTrue(all(not ant.ant_id.startswith(colony.colony_id) for ant in colony.ants))
         self.assertEqual(public["sugar"], STARTING_COLONY_SUGAR)
         self.assertEqual(public["food"], STARTING_COLONY_SUGAR)
@@ -530,13 +530,14 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(public["sugarReserved"], 0)
         self.assertEqual(public["sugarAvailable"], STARTING_COLONY_SUGAR)
         self.assertEqual(public["economy"]["currency"], "sugar")
+        self.assertEqual(len(archetypes), STARTING_COLONY_ANTS)
         self.assertEqual(
-            archetypes,
-            {"cautious", "balanced", "data_first", "opportunist", "momentum", "chaos"},
+            {natural_analysis_role(ant) for ant in colony.ants},
+            {"reactive", "statistical", "situational"},
         )
         self.assertTrue(any(ant.risk_appetite > 0.55 for ant in colony.ants))
 
-    def test_sugar_v0_keeps_all_twenty_ants_active_without_wounds_or_deaths(self):
+    def test_sugar_v0_keeps_all_five_ants_active_without_wounds_or_deaths(self):
         _, harness = self.make_room()
         colony = harness.add_colony(
             name="Risk Nest",
@@ -642,11 +643,11 @@ class GameHarnessTest(unittest.TestCase):
             1,
             room.match_state,
         )[0]
-        minimum_support = {"cautious": 7, "balanced": 6, "aggressive": 6}
+        minimum_support = {"cautious": 5, "balanced": 4, "aggressive": 3}
 
         self.assertEqual(
             STYLE_ENTRY_THRESHOLDS,
-            {"cautious": 0.70, "balanced": 0.60, "aggressive": 0.51},
+            {"cautious": 1.00, "balanced": 0.80, "aggressive": 0.60},
         )
         self.assertEqual(MIN_DIRECTIONAL_QUORUM_FRACTION, 0.50)
         for style, support_count in minimum_support.items():
@@ -659,7 +660,11 @@ class GameHarnessTest(unittest.TestCase):
                         colony,
                         opportunity,
                         support_count=support_count - 1,
-                        dissent_count=11 - support_count,
+                        dissent_count=(
+                            STARTING_COLONY_ANTS - (support_count - 1)
+                            if style != "aggressive"
+                            else 2
+                        ),
                     ),
                     1,
                     bought_info=False,
@@ -671,7 +676,7 @@ class GameHarnessTest(unittest.TestCase):
                         colony,
                         opportunity,
                         support_count=support_count,
-                        dissent_count=10 - support_count,
+                        dissent_count=STARTING_COLONY_ANTS - support_count,
                     ),
                     1,
                     bought_info=False,
@@ -681,11 +686,14 @@ class GameHarnessTest(unittest.TestCase):
                 self.assertEqual(len(at_or_above.ant_ids), support_count)
                 self.assertEqual(at_or_above.reserved_food, MARKET_RISK_SUGAR)
                 self.assertEqual(at_or_above.entry_threshold, STYLE_ENTRY_THRESHOLDS[style])
-                self.assertAlmostEqual(at_or_above.support_fraction, support_count / 10)
+                self.assertAlmostEqual(
+                    at_or_above.support_fraction,
+                    support_count / STARTING_COLONY_ANTS,
+                )
 
         quorum_colony = harness.add_colony("Quorum Gate", 20, "balanced", "momentum", "medium")
-        below_quorum = vote_for_option(quorum_colony, opportunity, support_count=9)
-        at_quorum = vote_for_option(quorum_colony, opportunity, support_count=10)
+        below_quorum = vote_for_option(quorum_colony, opportunity, support_count=2)
+        at_quorum = vote_for_option(quorum_colony, opportunity, support_count=3)
         self.assertIsNone(
             create_prediction(
                 quorum_colony,
@@ -709,21 +717,21 @@ class GameHarnessTest(unittest.TestCase):
             vote_for_option(
                 quorum_colony,
                 opportunity,
-                support_count=6,
-                dissent_count=4,
+                support_count=2,
+                dissent_count=1,
             )
         )
-        self.assertEqual(public["directionalCount"], 10)
-        self.assertEqual(public["requiredDirectionalCount"], 10)
-        self.assertEqual(public["participationFraction"], 0.5)
+        self.assertEqual(public["directionalCount"], 3)
+        self.assertEqual(public["requiredDirectionalCount"], 3)
+        self.assertEqual(public["participationFraction"], 0.6)
         self.assertTrue(public["quorumMet"])
-        self.assertEqual(public["supportFraction"], 0.6)
+        self.assertAlmostEqual(public["supportFraction"], 2 / 3)
 
         raw_count_colony = harness.add_colony("Raw Count", 20, "balanced", "momentum", "medium")
-        raw_vote = vote_for_option(raw_count_colony, opportunity, support_count=12, weight=0.01)
+        raw_vote = vote_for_option(raw_count_colony, opportunity, support_count=4, weight=0.01)
         raw_vote["predictions"][opportunity.options[1].option_id] = [
             {"antId": ant.ant_id, "weight": 100.0}
-            for ant in raw_count_colony.ants[12:20]
+            for ant in raw_count_colony.ants[4:5]
         ]
         raw_prediction = create_prediction(
             raw_count_colony,
@@ -734,7 +742,7 @@ class GameHarnessTest(unittest.TestCase):
         )
         self.assertIsNotNone(raw_prediction)
         self.assertEqual(raw_prediction.option.option_id, opportunity.options[0].option_id)
-        self.assertEqual(len(raw_prediction.ant_ids), 12)
+        self.assertEqual(len(raw_prediction.ant_ids), 4)
 
     def test_market_entry_reserves_two_sugar_caps_at_ten_and_void_releases(self):
         room, harness = self.make_room()
@@ -830,8 +838,8 @@ class GameHarnessTest(unittest.TestCase):
         )[0]
 
         winners = [
-            harness.add_colony("Twelve Supporters", 20, "balanced", "momentum", "medium"),
-            harness.add_colony("Twenty Supporters", 20, "balanced", "momentum", "medium"),
+            harness.add_colony("Four Supporters", 20, "balanced", "momentum", "medium"),
+            harness.add_colony("Five Supporters", 20, "balanced", "momentum", "medium"),
         ]
         winner_predictions = [
             create_prediction(
@@ -841,17 +849,17 @@ class GameHarnessTest(unittest.TestCase):
                 1,
                 bought_info=False,
             )
-            for colony, support_count in zip(winners, (12, 20))
+            for colony, support_count in zip(winners, (4, 5))
         ]
-        self.assertEqual([len(prediction.ant_ids) for prediction in winner_predictions], [12, 20])
+        self.assertEqual([len(prediction.ant_ids) for prediction in winner_predictions], [4, 5])
         for prediction in winner_predictions:
             harness._apply_settlement(prediction, opportunity, win=True, reason="test")
         self.assertEqual([colony.food for colony in winners], [22, 22])
         self.assertEqual([colony.public_state(1)["score"] for colony in winners], [22, 22])
 
         losers = [
-            harness.add_colony("Twelve Losers", 20, "balanced", "momentum", "medium"),
-            harness.add_colony("Twenty Losers", 20, "balanced", "momentum", "medium"),
+            harness.add_colony("Four Losers", 20, "balanced", "momentum", "medium"),
+            harness.add_colony("Five Losers", 20, "balanced", "momentum", "medium"),
         ]
         loser_predictions = [
             create_prediction(
@@ -861,9 +869,9 @@ class GameHarnessTest(unittest.TestCase):
                 1,
                 bought_info=False,
             )
-            for colony, support_count in zip(losers, (12, 20))
+            for colony, support_count in zip(losers, (4, 5))
         ]
-        self.assertEqual([len(prediction.ant_ids) for prediction in loser_predictions], [12, 20])
+        self.assertEqual([len(prediction.ant_ids) for prediction in loser_predictions], [4, 5])
         for prediction in loser_predictions:
             harness._apply_settlement(prediction, opportunity, win=False, reason="test")
         self.assertEqual([colony.food for colony in losers], [18, 18])
@@ -2972,7 +2980,10 @@ class GameHarnessTest(unittest.TestCase):
             [item["vote"] for item in agent.context["market"]["availableVotes"]],
         )
         vote_event = next(event for event in room.log if event.kind == "vote")
-        self.assertEqual(vote_event.data["vote"]["voteCounts"]["abstain"], 20)
+        self.assertEqual(
+            vote_event.data["vote"]["voteCounts"]["abstain"],
+            STARTING_COLONY_ANTS,
+        )
         self.assertFalse(room.predictions)
 
     def test_deepseek_ant_agent_votes_do_not_buy_info(self):

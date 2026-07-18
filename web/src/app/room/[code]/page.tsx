@@ -174,7 +174,7 @@ export default function RoomPage() {
       if (!findIdentityColony(g, activeIdentity)) {
         g = await api.addColony(g.gameId, {
           name: cleanName,
-          size: 20,
+          size: 5,
           style,
           favoriteContext: DEFAULT_FOCUS,
           infoNeed: DEFAULT_INFO,
@@ -359,7 +359,7 @@ export default function RoomPage() {
       {!myReady && (
         <div className="flex flex-col gap-4">
           <p className="text-sm leading-relaxed text-ink-soft">
-            Choose a name and temperament. Your 20 fixed ants vote automatically on every market.
+            Choose a name and temperament. Your 5 fixed ants vote automatically on every market.
           </p>
           <Field label="Colony name">
             <input

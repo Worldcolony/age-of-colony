@@ -4,6 +4,7 @@ Date: 2026-07-12
 Command: `python3 tools/playtest_sugar.py --runs 300 --policies all --seed 20260712`
 
 > Historical report. Production now opens one binary market roughly every five match minutes, rotating between corner, card, substitution and next goal, with at most three standard markets open. The tables below describe the rules before that integration.
+> This report also used the former 20-ant roster; production now uses 5 independent ants per colony with recalibrated thresholds.
 
 This campaign ran 1,500 replays through the production `GameHarness` with deterministic local voters. The single bundled football timeline stayed fixed; only the voting policy and seed varied. These results validate the economy and expose structural sensitivities, but they are not estimates of real football odds.
 

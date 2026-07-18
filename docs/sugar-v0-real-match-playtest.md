@@ -4,6 +4,8 @@ Date : 2026-07-13
 
 Mise en production de la variante retenue : 2026-07-14.
 
+> Note historique : ce rapport utilisait l'ancien roster de 20 fourmis. La production utilise maintenant 5 fourmis indépendantes par colonie avec des seuils recalibrés.
+
 ## Résumé
 
 La V0 avant correction n'était pas assez lisible ni équilibrée sur une vraie timeline de football.

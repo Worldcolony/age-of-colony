@@ -15,7 +15,7 @@ from typing import Any, Iterable, Literal, cast
 from .agents import ColonyAgentDecision, ColonyDecisionAgent
 
 
-VALID_SIZES = {10, 20, 50}
+VALID_SIZES = {5, 10, 20, 50}
 VALID_STYLES = {"cautious", "balanced", "aggressive"}
 VALID_CONTEXTS = {"penalties", "corners", "momentum", "chaos", "balanced"}
 VALID_INFO_NEEDS = {"low", "medium", "high"}
@@ -49,16 +49,16 @@ RoomScope = Literal["global", "private"]
 VALID_ROOM_SCOPES = {"global", "private"}
 JOINABLE_STATUSES = {"created", "waiting_kickoff"}
 STRATEGY_EDITABLE_STATUSES = {"created", "waiting_kickoff", "running_replay", "running_live"}
-STARTING_COLONY_ANTS = 20
+STARTING_COLONY_ANTS = 5
 STARTING_COLONY_SUGAR = 20
 # Backward-compatible internal/API alias. Sugar is the only player-facing resource.
 STARTING_COLONY_FOOD = STARTING_COLONY_SUGAR
 MARKET_RISK_SUGAR = 2
 MAX_RESERVED_SUGAR = 10
 STYLE_ENTRY_THRESHOLDS = {
-    "cautious": 0.70,
-    "balanced": 0.60,
-    "aggressive": 0.51,
+    "cautious": 1.00,
+    "balanced": 0.80,
+    "aggressive": 0.60,
 }
 MIN_DIRECTIONAL_QUORUM_FRACTION = 0.50
 DIRECTIONAL_VOTE_BLOCKING_ISSUES = {
@@ -905,7 +905,7 @@ class GameHarness:
         if self.room.status not in JOINABLE_STATUSES:
             raise ValueError("room is closed; colonies can no longer join")
         if size not in VALID_SIZES:
-            raise ValueError("size must be one of 10, 20 or 50")
+            raise ValueError("size must be one of 5, 10, 20 or 50")
         style = normalize_style(style)
         favorite_context = normalize_context(favorite_context)
         info_need = normalize_info_need(info_need)

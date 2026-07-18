@@ -550,7 +550,7 @@ class OpenRouterColonyAgent:
         # A mixed-role prompt would expose every evidence lens to the same model
         # call. Split batches by analysis role first so Scout, Analyst and
         # Tactician evidence remain mechanically isolated while retaining the
-        # lower-cost batch mode (normally at most three calls for 20 ants).
+        # lower-cost batch mode (normally at most three role-isolated calls).
         role_groups: dict[str, list[dict[str, Any]]] = {}
         for ant in ants:
             strategy = ant.get("strategy") if isinstance(ant, dict) else None

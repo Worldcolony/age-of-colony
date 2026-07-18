@@ -29,9 +29,9 @@ const INFO_NEEDS: { value: InfoNeed; label: string }[] = [
   { value: "high", label: "High" },
 ];
 const DEFAULT_ADMIN_COLONIES = [
-  { name: "Red Nest", size: 20, style: "cautious", favoriteContext: "penalties", infoNeed: "high" },
-  { name: "Amber Swarm", size: 20, style: "balanced", favoriteContext: "momentum", infoNeed: "medium" },
-  { name: "Black Rush", size: 20, style: "aggressive", favoriteContext: "chaos", infoNeed: "low" },
+  { name: "Red Nest", size: 5, style: "cautious", favoriteContext: "penalties", infoNeed: "high" },
+  { name: "Amber Swarm", size: 5, style: "balanced", favoriteContext: "momentum", infoNeed: "medium" },
+  { name: "Black Rush", size: 5, style: "aggressive", favoriteContext: "chaos", infoNeed: "low" },
 ] satisfies AdminColonyDraft[];
 
 type AdminColonyDraft = Omit<CreateColonyBody, "anonymousId">;
@@ -431,7 +431,7 @@ export default function AdminPage() {
       ...current,
       {
         name: `Scout Nest ${current.length + 1}`,
-        size: 20,
+        size: 5,
         style: "balanced",
         favoriteContext: "momentum",
         infoNeed: "medium",
@@ -846,7 +846,7 @@ export default function AdminPage() {
             >
               <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
                 <p className="max-w-2xl text-sm leading-relaxed text-ink-faint">
-                  Every colony starts with the same 20 ants. Choose its name and strategy before attaching the roster to the room.
+                  Every colony starts with the same 5 ants. Choose its name and strategy before attaching the roster to the room.
                 </p>
                 <span className="font-mono text-xs font-bold uppercase tracking-wide text-gold-deep">
                   {totalAnts} ants total
@@ -882,8 +882,8 @@ export default function AdminPage() {
                         />
                       </Field>
                       <Field label="Ants">
-                        <div className="input !px-3 !py-2 text-sm font-bold text-ink-soft" aria-label="Ants: 20 fixed">
-                          20 <span className="ml-1 text-[10px] font-normal uppercase tracking-wide text-ink-faint">fixed</span>
+                        <div className="input !px-3 !py-2 text-sm font-bold text-ink-soft" aria-label="Ants: 5 fixed">
+                          5 <span className="ml-1 text-[10px] font-normal uppercase tracking-wide text-ink-faint">fixed</span>
                         </div>
                       </Field>
                       <Field label="Style">
@@ -1414,7 +1414,7 @@ function RosterSummary({ colonies }: { colonies: AdminColonyDraft[] }) {
     <section className="mt-3 overflow-hidden rounded-md border-2 border-[color:var(--brd-soft)]" aria-label="Colony roster summary">
       <div className="flex items-center justify-between gap-3 bg-[rgba(116,91,39,0.08)] px-3 py-2">
         <strong className="text-sm text-ink">Colony roster</strong>
-        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">20 ants each</span>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-ink-faint">5 ants each</span>
       </div>
       <div className="divide-y divide-[color:var(--brd-soft)]">
         {colonies.map((colony, index) => (

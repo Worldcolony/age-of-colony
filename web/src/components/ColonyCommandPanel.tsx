@@ -1023,7 +1023,7 @@ function ConsensusGatePreview({
         <div>
           <p className="eyebrow">Consensus gate</p>
           <p className="text-sm font-bold text-ink">
-            At least 10 ants take a side · {doctrine.thresholdPercent}% must agree
+            At least 3 ants take a side · {doctrine.thresholdPercent}% must agree
           </p>
         </div>
         <span className="status-pill !border-gold/50 !text-gold-deep">Next market</span>
@@ -1031,14 +1031,14 @@ function ConsensusGatePreview({
       <div
         className="consensus-ant-track"
         role="img"
-        aria-label={`At least 10 directional voters are required, then ${doctrine.thresholdPercent} percent must agree`}
+        aria-label={`At least 3 directional voters are required, then ${doctrine.thresholdPercent} percent must agree`}
       >
-        {Array.from({ length: 20 }, (_, index) => (
-          <span key={index} data-required={index < 10} />
+        {Array.from({ length: 5 }, (_, index) => (
+          <span key={index} data-required={index < 3} />
         ))}
       </div>
       <p className="text-[11px] leading-relaxed text-ink-faint">
-        Abstentions stay outside consensus. Below the 10-ant quorum, the colony observes and keeps its Sugar.
+        Abstentions stay outside consensus. Below the 3-ant quorum, the colony observes and keeps its Sugar.
       </p>
     </div>
   );
