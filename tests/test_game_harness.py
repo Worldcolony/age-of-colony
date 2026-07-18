@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import unittest
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -432,6 +433,94 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(settlement.data["reason"], "expired")
         self.assertEqual(settlement.data["resolvedOutcome"]["label"], "Spain penalty missed or saved")
         self.assertEqual(settlement.data["resolvedOutcome"]["target"], "no_goal")
+
+    def test_deferred_ant_votes_do_not_pause_events_and_late_votes_are_ignored(self):
+        started = threading.Event()
+        release = threading.Event()
+        processed_outcome = threading.Event()
+        worker_errors = []
+
+        class SlowAntAgent:
+            def decide(self, *, game_id, stage, context):
+                return None
+
+            def decide_ants(self, *, game_id, stage, context, ants):
+                started.set()
+                release.wait(timeout=2)
+                return [{"antId": ant["antId"], "vote": "yes"} for ant in ants]
+
+        manager = GameManager(decision_agent=SlowAntAgent())
+        room = manager.create_room(fixture_id=42, participant1="Brazil", participant2="Spain", seed=126)
+        harness = manager.harness(room.game_id)
+        harness.add_colony("Realtime Nest", 5, "aggressive", "balanced", "medium")
+        room.status = "running_replay"
+        room.mode = "replay"
+        decisions = harness.process_event(
+            penalty_event(
+                seq=1,
+                minute=20,
+                clockSeconds=1200,
+                participant=2,
+                participantLabel="Spain",
+                possession=2,
+                possessionLabel="Spain",
+            ),
+            defer_agent_votes=True,
+        )
+        self.assertEqual(len(decisions), 1)
+
+        decision_worker = threading.Thread(
+            target=harness.process_deferred_agent_decision,
+            args=(decisions[0],),
+        )
+        decision_worker.start()
+        self.assertTrue(started.wait(timeout=1))
+        self.assertEqual(room.public_state()["agentProcessing"]["antCount"], 5)
+
+        def process_penalty_result():
+            try:
+                harness.process_event(
+                    penalty_event(
+                        seq=2,
+                        action="penalty_scored",
+                        type="penalty_result",
+                        minute=21,
+                        clockSeconds=1260,
+                        participant=2,
+                        participantLabel="Spain",
+                        possession=2,
+                        possessionLabel="Spain",
+                        score={"participant1": 0, "participant2": 1},
+                        description="Penalty scored - Spain",
+                    ),
+                    defer_agent_votes=True,
+                )
+            except Exception as exc:  # pragma: no cover - assertion reports details.
+                worker_errors.append(exc)
+            finally:
+                processed_outcome.set()
+
+        event_worker = threading.Thread(target=process_penalty_result)
+        event_worker.start()
+        self.assertTrue(
+            processed_outcome.wait(timeout=1),
+            "TXLine event processing waited for the DeepSeek vote",
+        )
+        release.set()
+        event_worker.join(timeout=1)
+        decision_worker.join(timeout=1)
+
+        self.assertFalse(worker_errors)
+        self.assertFalse(room.predictions)
+        self.assertTrue(
+            [
+                event
+                for event in room.log
+                if event.kind == "late_vote"
+                and event.data.get("opportunityId") == decisions[0].opportunity_id
+            ]
+        )
+        self.assertIsNone(room.public_state()["agentProcessing"])
 
     def test_penalty_confirmation_is_deduplicated_without_a_colony_position(self):
         manager = GameManager(decision_agent=FakeDeepSeekAntAgent("abstain"))
@@ -3135,8 +3224,13 @@ class GameHarnessTest(unittest.TestCase):
             {"scope": "participant1", "teamLabel": "France", "neutral": False},
         )
         self.assertEqual(len(processing_states), 1)
+        processing_market = processing_states[0]["markets"][0]
         self.assertEqual(
-            {key: value for key, value in processing_states[0].items() if key != "startedAt"},
+            {
+                key: value
+                for key, value in processing_market.items()
+                if key not in {"startedAt", "opportunityId"}
+            },
             {
                 "active": True,
                 "colonyId": colony.colony_id,
@@ -3145,7 +3239,9 @@ class GameHarnessTest(unittest.TestCase):
                 "stage": "pre_info",
             },
         )
-        self.assertIsInstance(processing_states[0]["startedAt"], float)
+        self.assertEqual(processing_states[0]["jobCount"], 1)
+        self.assertEqual(processing_states[0]["antCount"], 5)
+        self.assertIsInstance(processing_market["startedAt"], float)
         self.assertIsNone(room.public_state()["agentProcessing"])
         self.assertNotIn("favoriteContext", agent.context["colony"])
         self.assertNotIn("infoNeed", agent.context["colony"])
@@ -6174,9 +6270,9 @@ class DemoRunApiTest(unittest.TestCase):
         synced_targets = []
         original_process_event = harness.process_event
 
-        def process_event_with_target_check(event):
+        def process_event_with_target_check(event, **kwargs):
             processing_targets.append(room.replay_clock_target_seconds)
-            original_process_event(event)
+            return original_process_event(event, **kwargs)
 
         async def fake_sync(target_room):
             synced_targets.append(target_room.public_state().get("replayClockTargetSeconds"))

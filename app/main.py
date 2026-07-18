@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from threading import RLock
@@ -27,6 +28,7 @@ from .game.harness import (
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     ColonyState,
+    DeferredAgentDecision,
     GameLogEvent,
     GameRoom,
     Opportunity,
@@ -82,6 +84,13 @@ _txline_validation_cache: dict[str, dict[str, Any]] = {}
 _admin_room_request_cache: dict[str, tuple[str, str]] = {}
 _admin_room_request_lock = RLock()
 ADMIN_ROOM_REQUEST_CACHE_LIMIT = 256
+# DeepSeek market work must never occupy the executor used by the TXLine
+# scheduler. Six colony jobs allow two market waves to overlap without pausing
+# event ingestion; queued jobs re-check that their market is still open.
+AGENT_DECISION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=6,
+    thread_name_prefix="colony-agent",
+)
 
 # CORS — allow the standalone Next.js frontend (separate origin) to call the API.
 # Set WEB_ORIGINS to a comma-separated allowlist in production; defaults to "*" for dev.
@@ -3222,6 +3231,67 @@ def _schedule_replay_task(
     )
 
 
+def _schedule_deferred_agent_decisions(
+    room: GameRoom,
+    decisions: list[DeferredAgentDecision],
+) -> None:
+    if not decisions:
+        return
+    tasks = game_manager.agent_tasks.setdefault(room.game_id, set())
+    for decision in decisions:
+        task = asyncio.create_task(
+            _run_deferred_agent_decision(room.game_id, decision)
+        )
+        tasks.add(task)
+
+        def discard_finished(
+            finished: asyncio.Task[Any],
+            *,
+            game_id: str = room.game_id,
+        ) -> None:
+            game_tasks = game_manager.agent_tasks.get(game_id)
+            if not game_tasks:
+                return
+            game_tasks.discard(finished)
+            if not game_tasks:
+                game_manager.agent_tasks.pop(game_id, None)
+
+        task.add_done_callback(discard_finished)
+
+
+async def _run_deferred_agent_decision(
+    game_id: str,
+    decision: DeferredAgentDecision,
+) -> None:
+    room = game_manager.get_room(game_id)
+    if not room:
+        return
+    try:
+        harness = game_manager.harness(game_id)
+        await asyncio.get_running_loop().run_in_executor(
+            AGENT_DECISION_EXECUTOR,
+            harness.process_deferred_agent_decision,
+            decision,
+        )
+        _sync_room_agent_usage(game_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        room.add_log(
+            "agent_decision_error",
+            f"Ant decision failed without pausing the match: {exc}",
+            {
+                **_error_log_data(exc),
+                "colonyId": decision.colony_id,
+                "opportunityId": decision.opportunity_id,
+            },
+        )
+    finally:
+        current_room = game_manager.get_room(game_id)
+        if current_room:
+            await _sync_room_to_supabase_async(current_room)
+
+
 async def _run_replay_game(
     game_id: str,
     events: list[dict[str, Any]],
@@ -3244,11 +3314,15 @@ async def _run_replay_game(
                 break
             current_clock = _event_clock_seconds(event)
             if current_clock is not None:
-                # Hold the visual clock at this event while colony agents and
-                # settlements are being processed. This is especially
-                # important for penalties, which can take several seconds.
+                # Publish each authoritative TXLine timestamp immediately.
+                # Colony decisions continue independently in the background.
                 room.replay_clock_target_seconds = current_clock
-            await asyncio.to_thread(harness.process_event, event)
+            deferred_decisions = await asyncio.to_thread(
+                harness.process_event,
+                event,
+                defer_agent_votes=True,
+            )
+            _schedule_deferred_agent_decisions(room, deferred_decisions)
             authoritative_clock = room.match_state.clock_seconds if room.match_state else current_clock
             next_clock = _event_clock_seconds(events[index + 1]) if index < len(events) - 1 else None
             if next_clock is not None and (authoritative_clock is None or next_clock >= authoritative_clock):
@@ -3347,7 +3421,10 @@ async def _run_live_game(game_id: str) -> None:
                     break
                 baseline_count = 0
                 if _live_timeline_active(timeline):
-                    baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
+                    baseline_count = await _open_live_baseline_markets_realtime(
+                        harness,
+                        timeline_events,
+                    )
                 elif not waiting_logged:
                     _log_live_waiting_for_kickoff(room, timeline)
                     waiting_logged = True
@@ -3362,7 +3439,7 @@ async def _run_live_game(game_id: str) -> None:
                 if str(event.get("fixtureId")) == str(room.fixture_id) and _remember_live_event(seen_event_keys, event)
             ]
             if new_events:
-                await asyncio.to_thread(_process_live_events, harness, new_events, resilient=True)
+                await _process_live_events_realtime(harness, new_events)
                 _sync_live_match_state_from_timeline(room, timeline)
                 _sync_room_agent_usage(game_id)
                 await _sync_room_to_supabase_async(room)
@@ -3373,7 +3450,10 @@ async def _run_live_game(game_id: str) -> None:
                 await _sync_room_to_supabase_async(room)
                 break
             if _live_timeline_active(timeline):
-                baseline_count = await asyncio.to_thread(_open_live_baseline_markets, harness, timeline_events)
+                baseline_count = await _open_live_baseline_markets_realtime(
+                    harness,
+                    timeline_events,
+                )
                 if baseline_count:
                     await _sync_room_to_supabase_async(room)
             first_batch = False
@@ -3666,6 +3746,33 @@ def _open_live_baseline_markets(harness: Any, timeline_events: list[dict[str, An
     return opened
 
 
+async def _open_live_baseline_markets_realtime(
+    harness: Any,
+    timeline_events: list[dict[str, Any]] | None = None,
+) -> int:
+    room = harness.room
+    latest_event = _latest_fixture_event(room, timeline_events or [])
+    if not _live_standard_market_due(room, latest_event):
+        return 0
+    try:
+        opened, decisions = await asyncio.to_thread(
+            harness.open_baseline_markets_deferred,
+            latest_event,
+            reason="live_baseline",
+        )
+    except Exception as exc:
+        room.add_log("game_error", f"Live baseline markets skipped: {exc}", _error_log_data(exc))
+        return 0
+    _schedule_deferred_agent_decisions(room, decisions)
+    if opened:
+        room.add_log(
+            "live_sync",
+            f"Opened {opened} live market(s) from the current match state.",
+            {"fixtureId": room.fixture_id, "processedAsMarkets": True, "source": "baseline"},
+        )
+    return opened
+
+
 def _live_standard_market_due(room: GameRoom, latest_event: dict[str, Any] | None) -> bool:
     """Return whether a replacement or five-minute market wave may open."""
 
@@ -3735,6 +3842,29 @@ def _process_live_events(harness: Any, events: list[dict[str, Any]], *, resilien
             processed += 1
         except Exception as exc:
             harness.room.add_log("game_error", f"Live update skipped: {exc}", _live_event_error_data(exc, event))
+    return processed
+
+
+async def _process_live_events_realtime(
+    harness: Any,
+    events: list[dict[str, Any]],
+) -> int:
+    processed = 0
+    for event in events:
+        try:
+            decisions = await asyncio.to_thread(
+                harness.process_event,
+                event,
+                defer_agent_votes=True,
+            )
+            _schedule_deferred_agent_decisions(harness.room, decisions)
+            processed += 1
+        except Exception as exc:
+            harness.room.add_log(
+                "game_error",
+                f"Live update skipped: {exc}",
+                _live_event_error_data(exc, event),
+            )
     return processed
 
 

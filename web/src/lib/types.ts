@@ -275,11 +275,16 @@ export interface GameState {
   agentUsage?: unknown;
   agentProcessing?: {
     active: boolean;
-    colonyId?: string;
-    colonyName?: string;
-    antCount?: number;
-    stage?: "pre_info" | "post_info" | string;
-    startedAt?: number;
+    jobCount: number;
+    antCount: number;
+    markets: Array<{
+      colonyId?: string;
+      colonyName?: string;
+      opportunityId?: string;
+      antCount?: number;
+      stage?: "pre_info" | "post_info" | string;
+      startedAt?: number;
+    }>;
   } | null;
   logCount?: number;
 }

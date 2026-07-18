@@ -10,7 +10,6 @@ interface SmoothMatchClockProps {
   mode?: GameState["mode"];
   replayTimeScale?: number | null;
   replayClockTargetSeconds?: number | null;
-  agentProcessing?: GameState["agentProcessing"];
   className?: string;
   showLiveDot?: boolean;
 }
@@ -43,7 +42,6 @@ export function SmoothMatchClock({
   mode,
   replayTimeScale,
   replayClockTargetSeconds,
-  agentProcessing,
   className = "",
   showLiveDot = false,
 }: SmoothMatchClockProps) {
@@ -58,7 +56,6 @@ export function SmoothMatchClock({
   const replayBound = status === "running_replay" && rawClock != null && validReplayTarget != null
     ? Math.max(rawClock, validReplayTarget)
     : null;
-  const processing = running && Boolean(agentProcessing?.active);
   const [displayClock, setDisplayClock] = useState<number | null>(() => rawClock);
   const anchorRef = useRef<ClockPoint | null>(null);
   const displayClockRef = useRef<number | null>(rawClock);
@@ -117,31 +114,23 @@ export function SmoothMatchClock({
     return () => window.cancelAnimationFrame(frame);
   }, [mode, rawClock, replayBound, replayTimeScale, running, status]);
 
-  const clockText = status === "finished"
+  const text = status === "finished"
     ? "FT"
     : displayClock == null
       ? fmtMatchTime(match, status)
       : fmtClockSeconds(displayClock);
-  const text = processing
-    ? `${agentProcessing?.antCount ? `${agentProcessing.antCount} ` : ""}ANTS THINKING…`
-    : clockText;
-  const label = processing
-    ? `${agentProcessing?.antCount ?? "Colony"} ants are choosing an order${agentProcessing?.colonyName ? ` for ${agentProcessing.colonyName}` : ""}`
-    : displayClock == null
-      ? `Match time ${clockText}`
-      : `Match time ${Math.floor(displayClock / 60)} minutes ${displayClock % 60} seconds`;
+  const label = displayClock == null
+    ? `Match time ${text}`
+    : `Match time ${Math.floor(displayClock / 60)} minutes ${displayClock % 60} seconds`;
 
   return (
     <span
       className={`smooth-match-clock ${className}`.trim()}
       data-running={running}
-      data-processing={processing}
       role="timer"
       aria-label={label}
     >
-      {processing
-        ? <span className="smooth-match-clock-thinking-mark" aria-hidden="true" />
-        : showLiveDot && running && <span className="live-dot" aria-hidden="true" />}
+      {showLiveDot && running && <span className="live-dot" aria-hidden="true" />}
       <span className="smooth-match-clock-value">{text}</span>
     </span>
   );

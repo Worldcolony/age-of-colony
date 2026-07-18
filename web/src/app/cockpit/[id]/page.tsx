@@ -27,7 +27,7 @@ import {
 import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
-const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, settlement: 2.4, game_started: 3 };
+const PULSE: Record<string, number> = { opportunity: 3, vote: 1.4, ant_agent_vote: 1.4, late_vote: 1.4, settlement: 2.4, game_started: 3 };
 const MARKET_MEMORY_KINDS = new Set([
   "opportunity",
   "ant_agent_start",
@@ -35,6 +35,7 @@ const MARKET_MEMORY_KINDS = new Set([
   "vote",
   "prediction",
   "observe",
+  "late_vote",
   "settlement",
   "void",
   "market_closed",
@@ -45,7 +46,7 @@ const KIND_EDGE: Record<string, string> = {
   settlement: "#4e7e2a", info_result: "#4e7e2a",
   vote: "#c25a3a", ant_agent_vote: "#c25a3a", prediction: "#c25a3a",
   observe: "#8c7e60",
-  game_error: "#c25a3a", void: "#c25a3a",
+  late_vote: "#c25a3a", game_error: "#c25a3a", void: "#c25a3a",
 };
 
 interface PublicVote {
@@ -520,6 +521,7 @@ function CockpitRun({ id }: { id: string }) {
           settledMarkets={settledMarkets}
           colony={mine}
           colonyLabel={colonyFocusLabel}
+          agentProcessing={game.agentProcessing}
           waitingForKickoff={txlineWaiting}
           matchStateLabel={txlineStateLabel}
           onSelectMarket={setSelectedMarketId}
@@ -558,7 +560,6 @@ function CockpitRun({ id }: { id: string }) {
                   mode={game?.mode}
                   replayTimeScale={game?.replayTimeScale}
                   replayClockTargetSeconds={game?.replayClockTargetSeconds}
-                  agentProcessing={game?.agentProcessing}
                   showLiveDot
                 />
                 <span className="mobile-match-chip-state truncate">
@@ -701,7 +702,6 @@ function CockpitRun({ id }: { id: string }) {
             mode={game?.mode}
             replayTimeScale={game?.replayTimeScale}
             replayClockTargetSeconds={game?.replayClockTargetSeconds}
-            agentProcessing={game?.agentProcessing}
             showLiveDot
           />
           <p>{game?.match?.possessionLabel || txlineStateLabel}</p>
@@ -764,6 +764,7 @@ function CockpitRun({ id }: { id: string }) {
             settledMarkets={settledMarkets}
             colony={mine}
             colonyLabel={colonyFocusLabel}
+            agentProcessing={game.agentProcessing}
             waitingForKickoff={txlineWaiting}
             matchStateLabel={txlineStateLabel}
             onSelectMarket={setSelectedMarketId}
@@ -1245,6 +1246,7 @@ function LiveTab({
   settledMarkets,
   colony,
   colonyLabel,
+  agentProcessing,
   waitingForKickoff,
   matchStateLabel,
   onSelectMarket,
@@ -1257,6 +1259,7 @@ function LiveTab({
   settledMarkets: MarketModel[];
   colony?: Colony;
   colonyLabel: string;
+  agentProcessing?: GameState["agentProcessing"];
   waitingForKickoff: boolean;
   matchStateLabel: string;
   onSelectMarket: (marketId: string) => void;
@@ -1272,6 +1275,7 @@ function LiveTab({
               colony={colony}
               colonyLabel={colonyLabel}
               summary={openSummary}
+              agentProcessing={agentProcessing}
             />
           )}
           {openMarkets.length > 1 && (
@@ -1498,11 +1502,13 @@ function FocusedMarketPanel({
   colony,
   colonyLabel,
   summary,
+  agentProcessing,
 }: {
   market: MarketModel;
   colony?: Colony;
   colonyLabel: string;
   summary: ReturnType<typeof summarizeOpenMarkets>;
+  agentProcessing?: GameState["agentProcessing"];
 }) {
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
@@ -1510,6 +1516,13 @@ function FocusedMarketPanel({
   const decision = colonyDecisionSummary(activity);
   const commit = colonyCommitSummary(activity);
   const options = (market.opportunity?.options ?? []).slice(0, 3);
+  const processingJobs = (agentProcessing?.markets ?? []).filter(
+    (job) => job.opportunityId === market.id,
+  );
+  const processingAnts = processingJobs.reduce(
+    (total, job) => total + Number(job.antCount ?? 0),
+    0,
+  );
   return (
     <article className="live-market-ticket">
       <div className="live-market-ticket-main">
@@ -1546,6 +1559,15 @@ function FocusedMarketPanel({
       </div>
 
       <aside className="live-market-ticket-pulse">
+        {processingJobs.length > 0 && (
+          <div className="live-market-thinking" role="status" aria-live="polite">
+            <span className="live-market-thinking-mark" aria-hidden="true" />
+            <span>
+              <strong>{processingAnts} ants thinking</strong>
+              <small>Match continues · {processingJobs.length} colony {processingJobs.length === 1 ? "call" : "calls"}</small>
+            </span>
+          </div>
+        )}
         <div className="live-market-summary">
           <span>{summary.markets} live</span>
           <span>{summary.answers} answers</span>
@@ -2656,7 +2678,7 @@ function formatClock(ms: number) {
 }
 
 function isUsefulLiveEvent(e: GameEvent) {
-  return ["opportunity", "observe", "settlement", "void", "game_error", "game_started", "market_closed", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
+  return ["opportunity", "observe", "late_vote", "settlement", "void", "game_error", "game_started", "market_closed", "markets_closed", "live_sync"].includes(e.kind) || isMatchEvent(e);
 }
 
 // Job 2: turn the raw event log into a legible, game-feeling stream.
@@ -2718,6 +2740,9 @@ function parseFeedEvent(
     }
     case "void": {
       return { colonyId, colonyName, message, detail: option?.label ? `voided · ${option.label}` : "voided", delta: null };
+    }
+    case "late_vote": {
+      return { colonyId, colonyName, message: "Vote arrived after close", detail: "ignored · match continued", delta: null };
     }
     default:
       return { colonyId, colonyName: null, message, detail: null, delta: null };

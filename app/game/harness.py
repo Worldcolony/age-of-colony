@@ -713,6 +713,16 @@ class MatchState:
         return f"recent pressure: {danger} danger, {corners} corner(s), {shots} shot(s)"
 
 
+@dataclass(frozen=True)
+class DeferredAgentDecision:
+    colony_id: str
+    opportunity_id: str
+    strategy_snapshot: dict[str, Any]
+    match_state_snapshot: MatchState | None
+    decision_event_index: int
+    food_budget: int | None
+
+
 @dataclass
 class GameLogEvent:
     index: int
@@ -763,7 +773,8 @@ class GameRoom:
     last_opportunity_clock_by_key: dict[str, int] = field(default_factory=dict)
     log: list[GameLogEvent] = field(default_factory=list)
     agent_usage: dict[str, Any] | None = None
-    agent_processing: dict[str, Any] | None = None
+    agent_processing_jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    market_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
     log_lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -786,6 +797,14 @@ class GameRoom:
         colonies = [colony.public_state(self.event_index) for colony in self.colonies.values()]
         colonies.sort(key=lambda item: item["score"], reverse=True)
         player_colonies = self._player_colonies()
+        with self.log_lock:
+            processing_markets = copy.deepcopy(list(self.agent_processing_jobs.values()))
+        processing_state = {
+            "active": True,
+            "jobCount": len(processing_markets),
+            "antCount": sum(int(item.get("antCount") or 0) for item in processing_markets),
+            "markets": processing_markets,
+        } if processing_markets else None
         state = {
             "gameId": self.game_id,
             "roomCode": self.room_code,
@@ -821,7 +840,7 @@ class GameRoom:
             "colonies": colonies,
             "activeOpportunities": [opportunity.public_state() for opportunity in self.opportunities.values()],
             "agentUsage": self.agent_usage,
-            "agentProcessing": copy.deepcopy(self.agent_processing),
+            "agentProcessing": processing_state,
             "logCount": len(self.log),
         }
         if self.room_kind == "player":
@@ -1420,59 +1439,133 @@ class GameHarness:
         self.process_event(build_baseline_market_event(self.room, source_event, reason=reason))
         return len([event for event in self.room.log[before_log_count:] if event.kind == "opportunity"])
 
-    def finish_game(self, *, mode: str = "replay") -> None:
-        if self.room.status == "finished":
-            return
-        self._finish_open_markets()
-        self._sync_agent_usage()
-        self.room.status = "finished"
-        cost_message = describe_agent_usage_cost(self.room.agent_usage)
-        final_message = "Live match finished, final leaderboard available." if mode == "live" else "Replay finished, final leaderboard available."
-        if cost_message:
-            final_message = f"{final_message} {cost_message}"
-        self.room.add_log(
-            "game_finished",
-            final_message,
-            {"leaderboard": self.room.public_state()["colonies"], "agentUsage": self.room.agent_usage},
+    def open_baseline_markets_deferred(
+        self,
+        source_event: dict[str, Any] | None = None,
+        *,
+        reason: str = "live_baseline",
+    ) -> tuple[int, list[DeferredAgentDecision]]:
+        if not self.room.colonies:
+            return 0, []
+        before_log_count = len(self.room.log)
+        decisions = self.process_event(
+            build_baseline_market_event(self.room, source_event, reason=reason),
+            defer_agent_votes=True,
         )
+        opened = len(
+            [
+                event
+                for event in self.room.log[before_log_count:]
+                if event.kind == "opportunity"
+            ]
+        )
+        return opened, decisions
 
-    def process_event(self, event: dict[str, Any]) -> None:
-        self.room.event_index += 1
-        match_event = match_event_presentation(event)
-        if match_event:
-            self.room.add_log("match_event", str(match_event["title"]), match_event)
-        # A timed window is half-open: an event at its deadline belongs to the
-        # next window, not the one that just ended. Expire those positions
-        # before evaluating the incoming event so a late goal cannot win a
-        # goal-next-10 market. Markets without deadlines still evaluate it.
-        self._expire_predictions(event)
-        self._settle_predictions(event)
-        if self.room.match_state:
-            self.room.match_state.update(event)
-        for colony in self.room.colonies.values():
-            self._apply_colony_upkeep(colony)
+    def finish_game(self, *, mode: str = "replay") -> None:
+        with self.room.market_lock:
+            if self.room.status == "finished":
+                return
+            self._finish_open_markets()
+            self._sync_agent_usage()
+            self.room.status = "finished"
+            cost_message = describe_agent_usage_cost(self.room.agent_usage)
+            final_message = "Live match finished, final leaderboard available." if mode == "live" else "Replay finished, final leaderboard available."
+            if cost_message:
+                final_message = f"{final_message} {cost_message}"
+            self.room.add_log(
+                "game_finished",
+                final_message,
+                {"leaderboard": self.room.public_state()["colonies"], "agentUsage": self.room.agent_usage},
+            )
 
-        opportunities = build_opportunities(event, self.room.event_index, self.room.match_state)
-        for opportunity_index, opportunity in enumerate(opportunities):
-            if not self._claim_opportunity_slot(opportunity):
-                continue
-            self.room.opportunities[opportunity.opportunity_id] = opportunity
-            self.room.add_log("opportunity", opportunity.label, {"opportunity": opportunity.public_state()})
-            strategy_snapshots = {
-                colony.colony_id: colony_strategy_snapshot(colony)
-                for colony in self.room.colonies.values()
-            }
-            remaining_windows = max(1, len(opportunities) - opportunity_index)
+    def process_event(
+        self,
+        event: dict[str, Any],
+        *,
+        defer_agent_votes: bool = False,
+    ) -> list[DeferredAgentDecision]:
+        deferred_decisions: list[DeferredAgentDecision] = []
+        with self.room.market_lock:
+            self.room.event_index += 1
+            decision_event_index = self.room.event_index
+            match_event = match_event_presentation(event)
+            if match_event:
+                self.room.add_log("match_event", str(match_event["title"]), match_event)
+            # A timed window is half-open: an event at its deadline belongs to
+            # the next window, not the one that just ended.
+            self._expire_predictions(event)
+            self._settle_predictions(event)
+            if self.room.match_state:
+                self.room.match_state.update(event)
             for colony in self.room.colonies.values():
-                available_food = max(0, colony.food - colony.food_reserved)
-                self._decide_for_colony(
-                    colony,
-                    opportunity,
-                    strategy_snapshot=strategy_snapshots[colony.colony_id],
-                    food_budget=available_food // remaining_windows,
-                )
+                self._apply_colony_upkeep(colony)
 
-        self._clear_old_opportunities(event)
+            opportunities = build_opportunities(event, decision_event_index, self.room.match_state)
+            for opportunity_index, opportunity in enumerate(opportunities):
+                if not self._claim_opportunity_slot(opportunity):
+                    continue
+                self.room.opportunities[opportunity.opportunity_id] = opportunity
+                self.room.add_log("opportunity", opportunity.label, {"opportunity": opportunity.public_state()})
+                strategy_snapshots = {
+                    colony.colony_id: colony_strategy_snapshot(colony)
+                    for colony in self.room.colonies.values()
+                }
+                match_state_snapshot = copy.deepcopy(self.room.match_state)
+                remaining_windows = max(1, len(opportunities) - opportunity_index)
+                for colony in self.room.colonies.values():
+                    available_food = max(0, colony.food - colony.food_reserved)
+                    food_budget = available_food // remaining_windows
+                    if defer_agent_votes:
+                        deferred_decisions.append(
+                            DeferredAgentDecision(
+                                colony_id=colony.colony_id,
+                                opportunity_id=opportunity.opportunity_id,
+                                strategy_snapshot=strategy_snapshots[colony.colony_id],
+                                match_state_snapshot=match_state_snapshot,
+                                decision_event_index=decision_event_index,
+                                food_budget=food_budget,
+                            )
+                        )
+                        continue
+                    self._decide_for_colony(
+                        colony,
+                        opportunity,
+                        strategy_snapshot=strategy_snapshots[colony.colony_id],
+                        food_budget=food_budget,
+                        match_state_snapshot=match_state_snapshot,
+                        decision_event_index=decision_event_index,
+                    )
+
+            self._clear_old_opportunities(event)
+        return deferred_decisions
+
+    def process_deferred_agent_decision(self, decision: DeferredAgentDecision) -> None:
+        with self.room.market_lock:
+            colony = self.room.colonies.get(decision.colony_id)
+            opportunity = self.room.opportunities.get(decision.opportunity_id)
+            if not colony or not opportunity or self.room.status not in {"running_replay", "running_live"}:
+                if colony:
+                    self.room.add_log(
+                        "late_vote",
+                        f"{colony.name}: decision skipped because the market already closed.",
+                        {
+                            "colonyId": colony.colony_id,
+                            "opportunityId": decision.opportunity_id,
+                            "reason": "market_closed_before_call",
+                            "decisionEventIndex": decision.decision_event_index,
+                            "arrivalEventIndex": self.room.event_index,
+                        },
+                    )
+                return
+        self._decide_for_colony(
+            colony,
+            opportunity,
+            strategy_snapshot=decision.strategy_snapshot,
+            food_budget=decision.food_budget,
+            match_state_snapshot=decision.match_state_snapshot,
+            decision_event_index=decision.decision_event_index,
+            require_open_market=True,
+        )
 
     def _decide_for_colony(
         self,
@@ -1481,10 +1574,14 @@ class GameHarness:
         *,
         strategy_snapshot: dict[str, Any] | None = None,
         food_budget: int | None = None,
+        match_state_snapshot: MatchState | None = None,
+        decision_event_index: int | None = None,
+        require_open_market: bool = False,
     ) -> None:
+        decision_event_index = decision_event_index or self.room.event_index
         if not colony.alive_ants:
             return
-        if not colony.active_ants(self.room.event_index):
+        if not colony.active_ants(decision_event_index):
             self.room.add_log(
                 "observe",
                 f"{colony.name} has no active ants for this window.",
@@ -1493,7 +1590,13 @@ class GameHarness:
             return
 
         strategy_snapshot = strategy_snapshot or colony_strategy_snapshot(colony)
-        first_vote = self._run_vote(colony, opportunity, strategy_snapshot=strategy_snapshot)
+        first_vote = self._run_vote(
+            colony,
+            opportunity,
+            strategy_snapshot=strategy_snapshot,
+            match_state_snapshot=match_state_snapshot,
+            decision_event_index=decision_event_index,
+        )
         self.room.add_log("vote", describe_vote(colony, first_vote), {"colonyId": colony.colony_id, "vote": public_vote(first_vote)})
 
         info_packet = None
@@ -1509,7 +1612,11 @@ class GameHarness:
             )
 
         if should_buy_info(colony, opportunity, first_vote, agent_decision=pre_agent_decision):
-            info_packet = build_info_packet(opportunity, colony, self.room.match_state)
+            info_packet = build_info_packet(
+                opportunity,
+                colony,
+                match_state_snapshot or self.room.match_state,
+            )
             colony.food = max(0, colony.food - info_packet.cost)
             colony.memory.food_net -= info_packet.cost
             colony.memory.info_purchases += 1
@@ -1530,6 +1637,8 @@ class GameHarness:
                 opportunity,
                 info_packet=info_packet,
                 strategy_snapshot=strategy_snapshot,
+                match_state_snapshot=match_state_snapshot,
+                decision_event_index=decision_event_index,
             )
             self.room.add_log("vote", describe_vote(colony, final_vote, after_info=True), {"colonyId": colony.colony_id, "vote": public_vote(final_vote)})
             final_agent_decision = None
@@ -1545,125 +1654,167 @@ class GameHarness:
             final_vote = first_vote
             final_agent_decision = pre_agent_decision
 
-        entry = entry_vote_state(
-            opportunity,
-            final_vote,
-            str(strategy_snapshot["style"]),
-        )
-        prediction = create_prediction(
+        self._apply_colony_vote(
             colony,
             opportunity,
             final_vote,
-            self.room.event_index,
-            bought_info=bought_info,
-            agent_decision=final_agent_decision,
-            strategy_style=str(strategy_snapshot["style"]),
+            strategy_snapshot=strategy_snapshot,
             food_budget=food_budget,
+            bought_info=bought_info,
+            final_agent_decision=final_agent_decision,
+            require_open_market=require_open_market,
         )
-        if not prediction:
-            available_sugar = max(0, colony.food - colony.food_reserved)
-            reserve_capacity = max(0, MAX_RESERVED_SUGAR - colony.food_reserved)
-            if available_sugar < MARKET_RISK_SUGAR:
-                reason = "insufficient_sugar"
-                message = f"{colony.name} cannot enter this market: fewer than 2 Sugar are available."
-            elif reserve_capacity < MARKET_RISK_SUGAR:
-                reason = "reserve_limit"
-                message = f"{colony.name} observes this market: its 10 Sugar exposure limit is reached."
-            elif not entry["quorumMet"]:
-                reason = "low_participation"
-                message = (
-                    f"{colony.name} observes this market: {entry['directionalCount']}/"
-                    f"{entry['activeCount']} directional votes is below its "
-                    f"{entry['requiredDirectionalCount']}-ant quorum."
+
+    def _apply_colony_vote(
+        self,
+        colony: ColonyState,
+        opportunity: Opportunity,
+        final_vote: dict[str, Any],
+        *,
+        strategy_snapshot: dict[str, Any],
+        food_budget: int | None,
+        bought_info: bool,
+        final_agent_decision: ColonyAgentDecision | None,
+        require_open_market: bool,
+    ) -> None:
+        with self.room.market_lock:
+            current_opportunity = self.room.opportunities.get(opportunity.opportunity_id)
+            if require_open_market and (
+                current_opportunity is not opportunity
+                or self.room.status not in {"running_replay", "running_live"}
+            ):
+                self.room.add_log(
+                    "late_vote",
+                    f"{colony.name}: ant votes arrived after the market closed.",
+                    {
+                        "colonyId": colony.colony_id,
+                        "opportunityId": opportunity.opportunity_id,
+                        "reason": "market_closed",
+                        "decisionEventIndex": opportunity.created_event_index,
+                        "arrivalEventIndex": self.room.event_index,
+                        "vote": public_vote(final_vote),
+                    },
                 )
-            elif entry["tie"]:
-                reason = "tied_vote"
-                message = f"{colony.name} observes this market: the ant vote is tied."
-            else:
-                reason = "low_consensus"
-                message = (
-                    f"{colony.name} observes this market: {entry['supportFraction']:.0%} consensus "
-                    f"is below its {entry['entryThreshold']:.0%} threshold."
+                return
+
+            entry = entry_vote_state(
+                opportunity,
+                final_vote,
+                str(strategy_snapshot["style"]),
+            )
+            prediction = create_prediction(
+                colony,
+                opportunity,
+                final_vote,
+                self.room.event_index,
+                bought_info=bought_info,
+                agent_decision=final_agent_decision,
+                strategy_style=str(strategy_snapshot["style"]),
+                food_budget=food_budget,
+            )
+            if not prediction:
+                available_sugar = max(0, colony.food - colony.food_reserved)
+                reserve_capacity = max(0, MAX_RESERVED_SUGAR - colony.food_reserved)
+                if available_sugar < MARKET_RISK_SUGAR:
+                    reason = "insufficient_sugar"
+                    message = f"{colony.name} cannot enter this market: fewer than 2 Sugar are available."
+                elif reserve_capacity < MARKET_RISK_SUGAR:
+                    reason = "reserve_limit"
+                    message = f"{colony.name} observes this market: its 10 Sugar exposure limit is reached."
+                elif not entry["quorumMet"]:
+                    reason = "low_participation"
+                    message = (
+                        f"{colony.name} observes this market: {entry['directionalCount']}/"
+                        f"{entry['activeCount']} directional votes is below its "
+                        f"{entry['requiredDirectionalCount']}-ant quorum."
+                    )
+                elif entry["tie"]:
+                    reason = "tied_vote"
+                    message = f"{colony.name} observes this market: the ant vote is tied."
+                else:
+                    reason = "low_consensus"
+                    message = (
+                        f"{colony.name} observes this market: {entry['supportFraction']:.0%} consensus "
+                        f"is below its {entry['entryThreshold']:.0%} threshold."
+                    )
+                self.room.add_log(
+                    "observe",
+                    message,
+                    {
+                        "colonyId": colony.colony_id,
+                        "opportunityId": opportunity.opportunity_id,
+                        "reason": reason,
+                        "sugar": colony.food,
+                        "sugarAvailable": available_sugar,
+                        "requiredSugar": MARKET_RISK_SUGAR,
+                        "sugarReserved": colony.food_reserved,
+                        "maxReservedSugar": MAX_RESERVED_SUGAR,
+                        "consensus": entry["supportFraction"],
+                        "supportFraction": entry["supportFraction"],
+                        "entryThreshold": entry["entryThreshold"],
+                        "topVoteCount": entry["topVoteCount"],
+                        "activeAnts": entry["activeCount"],
+                        "directionalCount": entry["directionalCount"],
+                        "requiredDirectionalCount": entry["requiredDirectionalCount"],
+                        "participationFraction": entry["participationFraction"],
+                        "quorumMet": entry["quorumMet"],
+                        "topOptionId": entry["option"].option_id if entry["option"] else None,
+                        "tie": entry["tie"],
+                        "food": colony.food,
+                        "foodAvailable": available_sugar,
+                        "requiredFood": MARKET_RISK_SUGAR,
+                    },
                 )
+                return
+
+            self.room.predictions[prediction.prediction_id] = prediction
+            chosen_decisions = {
+                str(item.get("antId")): {
+                    "vote": item.get("vote"),
+                    "weight": round(float(item.get("weight") or 0), 3),
+                    "reason": str(item.get("reason") or "")[:180],
+                }
+                for item in final_vote.get("predictions", {}).get(prediction.option.option_id, [])
+                if str(item.get("antId") or "") in prediction.ant_ids
+            }
+            ant_strategies = {
+                ant_id: dict(strategy_snapshot.get("ants", {}).get(ant_id) or {})
+                for ant_id in prediction.ant_ids
+            }
             self.room.add_log(
-                "observe",
-                message,
+                "prediction",
+                (
+                    f"{colony.name} enters {prediction.option.label}: {len(prediction.ant_ids)}/"
+                    f"{max(1, entry['directionalCount'])} directional ant votes "
+                    f"({prediction.support_fraction:.0%}), 2 Sugar locked."
+                ),
                 {
                     "colonyId": colony.colony_id,
                     "opportunityId": opportunity.opportunity_id,
-                    "reason": reason,
-                    "sugar": colony.food,
-                    "sugarAvailable": available_sugar,
-                    "requiredSugar": MARKET_RISK_SUGAR,
-                    "sugarReserved": colony.food_reserved,
-                    "maxReservedSugar": MAX_RESERVED_SUGAR,
-                    "consensus": entry["supportFraction"],
-                    "supportFraction": entry["supportFraction"],
-                    "entryThreshold": entry["entryThreshold"],
-                    "topVoteCount": entry["topVoteCount"],
-                    "activeAnts": entry["activeCount"],
+                    "predictionId": prediction.prediction_id,
+                    "option": prediction.option.log_state(),
+                    "ants": len(prediction.ant_ids),
+                    "antIds": list(prediction.ant_ids),
+                    "antDecisions": chosen_decisions,
+                    "antStrategies": ant_strategies,
+                    "market": opportunity.public_state(),
+                    "sugarReserved": prediction.reserved_food,
+                    "riskSugar": MARKET_RISK_SUGAR,
+                    "rewardSugar": prediction.option.reward_sugar,
+                    "consensus": prediction.support_fraction,
+                    "supportFraction": prediction.support_fraction,
+                    "entryThreshold": prediction.entry_threshold,
                     "directionalCount": entry["directionalCount"],
                     "requiredDirectionalCount": entry["requiredDirectionalCount"],
                     "participationFraction": entry["participationFraction"],
                     "quorumMet": entry["quorumMet"],
-                    "topOptionId": entry["option"].option_id if entry["option"] else None,
-                    "tie": entry["tie"],
-                    # Backward-compatible aliases.
-                    "food": colony.food,
-                    "foodAvailable": available_sugar,
-                    "requiredFood": MARKET_RISK_SUGAR,
+                    "foodReserved": prediction.reserved_food,
+                    "sugarBudget": food_budget,
+                    "foodBudget": food_budget,
+                    "infoBought": bought_info,
+                    "strategyRevision": strategy_snapshot["revision"],
                 },
             )
-            return
-
-        self.room.predictions[prediction.prediction_id] = prediction
-        chosen_decisions = {
-            str(item.get("antId")): {
-                "vote": item.get("vote"),
-                "weight": round(float(item.get("weight") or 0), 3),
-                "reason": str(item.get("reason") or "")[:180],
-            }
-            for item in final_vote.get("predictions", {}).get(prediction.option.option_id, [])
-            if str(item.get("antId") or "") in prediction.ant_ids
-        }
-        ant_strategies = {
-            ant_id: dict(strategy_snapshot.get("ants", {}).get(ant_id) or {})
-            for ant_id in prediction.ant_ids
-        }
-        self.room.add_log(
-            "prediction",
-            (
-                f"{colony.name} enters {prediction.option.label}: {len(prediction.ant_ids)}/"
-                f"{max(1, entry['directionalCount'])} directional ant votes "
-                f"({prediction.support_fraction:.0%}), 2 Sugar locked."
-            ),
-            {
-                "colonyId": colony.colony_id,
-                "opportunityId": opportunity.opportunity_id,
-                "predictionId": prediction.prediction_id,
-                "option": prediction.option.log_state(),
-                "ants": len(prediction.ant_ids),
-                "antIds": list(prediction.ant_ids),
-                "antDecisions": chosen_decisions,
-                "antStrategies": ant_strategies,
-                "market": opportunity.public_state(),
-                "sugarReserved": prediction.reserved_food,
-                "riskSugar": MARKET_RISK_SUGAR,
-                "rewardSugar": prediction.option.reward_sugar,
-                "consensus": prediction.support_fraction,
-                "supportFraction": prediction.support_fraction,
-                "entryThreshold": prediction.entry_threshold,
-                "directionalCount": entry["directionalCount"],
-                "requiredDirectionalCount": entry["requiredDirectionalCount"],
-                "participationFraction": entry["participationFraction"],
-                "quorumMet": entry["quorumMet"],
-                "foodReserved": prediction.reserved_food,
-                "sugarBudget": food_budget,
-                "foodBudget": food_budget,
-                "infoBought": bought_info,
-                "strategyRevision": strategy_snapshot["revision"],
-            },
-        )
 
     def _run_vote(
         self,
@@ -1672,12 +1823,15 @@ class GameHarness:
         *,
         info_packet: InfoPacket | None = None,
         strategy_snapshot: dict[str, Any] | None = None,
+        match_state_snapshot: MatchState | None = None,
+        decision_event_index: int | None = None,
     ) -> dict[str, Any]:
         decide_ants = getattr(self.decision_agent, "decide_ants", None)
         if not callable(decide_ants):
             raise RuntimeError("DeepSeek agent required: no local policy is allowed.")
 
-        ant_counts = colony_ant_counts(colony, self.room.event_index)
+        decision_event_index = decision_event_index or self.room.event_index
+        ant_counts = colony_ant_counts(colony, decision_event_index)
         active_count = ant_counts["activeCount"]
         stage_label = "after info" if info_packet else "before info"
         self.room.add_log(
@@ -1693,23 +1847,33 @@ class GameHarness:
                 "stage": "post_info" if info_packet else "pre_info",
             },
         )
-        self.room.agent_processing = {
+        processing_key = (
+            f"{opportunity.opportunity_id}:{colony.colony_id}:"
+            f"{'post_info' if info_packet else 'pre_info'}"
+        )
+        processing_state = {
             "active": True,
             "colonyId": colony.colony_id,
             "colonyName": colony.name,
+            "opportunityId": opportunity.opportunity_id,
             "antCount": active_count,
             "stage": "post_info" if info_packet else "pre_info",
             "startedAt": time.time(),
         }
+        with self.room.log_lock:
+            self.room.agent_processing_jobs[processing_key] = processing_state
         try:
             agent_vote = self._ant_agent_vote(
                 colony,
                 opportunity,
                 info_packet=info_packet,
                 strategy_snapshot=strategy_snapshot,
+                match_state_snapshot=match_state_snapshot,
+                decision_event_index=decision_event_index,
             )
         finally:
-            self.room.agent_processing = None
+            with self.room.log_lock:
+                self.room.agent_processing_jobs.pop(processing_key, None)
         if agent_vote:
             self.room.add_log(
                 "ant_agent_vote",
@@ -1727,19 +1891,25 @@ class GameHarness:
         *,
         info_packet: InfoPacket | None = None,
         strategy_snapshot: dict[str, Any] | None = None,
+        match_state_snapshot: MatchState | None = None,
+        decision_event_index: int | None = None,
     ) -> dict[str, Any] | None:
         decide_ants = getattr(self.decision_agent, "decide_ants", None)
         if not callable(decide_ants):
             raise RuntimeError("DeepSeek agent required: no local policy is allowed.")
 
-        active_ants = colony.active_ants(self.room.event_index)
+        decision_event_index = decision_event_index or self.room.event_index
+        active_ants = colony.active_ants(decision_event_index)
         if not active_ants:
             return None
 
-        ant_counts = colony_ant_counts(colony, self.room.event_index)
+        ant_counts = colony_ant_counts(colony, decision_event_index)
         stage = "post_info" if info_packet else "pre_info"
         orders = strategy_snapshot or colony_strategy_snapshot(colony)
-        signal_pack = build_market_signal_pack(self.room.match_state, opportunity)
+        signal_pack = build_market_signal_pack(
+            match_state_snapshot or self.room.match_state,
+            opportunity,
+        )
         agent_reliability = agent_reliability_context(signal_pack["reliability"])
         agent_opportunity = agent_opportunity_context(opportunity)
         agent_market = agent_market_context(opportunity)
@@ -1830,7 +2000,7 @@ class GameHarness:
         vote = vote_from_ant_agent_decisions(
             colony,
             opportunity,
-            self.room.event_index,
+            decision_event_index,
             decisions or [],
             info_packet=info_packet,
             reliability=signal_pack["reliability"],
@@ -2271,6 +2441,7 @@ class GameManager:
         self.live_tasks: dict[str, Any] = {}
         self.kickoff_tasks: dict[str, Any] = {}
         self.replay_tasks: dict[str, Any] = {}
+        self.agent_tasks: dict[str, set[Any]] = {}
         self.decision_agent = decision_agent
 
     def create_room(
