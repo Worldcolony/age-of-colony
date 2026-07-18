@@ -666,6 +666,10 @@ export default function AdminPage() {
     router.push(`/cockpit/${game.gameId}?from=admin`);
   }
 
+  function openReplay(game: GameState) {
+    router.push(`/results/${game.gameId}?from=admin`);
+  }
+
   async function runDemo() {
     setWorking("demo");
     setMsg("Starting demo sandbox...");
@@ -1024,9 +1028,15 @@ export default function AdminPage() {
                     <button className="btn btn-ghost !min-h-11 px-3 py-2 text-sm" onClick={() => openRun(game)}>
                       {game.status === "finished" && game.players.length === 0 ? "Inspect ants" : "Open cockpit"}
                     </button>
-                    <button className="btn btn-primary !min-h-11 px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
-                      {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
-                    </button>
+                    {game.status === "finished" ? (
+                      <button className="btn btn-primary !min-h-11 px-3 py-2 text-sm" onClick={() => openReplay(game)}>
+                        Replay
+                      </button>
+                    ) : (
+                      <button className="btn btn-primary !min-h-11 px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
+                        {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -1082,9 +1092,15 @@ export default function AdminPage() {
                           <button className="btn btn-ghost !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => openRun(game)}>
                             {game.status === "finished" && game.players.length === 0 ? "Inspect ants" : "Open cockpit"}
                           </button>
-                          <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
-                            {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
-                          </button>
+                          {game.status === "finished" ? (
+                            <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" onClick={() => openReplay(game)}>
+                              Replay
+                            </button>
+                          ) : (
+                            <button className="btn btn-primary !min-h-0 !w-auto px-3 py-2 text-sm" disabled={Boolean(working)} onClick={() => rerunGame(game)}>
+                              {working === `rerun-${game.gameId}` ? "Rerunning..." : "Rerun"}
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
