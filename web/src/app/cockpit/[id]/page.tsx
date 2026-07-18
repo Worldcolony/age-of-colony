@@ -111,12 +111,14 @@ interface MarketOutcome {
 
 interface EventSpotlight {
   key: string;
-  tone: "goal" | "penalty" | "card" | "substitution" | "market" | "resolved" | "danger";
-  glyph: "ball" | "penalty" | "yellow-card" | "red-card" | "substitution" | "market" | "resolved";
+  tone: "goal" | "penalty" | "card" | "substitution" | "market" | "resolved" | "danger" | "set-piece" | "play" | "neutral";
+  glyph: "ball" | "penalty" | "yellow-card" | "red-card" | "substitution" | "market" | "resolved" | "corner" | "free-kick" | "shot" | "attack" | "foul" | "var" | "medical" | "clock";
   kicker: string;
   title: string;
   detail: string;
   duration: number;
+  clockSeconds?: number | null;
+  secondary?: boolean;
 }
 
 export default function CockpitPage() {
@@ -202,7 +204,7 @@ function CockpitRun({ id }: { id: string }) {
   // about YOUR colony, as a toast over the HUD.
   function announceEvent(event: GameEvent) {
     const eventSpotlight = spotlightFromEvent(event);
-    if (eventSpotlight) queueSpotlight(eventSpotlight);
+    if (eventSpotlight && !eventSpotlight.secondary) queueSpotlight(eventSpotlight);
     const colonyId = typeof event.data?.colonyId === "string" ? event.data.colonyId : null;
     const isMine = Boolean(colonyId && colonyId === mineIdRef.current);
     if (event.kind === "settlement") {
@@ -567,7 +569,7 @@ function CockpitRun({ id }: { id: string }) {
         ]}
         nav={[
           { icon: adminRoom ? "👑" : "🏟️", label: adminRoom ? "Admin" : "Room", onClick: () => router.push(cockpitExitHref) },
-          { icon: "🏆", label: "Ranks", onClick: () => router.push(resultsHref) },
+          { icon: status === "finished" ? "▶" : "🏆", label: status === "finished" ? "Replay ×4" : "Ranks", onClick: () => router.push(resultsHref) },
           {
             icon: adminRoom ? "👑" : "🍬",
             label: adminRoom ? "Control" : "Colony",
@@ -835,7 +837,7 @@ function CockpitRun({ id }: { id: string }) {
               : streamState === "reconnecting" ? "Reconnecting stream..." : "Watching live"}
         </span>
         <button className="quiet-link" onClick={() => router.push(resultsHref)}>
-          {status === "finished" ? "View final results" : "Ranks"}
+          {status === "finished" ? "Replay full simulation ×4" : "Ranks"}
         </button>
       </footer>
     </div>
@@ -917,7 +919,10 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
     return spotlight ? [{ event, spotlight }] : [];
   });
   const latest = moments[0];
-  const recent = moments.slice(1, 5);
+  const recent = moments.slice(1, 7);
+  const simultaneous = latest?.spotlight.clockSeconds == null
+    ? 1
+    : moments.filter(({ spotlight }) => spotlight.clockSeconds === latest.spotlight.clockSeconds).length;
 
   return (
     <section className="match-pulse" aria-label="Latest match and market events">
@@ -926,7 +931,7 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
           <p>Match pulse</p>
           <h3>Live events</h3>
         </div>
-        <span>{moments.length ? `${moments.length} signals` : "Waiting"}</span>
+        <span>{moments.length ? `${Math.min(7, moments.length)} visible · ${moments.length} total` : "Waiting"}</span>
       </header>
 
       {latest ? (
@@ -934,7 +939,10 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
           <article className="match-pulse-latest" data-tone={latest.spotlight.tone} role="status" aria-live="polite">
             <div className="match-pulse-event-top">
               <span className="match-pulse-glyph">{pulseGlyphLabel(latest.spotlight.glyph)}</span>
-              <span>{latest.spotlight.kicker}</span>
+              <span>
+                {latest.spotlight.kicker}
+                {simultaneous > 1 ? ` · ${simultaneous} SIMULTANEOUS` : ""}
+              </span>
             </div>
             <strong>{latest.spotlight.title}</strong>
             <p>{latest.spotlight.detail}</p>
@@ -952,7 +960,7 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
                 <em>#{event.index}</em>
               </li>
             )) : (
-              <li className="is-empty">The next goal, card, substitution or market will appear here.</li>
+              <li className="is-empty">The next match signal or market will appear here.</li>
             )}
           </ol>
         </div>
@@ -961,7 +969,7 @@ function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
           <span className="match-pulse-glyph">LIVE</span>
           <div>
             <strong>Waiting for the first match event</strong>
-            <p>Goals, penalties, cards, substitutions and new markets will stay visible here.</p>
+            <p>Goals, shots, attacks, set pieces, cards and markets will stay visible here.</p>
           </div>
         </div>
       )}
@@ -978,6 +986,14 @@ function pulseGlyphLabel(glyph: EventSpotlight["glyph"]): string {
     substitution: "SUB",
     market: "OPEN",
     resolved: "DONE",
+    corner: "COR",
+    "free-kick": "FK",
+    shot: "SHOT",
+    attack: "ATK",
+    foul: "FOUL",
+    var: "VAR",
+    medical: "MED",
+    clock: "TIME",
   };
   return labels[glyph];
 }
@@ -1656,6 +1672,7 @@ function spotlightFromEvent(event: GameEvent): EventSpotlight | null {
       title,
       detail: String(event.data?.detail ?? event.data?.description ?? "Match update"),
       duration: type === "goal" || type === "penalty_goal" ? 3000 : 2500,
+      clockSeconds: finiteClock(event.data?.clockSeconds),
     };
     if (type === "goal" || type === "penalty_goal") return { ...base, tone: "goal", glyph: "ball" };
     if (type === "penalty" || type === "penalty_missed") return { ...base, tone: "penalty", glyph: "penalty" };
@@ -1663,6 +1680,16 @@ function spotlightFromEvent(event: GameEvent): EventSpotlight | null {
     if (type === "red_card") return { ...base, tone: "danger", glyph: "red-card" };
     if (type === "substitution") return { ...base, tone: "substitution", glyph: "substitution" };
     if (type === "goal_cancelled") return { ...base, tone: "danger", glyph: "ball" };
+    if (type === "corner") return { ...base, tone: "set-piece", glyph: "corner", secondary: true };
+    if (type === "free_kick") return { ...base, tone: "set-piece", glyph: "free-kick", secondary: true };
+    if (type === "shot") return { ...base, tone: "play", glyph: "shot", secondary: true };
+    if (type === "attack") return { ...base, tone: "play", glyph: "attack", secondary: true };
+    if (type === "foul") return { ...base, tone: "neutral", glyph: "foul", secondary: true };
+    if (type === "var") return { ...base, tone: "penalty", glyph: "var", secondary: true };
+    if (type === "injury") return { ...base, tone: "danger", glyph: "medical", secondary: true };
+    if (["additional_time", "kickoff", "half_time", "full_time"].includes(type)) {
+      return { ...base, tone: "neutral", glyph: "clock", secondary: true };
+    }
     return null;
   }
 
@@ -1678,6 +1705,7 @@ function spotlightFromEvent(event: GameEvent): EventSpotlight | null {
       title: marketSpotlightTitle(opportunity.context),
       detail: cleanMarketLabel(String(opportunity.label ?? event.message ?? "Ants are voting")),
       duration: 1900,
+      clockSeconds: opportunity.minute == null ? null : Number(opportunity.minute) * 60,
     };
   }
 
@@ -1692,6 +1720,7 @@ function spotlightFromEvent(event: GameEvent): EventSpotlight | null {
       title: String(outcome?.label ?? "EVENT RESOLVED"),
       detail: String(outcome?.detail ?? cleanMarketLabel(String(market?.label ?? event.message))),
       duration: 1900,
+      clockSeconds: market?.minute == null ? null : Number(market.minute) * 60,
     };
   }
 
@@ -1705,8 +1734,17 @@ function marketSpotlightTitle(context?: string): string {
     goal_next_10: "GOAL IN 10 MIN?",
     next_substitution: "NEXT SUB",
     next_card: "NEXT CARD",
+    next_corner: "NEXT CORNER",
+    next_free_kick: "NEXT FREE KICK",
+    next_yellow_card: "NEXT YELLOW",
+    next_foul: "NEXT FOUL",
   };
   return labels[String(context ?? "")] ?? "NEW MARKET";
+}
+
+function finiteClock(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function MatchEventSpotlight({ spotlight }: { spotlight: EventSpotlight }) {
@@ -1733,6 +1771,14 @@ function EventSpotlightGlyph({ glyph }: { glyph: EventSpotlight["glyph"] }) {
     substitution: "↔",
     market: "🎯",
     resolved: "✓",
+    corner: "⌜",
+    "free-kick": "◉",
+    shot: "➤",
+    attack: "▲",
+    foul: "!",
+    var: "VAR",
+    medical: "+",
+    clock: "◷",
   };
   return <span className="match-spotlight-glyph" aria-hidden="true">{labels[glyph]}</span>;
 }

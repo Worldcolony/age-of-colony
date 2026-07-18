@@ -2490,6 +2490,30 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(room.public_state()["match"]["minute"], 67)
         self.assertEqual(room.public_state()["match"]["clockSeconds"], 4052)
 
+    def test_secondary_match_events_are_all_published_at_the_same_clock(self):
+        room, harness = self.make_room()
+        shared = {
+            "fixtureId": 42,
+            "minute": 24,
+            "clockSeconds": 1440,
+            "participant": 1,
+            "participantLabel": "France",
+        }
+
+        harness.process_event({**shared, "seq": 10, "action": "shot", "description": "Shot - France"})
+        harness.process_event({**shared, "seq": 11, "action": "corner", "highlights": ["corner"], "description": "Corner - France"})
+        harness.process_event({**shared, "seq": 12, "action": "high_danger_possession", "description": "Dangerous attack - France"})
+
+        match_events = [event for event in room.log if event.kind == "match_event"]
+        self.assertEqual(
+            [event.data["visualType"] for event in match_events],
+            ["shot", "corner", "attack"],
+        )
+        self.assertEqual(
+            [event.data["clockSeconds"] for event in match_events],
+            [1440, 1440, 1440],
+        )
+
     def test_next_substitution_market_waits_until_full_time_without_substitution(self):
         def vote_only_on_substitution(_ant, context):
             return "yes" if context["market"]["context"] == "next_substitution" else "abstain"

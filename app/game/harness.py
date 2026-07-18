@@ -3159,6 +3159,8 @@ def match_event_presentation(event: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     targets = event_targets(event)
+    flags = set(event.get("highlights") or [])
+    action = _event_token(event.get("action"))
     penalty_event = _event_is_penalty_award(event) or _event_has_text(event, "penalty", "spot kick")
     visual_type: str | None = None
     title: str | None = None
@@ -3178,6 +3180,28 @@ def match_event_presentation(event: dict[str, Any]) -> dict[str, Any] | None:
         visual_type, title = "yellow_card", "YELLOW CARD"
     elif "substitution" in targets:
         visual_type, title = "substitution", "SUBSTITUTION"
+    elif "corner" in targets:
+        visual_type, title = "corner", "CORNER"
+    elif "free_kick" in targets:
+        visual_type, title = "free_kick", "FREE KICK"
+    elif "foul" in targets:
+        visual_type, title = "foul", "FOUL"
+    elif "shot" in targets:
+        visual_type, title = "shot", "SHOT"
+    elif "pressure" in targets:
+        visual_type, title = "attack", "DANGEROUS ATTACK"
+    elif "var" in flags or action in {"var", "var_start", "var_end"}:
+        visual_type, title = "var", "VAR CHECK" if action != "var_end" else "VAR DECISION"
+    elif "injury" in flags or action == "injury":
+        visual_type, title = "injury", "INJURY"
+    elif "additional_time" in flags or action == "additional_time":
+        visual_type, title = "additional_time", "ADDED TIME"
+    elif action in {"kickoff", "kick_off", "first_half", "second_half"}:
+        visual_type, title = "kickoff", "KICK OFF" if "kick" in action else action.replace("_", " ").upper()
+    elif action in {"half_time", "halftime"}:
+        visual_type, title = "half_time", "HALF TIME"
+    elif action in {"full_time", "fulltime"}:
+        visual_type, title = "full_time", "FULL TIME"
 
     if not visual_type or not title:
         return None
