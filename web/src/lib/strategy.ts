@@ -8,7 +8,7 @@ export interface StrategyOption<T extends string> {
 }
 
 export interface StyleDoctrine extends StrategyOption<Style> {
-  gateVotes: number;
+  thresholdPercent: number;
   cadenceLabel: string;
 }
 
@@ -18,7 +18,7 @@ export const STYLE_OPTIONS = [
     label: "Cautious",
     shortLabel: "Wait for strength",
     description: "Enter only when ant consensus is especially strong.",
-    gateVotes: 14,
+    thresholdPercent: 70,
     cadenceLabel: "Fewer, stronger entries",
   },
   {
@@ -26,7 +26,7 @@ export const STYLE_OPTIONS = [
     label: "Balanced",
     shortLabel: "Stay flexible",
     description: "Enter when ant consensus is clear.",
-    gateVotes: 12,
+    thresholdPercent: 60,
     cadenceLabel: "Measured entries",
   },
   {
@@ -34,7 +34,7 @@ export const STYLE_OPTIONS = [
     label: "Aggressive",
     shortLabel: "Press the edge",
     description: "Enter more often because lighter consensus is enough.",
-    gateVotes: 11,
+    thresholdPercent: 51,
     cadenceLabel: "More frequent entries",
   },
 ] as const satisfies readonly StyleDoctrine[];

@@ -219,6 +219,27 @@ class AntAnalysisRoleTest(unittest.TestCase):
         self.assertNotIn("missing_score", pack["reliability"]["issueCodes"])
         self.assertIn("missing_current_clock", pack["reliability"]["issueCodes"])
 
+    def test_match_state_score_fills_partial_event_score(self):
+        state = MatchState(42, "France", "Belgium")
+        state.score = {"participant1": 1, "participant2": 0}
+        source = {
+            "seq": 1,
+            "action": "shot",
+            "minute": 12,
+            "clockSeconds": 720,
+            "participant": 1,
+            "score": {"participant1": 1, "participant2": None},
+        }
+        state.update(source)
+
+        pack = build_market_signal_pack(state, make_opportunity(source))
+        context = pack["roleEvidence"]["situational"]["scoreMinuteContext"]
+
+        self.assertTrue(context["available"])
+        self.assertTrue(context["scoreAvailable"])
+        self.assertEqual(context["score"], {"participant1": 1, "participant2": 0})
+        self.assertNotIn("missing_score", pack["reliability"]["issueCodes"])
+
     def test_explicitly_unconfirmed_signal_does_not_inflate_samples(self):
         state = MatchState(42, "France", "Belgium")
         baseline = {

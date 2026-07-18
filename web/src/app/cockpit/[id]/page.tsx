@@ -51,6 +51,11 @@ const KIND_EDGE: Record<string, string> = {
 interface PublicVote {
   activeCount?: number;
   neutralCount?: number;
+  directionalCount?: number;
+  requiredDirectionalCount?: number;
+  participationFraction?: number;
+  supportFraction?: number;
+  quorumMet?: boolean;
   agentDecisionCount?: number;
   aliveCount?: number;
   engagedCount?: number;
@@ -2325,9 +2330,15 @@ function colonyDecisionSummary(activity: ColonyMarketActivity) {
     return { value: "Waiting", detail: "No ant votes yet", tone: "muted" as const };
   }
   const value = activity.topVote.key === "abstain" ? "Pass" : activity.topVote.label;
+  const vote = activity.voteEvent.data?.vote as PublicVote | undefined;
+  const directional = Number(vote?.directionalCount ?? 0);
+  const abstain = Number(vote?.neutralCount ?? 0);
+  const detail = activity.topVote.key !== "abstain" && directional > 0
+    ? `${activity.topVote.count}/${directional} directional${abstain > 0 ? ` · ${abstain} pass` : ""}`
+    : `${activity.topVote.count}/${Math.max(1, activity.distribution.total)} ants`;
   return {
     value,
-    detail: `${activity.topVote.count}/${Math.max(1, activity.distribution.total)} ants`,
+    detail,
     tone: voteTone(activity.topVote.key),
   };
 }
@@ -2383,6 +2394,17 @@ function observeReasonSummary(event?: GameEvent): { value: string; detail: strin
 
   if (["tied_vote", "tied", "tie", "vote_tied"].includes(reason)) {
     return { value: "No entry", detail: "ant vote ended in a tie" };
+  }
+
+  if (["low_participation", "below_quorum", "insufficient_participation"].includes(reason)) {
+    const directional = finiteNumber(data?.directionalCount);
+    const active = finiteNumber(data?.activeAnts ?? data?.activeCount);
+    const required = finiteNumber(data?.requiredDirectionalCount);
+    const voteLabel = directional != null && active != null
+      ? `${directional}/${active} ants took a side`
+      : "too few ants took a side";
+    const quorumLabel = required != null ? ` · needs ${required}` : "";
+    return { value: "No entry", detail: `${voteLabel}${quorumLabel}` };
   }
 
   if (["low_consensus", "no_commitment", "below_threshold", "insufficient_consensus"].includes(reason)) {
@@ -2475,6 +2497,12 @@ function eventData(event?: GameEvent) {
         supportFraction?: number;
         consensus?: number;
         entryThreshold?: number;
+        activeAnts?: number;
+        activeCount?: number;
+        directionalCount?: number;
+        requiredDirectionalCount?: number;
+        participationFraction?: number;
+        quorumMet?: boolean;
         resourceDelta?: number;
         resourceLoss?: number;
         resolvedOutcome?: { label?: string; detail?: string };

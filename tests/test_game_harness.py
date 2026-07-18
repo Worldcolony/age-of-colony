@@ -39,6 +39,7 @@ from app.game.harness import (
     GameManager,
     MARKET_RISK_SUGAR,
     MAX_RESERVED_SUGAR,
+    MIN_DIRECTIONAL_QUORUM_FRACTION,
     STARTING_COLONY_ANTS,
     STARTING_COLONY_FOOD,
     STARTING_COLONY_SUGAR,
@@ -52,6 +53,7 @@ from app.game.harness import (
     info_cost_for_colony,
     natural_analysis_role,
     opportunity_options,
+    public_vote,
     run_vote,
     should_buy_info,
 )
@@ -80,15 +82,31 @@ def penalty_event(**overrides):
     return event
 
 
-def vote_for_option(colony, opportunity, *, option_index=0, support_count=20, active_count=20, weight=1.0):
+def vote_for_option(
+    colony,
+    opportunity,
+    *,
+    option_index=0,
+    support_count=20,
+    dissent_count=0,
+    active_count=20,
+    weight=1.0,
+):
     """Build a raw ant ballot for deterministic Sugar V0 entry tests."""
     predictions = {option.option_id: [] for option in opportunity.options}
     predictions[opportunity.options[option_index].option_id] = [
         {"antId": ant.ant_id, "weight": weight}
         for ant in colony.ants[:support_count]
     ]
+    if dissent_count and len(opportunity.options) > 1:
+        dissent_index = (option_index + 1) % len(opportunity.options)
+        predictions[opportunity.options[dissent_index].option_id] = [
+            {"antId": ant.ant_id, "weight": weight}
+            for ant in colony.ants[support_count:support_count + dissent_count]
+        ]
     return {
         "activeCount": active_count,
+        "neutralCount": max(0, active_count - support_count - dissent_count),
         "predictions": predictions,
         "infoRequests": [],
     }
@@ -606,7 +624,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertEqual(public["larvae"], 0)
         self.assertFalse([event for event in room.log if event.kind in {"starvation", "hatch"}])
 
-    def test_style_entry_thresholds_use_raw_vote_counts_and_are_inclusive(self):
+    def test_style_entry_thresholds_use_directional_consensus_and_are_inclusive(self):
         room, harness = self.make_room()
         opportunity = build_opportunities(
             {
@@ -624,26 +642,37 @@ class GameHarnessTest(unittest.TestCase):
             1,
             room.match_state,
         )[0]
-        minimum_support = {"cautious": 14, "balanced": 12, "aggressive": 11}
+        minimum_support = {"cautious": 7, "balanced": 6, "aggressive": 6}
 
         self.assertEqual(
             STYLE_ENTRY_THRESHOLDS,
             {"cautious": 0.70, "balanced": 0.60, "aggressive": 0.51},
         )
+        self.assertEqual(MIN_DIRECTIONAL_QUORUM_FRACTION, 0.50)
         for style, support_count in minimum_support.items():
             with self.subTest(style=style):
                 colony = harness.add_colony(f"{style} threshold", 20, style, "momentum", "medium")
                 below = create_prediction(
                     colony,
                     opportunity,
-                    vote_for_option(colony, opportunity, support_count=support_count - 1),
+                    vote_for_option(
+                        colony,
+                        opportunity,
+                        support_count=support_count - 1,
+                        dissent_count=11 - support_count,
+                    ),
                     1,
                     bought_info=False,
                 )
                 at_or_above = create_prediction(
                     colony,
                     opportunity,
-                    vote_for_option(colony, opportunity, support_count=support_count),
+                    vote_for_option(
+                        colony,
+                        opportunity,
+                        support_count=support_count,
+                        dissent_count=10 - support_count,
+                    ),
                     1,
                     bought_info=False,
                 )
@@ -652,7 +681,43 @@ class GameHarnessTest(unittest.TestCase):
                 self.assertEqual(len(at_or_above.ant_ids), support_count)
                 self.assertEqual(at_or_above.reserved_food, MARKET_RISK_SUGAR)
                 self.assertEqual(at_or_above.entry_threshold, STYLE_ENTRY_THRESHOLDS[style])
-                self.assertAlmostEqual(at_or_above.support_fraction, support_count / STARTING_COLONY_ANTS)
+                self.assertAlmostEqual(at_or_above.support_fraction, support_count / 10)
+
+        quorum_colony = harness.add_colony("Quorum Gate", 20, "balanced", "momentum", "medium")
+        below_quorum = vote_for_option(quorum_colony, opportunity, support_count=9)
+        at_quorum = vote_for_option(quorum_colony, opportunity, support_count=10)
+        self.assertIsNone(
+            create_prediction(
+                quorum_colony,
+                opportunity,
+                below_quorum,
+                1,
+                bought_info=False,
+            )
+        )
+        quorum_prediction = create_prediction(
+            quorum_colony,
+            opportunity,
+            at_quorum,
+            1,
+            bought_info=False,
+        )
+        self.assertIsNotNone(quorum_prediction)
+        self.assertEqual(quorum_prediction.support_fraction, 1.0)
+
+        public = public_vote(
+            vote_for_option(
+                quorum_colony,
+                opportunity,
+                support_count=6,
+                dissent_count=4,
+            )
+        )
+        self.assertEqual(public["directionalCount"], 10)
+        self.assertEqual(public["requiredDirectionalCount"], 10)
+        self.assertEqual(public["participationFraction"], 0.5)
+        self.assertTrue(public["quorumMet"])
+        self.assertEqual(public["supportFraction"], 0.6)
 
         raw_count_colony = harness.add_colony("Raw Count", 20, "balanced", "momentum", "medium")
         raw_vote = vote_for_option(raw_count_colony, opportunity, support_count=12, weight=0.01)
@@ -2812,7 +2877,7 @@ class GameHarnessTest(unittest.TestCase):
         self.assertTrue(any(prediction.option.option_id == "next_substitution_p1" for prediction in room.predictions.values()))
         self.assertFalse(any(event.kind == "agent_decision" for event in room.log))
 
-    def test_player_live_market_requires_directional_ant_votes(self):
+    def test_usable_market_requires_directional_ant_votes_in_live_and_admin_replay(self):
         class DirectionalAntAgent:
             def __init__(self):
                 self.context = None
@@ -2825,12 +2890,68 @@ class GameHarnessTest(unittest.TestCase):
                 vote = context["market"]["availableVotes"][0]["vote"]
                 return [{"antId": ant["antId"], "vote": vote} for ant in ants]
 
-        agent = DirectionalAntAgent()
+        for room_kind, mode in (("player", "live"), ("admin", "replay")):
+            with self.subTest(room_kind=room_kind, mode=mode):
+                agent = DirectionalAntAgent()
+                manager = GameManager(decision_agent=agent)
+                room = manager.create_room(
+                    fixture_id=42,
+                    participant1="France",
+                    participant2="Spain",
+                    seed=124,
+                    room_kind=room_kind,
+                )
+                room.mode = mode
+                harness = manager.harness(room.game_id)
+                harness.add_colony("Player Nest", 20, "balanced", "momentum", "medium")
+
+                harness.process_event(
+                    {
+                        "fixtureId": 42,
+                        "seq": 1,
+                        "action": "high_danger_possession",
+                        "minute": 6,
+                        "clockSeconds": 360,
+                        "participant": 1,
+                        "participantLabel": "France",
+                        "score": {"participant1": 0, "participant2": 0},
+                        "description": "High danger possession - France",
+                    }
+                )
+
+                self.assertTrue(agent.context["rules"]["directionalVoteRequired"])
+                self.assertEqual(
+                    [item["vote"] for item in agent.context["market"]["availableVotes"]],
+                    ["yes", "no"],
+                )
+                vote_event = next(event for event in room.log if event.kind == "vote")
+                self.assertEqual(vote_event.data["vote"]["voteCounts"]["abstain"], 0)
+                self.assertTrue([prediction for prediction in room.predictions.values() if not prediction.resolved])
+
+    def test_incomplete_market_data_keeps_abstention_as_a_safety_brake(self):
+        class AbstainingAntAgent:
+            def __init__(self):
+                self.context = None
+
+            def decide(self, *, game_id, stage, context):
+                return None
+
+            def decide_ants(self, *, game_id, stage, context, ants):
+                self.context = context
+                return [{"antId": ant["antId"], "vote": "abstain"} for ant in ants]
+
+        agent = AbstainingAntAgent()
         manager = GameManager(decision_agent=agent)
-        room = manager.create_room(fixture_id=42, participant1="France", participant2="Spain", seed=124)
-        room.mode = "live"
+        room = manager.create_room(
+            fixture_id=42,
+            participant1="France",
+            participant2="Spain",
+            seed=125,
+            room_kind="admin",
+        )
+        room.mode = "replay"
         harness = manager.harness(room.game_id)
-        harness.add_colony("Player Nest", 20, "balanced", "momentum", "medium")
+        harness.add_colony("Safety Nest", 20, "balanced", "momentum", "medium")
 
         harness.process_event(
             {
@@ -2845,14 +2966,14 @@ class GameHarnessTest(unittest.TestCase):
             }
         )
 
-        self.assertTrue(agent.context["rules"]["directionalVoteRequired"])
-        self.assertEqual(
+        self.assertFalse(agent.context["rules"]["directionalVoteRequired"])
+        self.assertIn(
+            "abstain",
             [item["vote"] for item in agent.context["market"]["availableVotes"]],
-            ["yes", "no"],
         )
         vote_event = next(event for event in room.log if event.kind == "vote")
-        self.assertEqual(vote_event.data["vote"]["voteCounts"]["abstain"], 0)
-        self.assertTrue([prediction for prediction in room.predictions.values() if not prediction.resolved])
+        self.assertEqual(vote_event.data["vote"]["voteCounts"]["abstain"], 20)
+        self.assertFalse(room.predictions)
 
     def test_deepseek_ant_agent_votes_do_not_buy_info(self):
         class FakeAntAgent:

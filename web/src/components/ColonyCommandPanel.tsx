@@ -999,7 +999,7 @@ function DoctrineSelector({
           >
             <span className="doctrine-card-head">
               <strong>{option.label}</strong>
-              <b className="doctrine-gate-number">{option.gateVotes}/20</b>
+              <b className="doctrine-gate-number">{option.thresholdPercent}%</b>
             </span>
             <span className="doctrine-card-kicker">{option.cadenceLabel}</span>
           </button>
@@ -1023,7 +1023,7 @@ function ConsensusGatePreview({
         <div>
           <p className="eyebrow">Consensus gate</p>
           <p className="text-sm font-bold text-ink">
-            {doctrine.gateVotes} of 20 ants must back the same answer
+            At least 10 ants take a side · {doctrine.thresholdPercent}% must agree
           </p>
         </div>
         <span className="status-pill !border-gold/50 !text-gold-deep">Next market</span>
@@ -1031,14 +1031,14 @@ function ConsensusGatePreview({
       <div
         className="consensus-ant-track"
         role="img"
-        aria-label={`${doctrine.gateVotes} supporting ants out of 20 are required`}
+        aria-label={`At least 10 directional voters are required, then ${doctrine.thresholdPercent} percent must agree`}
       >
         {Array.from({ length: 20 }, (_, index) => (
-          <span key={index} data-required={index < doctrine.gateVotes} />
+          <span key={index} data-required={index < 10} />
         ))}
       </div>
       <p className="text-[11px] leading-relaxed text-ink-faint">
-        Below that line, the colony observes and keeps its Sugar. This changes entry frequency, not what each ant votes for.
+        Abstentions stay outside consensus. Below the 10-ant quorum, the colony observes and keeps its Sugar.
       </p>
     </div>
   );

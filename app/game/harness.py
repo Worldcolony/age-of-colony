@@ -60,6 +60,15 @@ STYLE_ENTRY_THRESHOLDS = {
     "balanced": 0.60,
     "aggressive": 0.51,
 }
+MIN_DIRECTIONAL_QUORUM_FRACTION = 0.50
+DIRECTIONAL_VOTE_BLOCKING_ISSUES = {
+    "explicitly_unconfirmed",
+    "unresolved_var",
+    "missing_current_clock",
+    "missing_score",
+    "missing_sample",
+    "stale_event_clock",
+}
 STYLE_ALIASES = {
     "prudent": "cautious",
     "cautious": "cautious",
@@ -1498,6 +1507,11 @@ class GameHarness:
             final_vote = first_vote
             final_agent_decision = pre_agent_decision
 
+        entry = entry_vote_state(
+            opportunity,
+            final_vote,
+            str(strategy_snapshot["style"]),
+        )
         prediction = create_prediction(
             colony,
             opportunity,
@@ -1509,11 +1523,6 @@ class GameHarness:
             food_budget=food_budget,
         )
         if not prediction:
-            entry = entry_vote_state(
-                opportunity,
-                final_vote,
-                str(strategy_snapshot["style"]),
-            )
             available_sugar = max(0, colony.food - colony.food_reserved)
             reserve_capacity = max(0, MAX_RESERVED_SUGAR - colony.food_reserved)
             if available_sugar < MARKET_RISK_SUGAR:
@@ -1522,6 +1531,13 @@ class GameHarness:
             elif reserve_capacity < MARKET_RISK_SUGAR:
                 reason = "reserve_limit"
                 message = f"{colony.name} observes this market: its 10 Sugar exposure limit is reached."
+            elif not entry["quorumMet"]:
+                reason = "low_participation"
+                message = (
+                    f"{colony.name} observes this market: {entry['directionalCount']}/"
+                    f"{entry['activeCount']} directional votes is below its "
+                    f"{entry['requiredDirectionalCount']}-ant quorum."
+                )
             elif entry["tie"]:
                 reason = "tied_vote"
                 message = f"{colony.name} observes this market: the ant vote is tied."
@@ -1548,6 +1564,10 @@ class GameHarness:
                     "entryThreshold": entry["entryThreshold"],
                     "topVoteCount": entry["topVoteCount"],
                     "activeAnts": entry["activeCount"],
+                    "directionalCount": entry["directionalCount"],
+                    "requiredDirectionalCount": entry["requiredDirectionalCount"],
+                    "participationFraction": entry["participationFraction"],
+                    "quorumMet": entry["quorumMet"],
                     "topOptionId": entry["option"].option_id if entry["option"] else None,
                     "tie": entry["tie"],
                     # Backward-compatible aliases.
@@ -1576,7 +1596,7 @@ class GameHarness:
             "prediction",
             (
                 f"{colony.name} enters {prediction.option.label}: {len(prediction.ant_ids)}/"
-                f"{max(1, int(final_vote.get('activeCount') or 0))} ant votes "
+                f"{max(1, entry['directionalCount'])} directional ant votes "
                 f"({prediction.support_fraction:.0%}), 2 Sugar locked."
             ),
             {
@@ -1595,6 +1615,10 @@ class GameHarness:
                 "consensus": prediction.support_fraction,
                 "supportFraction": prediction.support_fraction,
                 "entryThreshold": prediction.entry_threshold,
+                "directionalCount": entry["directionalCount"],
+                "requiredDirectionalCount": entry["requiredDirectionalCount"],
+                "participationFraction": entry["participationFraction"],
+                "quorumMet": entry["quorumMet"],
                 "foodReserved": prediction.reserved_food,
                 "sugarBudget": food_budget,
                 "foodBudget": food_budget,
@@ -1670,7 +1694,10 @@ class GameHarness:
         agent_reliability = agent_reliability_context(signal_pack["reliability"])
         agent_opportunity = agent_opportunity_context(opportunity)
         agent_market = agent_market_context(opportunity)
-        directional_vote_required = self.room.room_kind == "player" and self.room.mode == "live"
+        reliability_issues = set(agent_reliability.get("issueCodes") or [])
+        directional_vote_required = not bool(
+            reliability_issues.intersection(DIRECTIONAL_VOTE_BLOCKING_ISSUES)
+        )
         if directional_vote_required:
             agent_market["availableVotes"] = [
                 item
@@ -3588,7 +3615,12 @@ def create_prediction(
     entry = entry_vote_state(opportunity, vote, effective_style)
     best_option = entry["option"]
     best_votes = entry["votes"]
-    if not best_option or entry["tie"] or entry["supportFraction"] < entry["entryThreshold"]:
+    if (
+        not best_option
+        or not entry["quorumMet"]
+        or entry["tie"]
+        or entry["supportFraction"] < entry["entryThreshold"]
+    ):
         return None
     available_sugar = max(0, colony.food - colony.food_reserved)
     reserve_capacity = max(0, MAX_RESERVED_SUGAR - colony.food_reserved)
@@ -3647,12 +3679,26 @@ def entry_vote_state(
     except (TypeError, ValueError):
         active_count = 0
     threshold = STYLE_ENTRY_THRESHOLDS.get(style, STYLE_ENTRY_THRESHOLDS["balanced"])
-    support_fraction = top_count / active_count if active_count else 0.0
+    directional_count = sum(len(items) for _, items in ranked)
+    required_directional_count = (
+        max(1, math.ceil(active_count * MIN_DIRECTIONAL_QUORUM_FRACTION))
+        if active_count
+        else 0
+    )
+    participation_fraction = directional_count / active_count if active_count else 0.0
+    support_fraction = top_count / directional_count if directional_count else 0.0
     return {
         "option": option,
         "votes": items,
         "topVoteCount": top_count,
         "activeCount": active_count,
+        "directionalCount": directional_count,
+        "requiredDirectionalCount": required_directional_count,
+        "participationFraction": participation_fraction,
+        "quorumMet": bool(
+            required_directional_count
+            and directional_count >= required_directional_count
+        ),
         "supportFraction": support_fraction,
         "consensus": support_fraction,
         "entryThreshold": threshold,
@@ -4016,14 +4062,29 @@ def public_vote(vote: dict[str, Any]) -> dict[str, Any]:
     top_count = max((item["count"] for item in predictions.values()), default=0)
     tied = len([item for item in predictions.values() if item["count"] == top_count]) > 1
     active_count = max(0, int(vote.get("activeCount") or 0))
+    directional_count = sum(item["count"] for item in predictions.values())
+    required_directional_count = (
+        max(1, math.ceil(active_count * MIN_DIRECTIONAL_QUORUM_FRACTION))
+        if active_count
+        else 0
+    )
+    participation_fraction = directional_count / active_count if active_count else 0.0
+    support_fraction = top_count / directional_count if directional_count else 0.0
     public = {
         "activeCount": active_count,
         "neutralCount": vote["neutralCount"],
         "infoRequestCount": len(vote["infoRequests"]),
         "predictions": predictions,
         "topVoteCount": top_count,
-        "consensus": top_count / active_count if active_count else 0.0,
-        "supportFraction": top_count / active_count if active_count else 0.0,
+        "directionalCount": directional_count,
+        "requiredDirectionalCount": required_directional_count,
+        "participationFraction": participation_fraction,
+        "quorumMet": bool(
+            required_directional_count
+            and directional_count >= required_directional_count
+        ),
+        "consensus": support_fraction,
+        "supportFraction": support_fraction,
         "tie": tied,
     }
     if vote.get("source"):
@@ -4105,10 +4166,20 @@ def build_market_signal_pack(
     if current_minute is None and current_clock is not None:
         current_minute = current_clock // 60
 
-    score = _signal_score_from_canonical_events(canonical_events)
-    raw_history_has_score = any(_event_score_has_value(event) for event in raw_events)
-    if score is None and not raw_history_has_score:
-        score = match_state.score if match_state and isinstance(match_state.score, dict) else None
+    canonical_score = _signal_score_from_canonical_events(canonical_events)
+    state_score = match_state.score if match_state and isinstance(match_state.score, dict) else None
+    score_values: dict[str, int] = {}
+    for participant_key in ("participant1", "participant2"):
+        value = (
+            parse_int(canonical_score.get(participant_key))
+            if isinstance(canonical_score, dict)
+            else None
+        )
+        if value is None and isinstance(state_score, dict):
+            value = parse_int(state_score.get(participant_key))
+        if value is not None:
+            score_values[participant_key] = value
+    score = score_values or None
     score_context = _signal_score_context(score, current_minute, current_clock)
 
     recent_events = [
