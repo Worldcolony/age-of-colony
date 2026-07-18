@@ -3371,7 +3371,11 @@ def _replay_delay_after_event(
         current_clock = _event_clock_seconds(events[index])
         next_clock = _event_clock_seconds(events[index + 1])
         if current_clock is not None and next_clock is not None and next_clock >= current_clock:
-            return min(REPLAY_MAX_DELAY_SECONDS, max(0.0, (next_clock - current_clock) / time_scale))
+            # Keep the historical match cadence strictly proportional. Capping
+            # this delay made quiet passages collapse into eight seconds, so
+            # the browser clock could not reach the next TXLine timestamp and
+            # appeared to jump forward in batches.
+            return max(0.0, (next_clock - current_clock) / time_scale)
     return min(REPLAY_MAX_DELAY_SECONDS, max(0.0, delay_seconds))
 
 

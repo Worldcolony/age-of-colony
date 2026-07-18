@@ -6196,7 +6196,7 @@ class DemoRunApiTest(unittest.TestCase):
         self.assertEqual(start_response.status_code, 422)
         self.assertEqual(previous_response.status_code, 422)
 
-    def test_replay_delay_uses_scaled_match_clock_with_fixed_fallback(self):
+    def test_replay_delay_preserves_scaled_match_cadence_with_fixed_fallback(self):
         self.assertAlmostEqual(
             _replay_delay_after_event(
                 [{"clockSeconds": 600}, {"clockSeconds": 660}],
@@ -6213,7 +6213,16 @@ class DemoRunApiTest(unittest.TestCase):
                 delay_seconds=0.8,
                 time_scale=1,
             ),
-            8.0,
+            4400.0,
+        )
+        self.assertEqual(
+            _replay_delay_after_event(
+                [{"clockSeconds": 600}, {"clockSeconds": 1200}],
+                0,
+                delay_seconds=0.8,
+                time_scale=40,
+            ),
+            15.0,
         )
         self.assertEqual(
             _replay_delay_after_event(
