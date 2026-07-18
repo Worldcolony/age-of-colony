@@ -15,15 +15,7 @@ import { ColonyCommandPanel } from "@/components/ColonyCommandPanel";
 import { ColonyResourceCard } from "@/components/ColonyResourceCard";
 import { ColonyRaceChart } from "@/components/ColonyRaceChart";
 import { SmoothMatchClock } from "@/components/SmoothMatchClock";
-import { optionLabel, STYLE_OPTIONS } from "@/lib/strategy";
-import {
-  colonyAvailableSugar,
-  colonyReservedSugar,
-  colonySugar,
-  colonySugarNet,
-  optionRewardSugar,
-  optionRiskSugar,
-} from "@/lib/sugar";
+import { colonySugar, optionRewardSugar, optionRiskSugar } from "@/lib/sugar";
 import { discardColonyCommandDrafts } from "@/lib/commandDrafts";
 
 const RUNNING = new Set(["running_replay", "running_live"]);
@@ -409,7 +401,6 @@ function CockpitRun({ id }: { id: string }) {
   }, [game?.colonies]);
   const aggregatedFeed = useMemo(() => aggregateFeed(usefulEvents, colonyNames), [usefulEvents, colonyNames]);
   const feedRows = aggregatedFeed.slice(0, activeTab === "feed" ? 18 : 5);
-  const desktopActiveTab: CockpitTab = adminRoom && activeTab === "feed" ? "live" : activeTab;
 
   useEffect(() => {
     const nextColonyId = ownColony?.colonyId ?? null;
@@ -683,18 +674,9 @@ function CockpitRun({ id }: { id: string }) {
           </span>
         )}
       </div>
+      <h3 className="broadcast-score-teams">{p1} <span>vs</span> {p2}</h3>
       <div className="broadcast-score-core">
-        <h3 className="broadcast-score-teams">
-          <span className="broadcast-score-team">
-            <span className="broadcast-score-flag" aria-hidden="true">{flag(p1)}</span>
-            <strong>{p1}</strong>
-          </span>
-          <strong className="broadcast-score-result">{fmtScore(game?.match?.score)}</strong>
-          <span className="broadcast-score-team">
-            <span className="broadcast-score-flag" aria-hidden="true">{flag(p2)}</span>
-            <strong>{p2}</strong>
-          </span>
-        </h3>
+        <strong>{fmtScore(game?.match?.score)}</strong>
         <div className="broadcast-score-clock">
           <SmoothMatchClock
             match={game?.match}
@@ -709,109 +691,17 @@ function CockpitRun({ id }: { id: string }) {
       </div>
       <div className="broadcast-score-metrics">
         <PulseMetric label="Open" value={openMarkets.length} tone="gold" />
+        <PulseMetric label="Settled" value={settledMarkets.length} tone="green" />
         <PulseMetric label="Events" value={game?.eventIndex ?? events[0]?.index ?? 0} />
       </div>
-    </section>
-  );
-
-  const desktopColonySummary = adminRoom && mine ? (
-    <ColonyOverviewPanel
-      colony={mine}
-      rank={rank}
-      editable={RUNNING.has(status)}
-      onManage={() => setDesktopAdminCommandOpen(true)}
-    />
-  ) : undefined;
-
-  function selectLinkedMarket(market: MarketModel) {
-    if (market.status === "open") {
-      setSelectedMarketId(market.id);
-      setActiveTab("live");
-      return;
-    }
-    setSelectedSettledId(market.id);
-    setActiveTab("settled");
-  }
-
-  const desktopMarketsWorkspace = (
-    <>
-      <div className="cockpit-markets-head">
-        <div>
-          <p className="eyebrow">{adminRoom ? "Linked decisions" : "Colony decisions"}</p>
-          <h2 className="text-2xl font-bold">Live markets</h2>
-        </div>
-        <div className="cockpit-markets-controls">
-          <div className="flex shrink-0 flex-wrap gap-2">
-            <span className="status-pill">{openMarkets.length} live</span>
-            <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
-          </div>
-          <CockpitTabs
-            active={desktopActiveTab}
-            counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
-            visibleTabs={adminRoom ? ["live", "settled"] : undefined}
-            onChange={setActiveTab}
-          />
-        </div>
-      </div>
-
-      <div className="cockpit-markets-body min-h-0 overflow-y-auto">
-        {desktopActiveTab === "live" && (
-          <LiveTab
-            openMarkets={openMarkets}
-            openSummary={openSummary}
-            selectedMarket={selectedMarket}
-            selectedMarketId={effectiveSelectedMarketId}
-            settledMarkets={settledMarkets}
-            colony={mine}
-            colonyLabel={colonyFocusLabel}
-            agentProcessing={game.agentProcessing}
-            waitingForKickoff={txlineWaiting}
-            matchStateLabel={txlineStateLabel}
-            onSelectMarket={setSelectedMarketId}
-            onSelectSettled={(marketId) => {
-              setSelectedSettledId(marketId);
-              setActiveTab("settled");
-            }}
-          />
-        )}
-
-        {desktopActiveTab === "settled" && (
-          <SettledTab
-            settledMarkets={settledMarkets}
-            selectedSettled={selectedSettled}
-            selectedSettledId={effectiveSelectedSettledId}
-            colony={mine}
-            colonyLabel={colonyFocusLabel}
-            onSelectSettled={setSelectedSettledId}
-          />
-        )}
-
-        {desktopActiveTab === "feed" && (
-          <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
-        )}
-      </div>
-    </>
-  );
-
-  const adminEventsPanel = (
-    <MatchPulseTimeline
-      events={events}
-      markets={markets}
-      onSelectMarket={selectLinkedMarket}
-    />
-  );
-
-  const adminMarketsPanel = (
-    <section className="cockpit-activity-markets flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden">
-      {desktopMarketsWorkspace}
     </section>
   );
 
   return (
     <>
     {mobileShell}
-    <div className="cockpit-desktop flex h-[calc(100dvh-36px)] w-full flex-col gap-4 overflow-hidden pb-2 max-xl:hidden xl:relative xl:left-1/2 xl:w-[min(1500px,calc(100vw-32px))] xl:-translate-x-1/2">
-      <header className="page-top xl:grid xl:grid-cols-[auto_1fr_auto]">
+    <div className="cockpit-desktop flex h-[calc(100dvh-16px)] w-full flex-col gap-4 overflow-hidden max-xl:hidden xl:relative xl:left-1/2 xl:w-[calc(100vw-48px)] xl:-translate-x-1/2">
+      <header className="cockpit-topbar glass">
         <button className="icon-btn" aria-label={adminRoom ? "Back to admin" : "Back"} onClick={() => router.push(cockpitExitHref)}>←</button>
         <div className="text-center">
           <h1 className="hud-title text-[13px]">Live cockpit</h1>
@@ -823,84 +713,120 @@ function CockpitRun({ id }: { id: string }) {
         </span>
       </header>
 
-      {adminRoom && mine && (
-        <AdminColonySwitcher
-          colonies={sorted}
-          colonyId={mine.colonyId}
-          onSelect={selectAdminColony}
-          onManage={() => setDesktopAdminCommandOpen(true)}
-          dense
-        />
-      )}
-
-      <div className={`cockpit-desktop-grid grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] ${adminRoom ? "is-admin-wide" : ""}`}>
-        <main className={`cockpit-main grid min-h-0 min-w-0 gap-4 overflow-hidden ${adminRoom ? "is-admin-preview" : ""}`}>
-          {status === "created" ? (
-            <section className="glass flex min-w-0 flex-col gap-3 p-5 text-center xl:row-span-2 xl:min-h-[360px] xl:justify-center">
-              <p className="eyebrow">Simulation dashboard</p>
-              <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
-              <p className="mx-auto max-w-md text-sm text-ink-soft">
-                {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
-              </p>
-              <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(cockpitExitHref)}>
-                {adminRoom ? "Back to admin" : "Back to room"}
-              </button>
-            </section>
-          ) : adminRoom ? (
-            <div className="cockpit-admin-variant">
-              <div className="cockpit-admin-primary">
-                <RaceBroadcastPanel
+      <div className="cockpit-frame">
+        {status === "created" ? (
+          <section className="glass cockpit-frame-empty flex min-w-0 flex-col gap-3 p-5 text-center">
+            <p className="eyebrow">Simulation dashboard</p>
+            <h2 className="text-2xl font-bold">{adminRoom ? "Simulation is not live yet" : "Room is not live yet"}</h2>
+            <p className="mx-auto max-w-md text-sm text-ink-soft">
+              {adminRoom ? "Return to admin setup to launch this simulation." : "Start the match from the room once every player has a colony."}
+            </p>
+            <button className="btn btn-primary mx-auto !w-auto px-8" onClick={() => router.push(cockpitExitHref)}>
+              {adminRoom ? "Back to admin" : "Back to room"}
+            </button>
+          </section>
+        ) : (
+          <>
+            <div className="cockpit-left">
+              {adminRoom && mine && (
+                <AdminColonySwitcher
                   colonies={sorted}
-                  events={events}
-                  matchSummary={desktopMatchSummary}
-                  sidePanel={null}
-                  onOpenRanks={() => router.push(resultsHref)}
+                  colonyId={mine.colonyId}
+                  onSelect={selectAdminColony}
+                  onManage={() => setDesktopAdminCommandOpen(true)}
+                  compact
                 />
-                {adminMarketsPanel}
-              </div>
-              <aside className="cockpit-admin-rail">
-                {desktopColonySummary}
-                {adminEventsPanel}
-              </aside>
+              )}
+              {desktopMatchSummary}
+              {!adminRoom && (
+                mine && ownColony ? (
+                  <ColonyCommandPanel
+                    gameId={id}
+                    status={status}
+                    colony={mine}
+                    anonymousId={identity.anonymousId}
+                    controlMode="player"
+                    compactLayout
+                    onGameChange={setGame}
+                    initialScope="ants"
+                    rank={rank}
+                  />
+                ) : (
+                  <ColonyResourceCard colony={mine} rank={rank} spectator={false} compact />
+                )
+              )}
             </div>
-          ) : (
-            <>
-              <RaceBroadcastPanel
-                colonies={sorted}
-                events={events}
-                matchSummary={desktopMatchSummary}
-                onOpenRanks={() => router.push(resultsHref)}
-              />
 
-              <section className="cockpit-markets glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
-                {desktopMarketsWorkspace}
-              </section>
-            </>
-          )}
-        </main>
+            {/* Center stays empty on purpose — the living 3D world is the
+                scene, and the HUD frames it from the corners. */}
+            <div className="cockpit-center" aria-hidden="true" />
 
-        {!adminRoom && (
-          <aside className="cockpit-sidebar grid min-h-0 min-w-0 content-start gap-4 overflow-y-auto">
-            {mine && ownColony ? (
-              <ColonyCommandPanel
-                gameId={id}
-                status={status}
-                colony={mine}
-                anonymousId={identity.anonymousId}
-                controlMode="player"
-                compactLayout
-                onGameChange={setGame}
-                initialScope="ants"
-                rank={rank}
-              />
-            ) : (
-              <ColonyResourceCard colony={mine} rank={rank} spectator={false} compact />
-            )}
-          </aside>
+            <div className="cockpit-right">
+              <MatchPulseTimeline events={events} />
+              <ColonyRaceChart colonies={sorted} events={events} hero />
+            </div>
+
+            <section className="cockpit-markets cockpit-dock glass flex min-h-0 min-w-0 flex-col gap-3 overflow-hidden p-4">
+              <div className="cockpit-markets-head">
+                <div>
+                  <p className="eyebrow">Colony decisions</p>
+                  <h2 className="text-2xl font-bold">Live markets</h2>
+                </div>
+                <div className="cockpit-markets-controls">
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <span className="status-pill">{openMarkets.length} live</span>
+                    <span className="status-pill !border-green/50 !text-green">{settledMarkets.length} settled</span>
+                  </div>
+                  <CockpitTabs
+                    active={activeTab}
+                    counts={{ live: openMarkets.length, settled: settledMarkets.length, feed: usefulEvents.length }}
+                    onChange={setActiveTab}
+                  />
+                </div>
+              </div>
+
+              <div className="cockpit-markets-body min-h-0 overflow-y-auto">
+                {activeTab === "live" && (
+                  <LiveTab
+                    openMarkets={openMarkets}
+                    openSummary={openSummary}
+                    selectedMarket={selectedMarket}
+                    selectedMarketId={effectiveSelectedMarketId}
+                    settledMarkets={settledMarkets}
+                    colony={mine}
+                    colonyLabel={colonyFocusLabel}
+                    agentProcessing={game.agentProcessing}
+                    waitingForKickoff={txlineWaiting}
+                    matchStateLabel={txlineStateLabel}
+                    onSelectMarket={setSelectedMarketId}
+                    onSelectSettled={(marketId) => {
+                      setSelectedSettledId(marketId);
+                      setActiveTab("settled");
+                    }}
+                  />
+                )}
+
+                {activeTab === "settled" && (
+                  <SettledTab
+                    settledMarkets={settledMarkets}
+                    selectedSettled={selectedSettled}
+                    selectedSettledId={effectiveSelectedSettledId}
+                    colony={mine}
+                    colonyLabel={colonyFocusLabel}
+                    onSelectSettled={setSelectedSettledId}
+                  />
+                )}
+
+                {activeTab === "feed" && (
+                  <FeedTab feedRows={feedRows} onOpenRanks={() => router.push(resultsHref)} />
+                )}
+              </div>
+            </section>
+          </>
         )}
       </div>
 
-      <footer className="flex items-center justify-between px-1 pb-2 text-xs font-bold text-ink-faint">
+      <footer className="cockpit-footer text-xs font-bold text-ink-faint">
         <span>
           {status === "finished"
             ? "Match finished"
@@ -957,14 +883,12 @@ function RaceBroadcastPanel({
   events,
   compact = false,
   matchSummary,
-  sidePanel,
   onOpenRanks,
 }: {
   colonies: Colony[];
   events: GameEvent[];
   compact?: boolean;
   matchSummary?: ReactNode;
-  sidePanel?: ReactNode;
   onOpenRanks: () => void;
 }) {
   return (
@@ -981,99 +905,19 @@ function RaceBroadcastPanel({
       <div className="race-broadcast-stage">
         {matchSummary}
         <ColonyRaceChart colonies={colonies} events={events} hero />
-        {sidePanel === undefined ? <MatchPulseTimeline events={events} /> : sidePanel}
+        <MatchPulseTimeline events={events} />
       </div>
     </section>
   );
 }
 
-function ColonyOverviewPanel({
-  colony,
-  rank,
-  editable,
-  onManage,
-}: {
-  colony: Colony;
-  rank: number;
-  editable: boolean;
-  onManage: () => void;
-}) {
-  const sugar = colonySugar(colony);
-  const available = colonyAvailableSugar(colony);
-  const committed = colonyReservedSugar(colony);
-  const sugarNet = colonySugarNet(colony);
-
-  return (
-    <section className="cockpit-colony-overview" aria-label={`Colony settings for ${colony.name}`}>
-      <header className="cockpit-colony-overview-head">
-        <div className="min-w-0">
-          <p className="eyebrow">Admin colony</p>
-          <h3>{colony.name}</h3>
-        </div>
-        <div className="cockpit-colony-overview-status">
-          <span className={`colony-console-state ${editable ? "is-live" : "is-locked"}`}>
-            <i aria-hidden="true" />
-            {editable ? "Live" : "Locked"}
-          </span>
-          <span className="colony-console-rank">#{rank || "–"}</span>
-        </div>
-      </header>
-
-      <div className="colony-console-score" aria-label={`${sugar} Sugar, ${available} available, ${committed} committed`}>
-        <div className="colony-console-score-main">
-          <span>Sugar</span>
-          <p>
-            <strong>{sugar}</strong>
-            <b className={sugarNet < 0 ? "is-negative" : "is-positive"}>
-              Δ {sugarNet > 0 ? "+" : ""}{sugarNet}
-            </b>
-          </p>
-        </div>
-        <div className="colony-console-score-stat">
-          <span>Available</span>
-          <strong>{available}</strong>
-        </div>
-        <div className="colony-console-score-stat">
-          <span>Committed</span>
-          <strong>{committed}</strong>
-        </div>
-      </div>
-
-      <div className="cockpit-colony-overview-orders">
-        <div>
-          <span>Colony strategy</span>
-          <strong>{optionLabel(STYLE_OPTIONS, colony.style)}</strong>
-        </div>
-        <div>
-          <span>Colony ants</span>
-          <strong>{colony.antsAlive} alive</strong>
-        </div>
-      </div>
-
-      <button type="button" className="admin-colony-manage-button" onClick={onManage}>
-        <span>Manage orders</span>
-        <span aria-hidden="true">→</span>
-      </button>
-    </section>
-  );
-}
-
-function MatchPulseTimeline({
-  events,
-  markets = [],
-  onSelectMarket,
-}: {
-  events: GameEvent[];
-  markets?: MarketModel[];
-  onSelectMarket?: (market: MarketModel) => void;
-}) {
+function MatchPulseTimeline({ events }: { events: GameEvent[] }) {
   const moments = events.flatMap((event) => {
     const spotlight = spotlightFromEvent(event);
     return spotlight ? [{ event, spotlight }] : [];
   });
   const latest = moments[0];
   const recent = moments.slice(1, 5);
-  const latestMarket = latest ? linkedMarket(latest.event, markets) : undefined;
 
   return (
     <section className="match-pulse" aria-label="Latest match and market events">
@@ -1094,46 +938,20 @@ function MatchPulseTimeline({
             </div>
             <strong>{latest.spotlight.title}</strong>
             <p>{latest.spotlight.detail}</p>
-            {latestMarket && onSelectMarket ? (
-              <button
-                type="button"
-                className="match-pulse-market-link"
-                onClick={() => onSelectMarket(latestMarket)}
-              >
-                <span>{latestMarket.status === "open" ? "Open market" : "Market result"}</span>
-                <strong>{cleanMarketLabel(latestMarket.label)}</strong>
-                <i aria-hidden="true">→</i>
-              </button>
-            ) : (
-              <small>Latest signal · #{latest.event.index}</small>
-            )}
+            <small>Latest signal · #{latest.event.index}</small>
           </article>
 
           <ol className="match-pulse-recent" aria-label="Previous events">
-            {recent.length ? recent.map(({ event, spotlight }) => {
-              const market = linkedMarket(event, markets);
-              return (
-                <li key={spotlight.key} data-tone={spotlight.tone}>
-                  <span className="match-pulse-glyph">{pulseGlyphLabel(spotlight.glyph)}</span>
-                  <span className="min-w-0">
-                    <small>{spotlight.kicker}</small>
-                    <b>{spotlight.title}</b>
-                  </span>
-                  {market && onSelectMarket ? (
-                    <button
-                      type="button"
-                      className="match-pulse-recent-link"
-                      aria-label={`Open ${market.status === "open" ? "market" : "market result"}: ${cleanMarketLabel(market.label)}`}
-                      onClick={() => onSelectMarket(market)}
-                    >
-                      {market.status === "open" ? "Market" : "Result"} →
-                    </button>
-                  ) : (
-                    <em>#{event.index}</em>
-                  )}
-                </li>
-              );
-            }) : (
+            {recent.length ? recent.map(({ event, spotlight }) => (
+              <li key={spotlight.key} data-tone={spotlight.tone}>
+                <span className="match-pulse-glyph">{pulseGlyphLabel(spotlight.glyph)}</span>
+                <span className="min-w-0">
+                  <small>{spotlight.kicker}</small>
+                  <b>{spotlight.title}</b>
+                </span>
+                <em>#{event.index}</em>
+              </li>
+            )) : (
               <li className="is-empty">The next goal, card, substitution or market will appear here.</li>
             )}
           </ol>
@@ -1149,12 +967,6 @@ function MatchPulseTimeline({
       )}
     </section>
   );
-}
-
-function linkedMarket(event: GameEvent, markets: MarketModel[]) {
-  const opportunityId = eventOpportunityId(event);
-  if (!opportunityId) return undefined;
-  return markets.find((market) => market.id === opportunityId);
 }
 
 function pulseGlyphLabel(glyph: EventSpotlight["glyph"]): string {
@@ -1202,22 +1014,17 @@ function FeedRowLine({ row }: { row: FeedRow }) {
 function CockpitTabs({
   active,
   counts,
-  visibleTabs,
   onChange,
 }: {
   active: CockpitTab;
   counts: Record<CockpitTab, number>;
-  visibleTabs?: CockpitTab[];
   onChange: (tab: CockpitTab) => void;
 }) {
-  const allTabs: { id: CockpitTab; label: string }[] = [
+  const tabs: { id: CockpitTab; label: string }[] = [
     { id: "live", label: "Live" },
     { id: "settled", label: "Settled" },
     { id: "feed", label: "Feed" },
   ];
-  const tabs = visibleTabs
-    ? allTabs.filter((tab) => visibleTabs.includes(tab.id))
-    : allTabs;
   return (
     <div className="seg sticky top-2 z-20 bg-[rgba(228,218,193,0.95)] backdrop-blur-md" role="tablist" aria-label="Cockpit views">
       {tabs.map((tab) => (
@@ -1329,29 +1136,16 @@ function SettledTab({
     return <EmptyState title="No settled market yet" body="Results will appear here as markets expire or resolve." />;
   }
   return (
-    <div className="settled-workspace">
-      <div className="settled-workspace-head">
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold">Settled markets</h2>
-          <p className="text-xs text-ink-faint">Choose a result and keep its full decision in view.</p>
+          <p className="text-xs text-ink-faint">Select a result instead of scrolling the journal.</p>
         </div>
         <span className="status-pill">{settledMarkets.length}</span>
       </div>
-      <div className="settled-workspace-grid">
-        <aside className="settled-market-browser">
-          <div className="settled-market-browser-head">
-            <span>Result history</span>
-            <span>Newest first</span>
-          </div>
-          <SettledRail
-            markets={settledMarkets}
-            selectedId={selectedSettledId}
-            onSelect={onSelectSettled}
-            stacked
-          />
-        </aside>
-        {selectedSettled && <SettledDetailPanel market={selectedSettled} colony={colony} colonyLabel={colonyLabel} />}
-      </div>
+      <SettledRail markets={settledMarkets} selectedId={selectedSettledId} onSelect={onSelectSettled} />
+      {selectedSettled && <SettledDetailPanel market={selectedSettled} colony={colony} colonyLabel={colonyLabel} />}
     </div>
   );
 }
@@ -1446,19 +1240,14 @@ function SettledRail({
   selectedId,
   onSelect,
   compact = false,
-  stacked = false,
 }: {
   markets: MarketModel[];
   selectedId: string | null;
   onSelect: (marketId: string) => void;
   compact?: boolean;
-  stacked?: boolean;
 }) {
   return (
-    <div
-      className={`settled-market-rail ${compact ? "is-compact" : ""} ${stacked ? "is-stacked" : ""}`}
-      aria-label="Settled markets"
-    >
+    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Settled markets">
       {markets.map((market) => {
         const summary = settlementSummary(market);
         const outcome = marketOutcomeSummary(market);
@@ -1469,25 +1258,26 @@ function SettledRail({
             type="button"
             aria-pressed={selected}
             onClick={() => onSelect(market.id)}
-            className="settled-market-card"
-            data-active={selected}
+            className={`min-w-[132px] rounded-md border-2 p-3 text-left transition ${
+              selected
+                ? "border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] text-ink shadow-[2px_2px_0_rgba(90,70,30,0.4)]"
+                : "border-[color:var(--brd-soft)] bg-[rgba(249,243,226,0.7)] text-ink-soft"
+            }`}
           >
-            <span className="settled-market-copy">
-              <span className="settled-market-kicker">{compactMarketName(market)}</span>
-              <span className="settled-market-title">{cleanMarketLabel(market.label)}</span>
-              {!compact && (
-                <span className="settled-market-outcome">
-                  Result · {outcome.label}
-                </span>
-              )}
-            </span>
+            <span className="block font-mono text-[10px] uppercase text-gold-deep">{compactMarketName(market)}</span>
+            <span className="mt-1 block truncate text-xs font-bold">{cleanMarketLabel(market.label)}</span>
             {!compact && (
-              <span
-                className={`settled-market-delta ${summary.resourceDelta < 0 ? "is-loss" : "is-gain"}`}
-                aria-label={`${signedValue(summary.resourceDelta)} Sugar across all colonies`}
-              >
-                <strong>{signedValue(summary.resourceDelta)}</strong>
-                <small>Sugar</small>
+              <span className="mt-1 block truncate text-[11px] font-bold text-green">
+                Outcome: {outcome.label}
+              </span>
+            )}
+            {!compact && (
+              <span className="mt-2 grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
+                <b className={`rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 ${summary.resourceDelta < 0 ? "text-rust" : "text-green"}`}>
+                  {signedValue(summary.resourceDelta)} 🍬
+                </b>
+                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-rust">{summary.losses}</b>
+                <b className="rounded bg-[rgba(74,58,30,0.1)] px-1 py-1 text-ink">{summary.voided}</b>
               </span>
             )}
           </button>
@@ -1630,12 +1420,10 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
   const distribution = aggregateVotes(market.votes);
   const activity = colonyMarketActivity(market, colony);
   const outcome = marketOutcomeSummary(market);
-  const decision = colonyDecisionSummary(activity);
-  const commit = colonyCommitSummary(activity);
-  const colonyResult = colonyResultSummary(activity, "settled");
   return (
-    <article className="settled-detail-panel">
-      <header className="settled-detail-head">
+    <article className="rounded-md border-2 border-[color:var(--color-gold)] bg-[rgba(249,243,226,0.96)] p-3 shadow-[4px_4px_0_rgba(74,58,30,0.28)]">
+      <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gold/40" />
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="eyebrow">Settled market</p>
           <h2 className="text-base font-bold leading-snug">{cleanMarketLabel(market.label)}</h2>
@@ -1644,50 +1432,28 @@ function SettledDetailPanel({ market, colony, colonyLabel }: { market: MarketMod
         <span className={`rounded-full border-2 px-2 py-1 font-mono text-[10px] uppercase ${summary.tone}`}>
           {summary.label}
         </span>
-      </header>
-
-      <div className="settled-detail-glance">
-        <DecisionCell label="Outcome" value={outcome.label} detail={outcome.detail} tone={outcome.tone} />
-        <DecisionCell label="Ant consensus" value={decision.value} detail={decision.detail} tone={decision.tone} />
-        <DecisionCell label="Colony action" value={commit.value} detail={commit.detail} tone={commit.tone} />
-        <DecisionCell label="Sugar result" value={colonyResult.value} detail={colonyResult.detail} tone={colonyResult.cellTone} />
       </div>
 
-      <div className="settled-detail-votes">
-        {distribution.rows.length > 0 && (
-          <Distribution distribution={distribution} title="All colonies" compact />
-        )}
-        {activity.distribution.rows.length > 0 && (
-          <Distribution distribution={activity.distribution} title={`${colonyLabel} votes`} compact />
-        )}
+      <MarketOutcomePanel outcome={outcome} />
+
+      <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <PulseMetric
+          label="All colonies Sugar"
+          value={signedValue(summary.resourceDelta)}
+          tone={summary.resourceDelta >= 0 ? "green" : undefined}
+        />
+        <PulseMetric label="Losses" value={summary.losses} />
+        <PulseMetric label="Void" value={summary.voided} />
       </div>
 
-      <div className="settled-detail-expanded">
-        <div className="settled-detail-summary">
-          <MarketOutcomePanel outcome={outcome} />
+      {distribution.rows.length > 0 && <Distribution distribution={distribution} title="All colonies vote split" />}
 
-          <div className="settled-detail-metrics">
-            <PulseMetric
-              label="All colonies Sugar"
-              value={signedValue(summary.resourceDelta)}
-              tone={summary.resourceDelta >= 0 ? "green" : undefined}
-            />
-            <PulseMetric label="Losses" value={summary.losses} />
-            <PulseMetric label="Void" value={summary.voided} />
-          </div>
-
-          {distribution.rows.length > 0 && (
-            <Distribution distribution={distribution} title="All colonies vote split" compact />
-          )}
-        </div>
-
-        <ColonyDecisionPanel activity={activity} title={colonyLabel} mode="settled" />
-      </div>
-
-      <div className="settled-event-notes">
+      <div className="mt-3 flex flex-col gap-1">
         {[...personalResultEvents(activity), ...market.settlements, ...market.voids, ...market.closures]
           .filter(uniqueEventByIndex)
-          .slice(0, 3)
+          .slice(0, 4)
           .map((event) => (
           <p key={event.index} className="text-xs leading-snug text-ink-soft">{compactEventMessage(event)}</p>
         ))}
@@ -1705,7 +1471,7 @@ function MarketOutcomePanel({ outcome }: { outcome: MarketOutcome }) {
         ? "border-[color:rgba(176,126,28,0.5)] bg-[rgba(176,126,28,0.1)] text-gold-deep"
         : "border-[color:var(--brd-soft)] bg-[rgba(74,58,30,0.06)] text-ink-faint";
   return (
-    <section className={`settled-outcome-panel rounded-md border-2 p-3 ${tone}`}>
+    <section className={`mt-3 rounded-md border-2 p-3 ${tone}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="eyebrow">Outcome</p>
@@ -1739,8 +1505,8 @@ function ColonyDecisionPanel({
   const commit = colonyCommitSummary(activity);
   const result = colonyResultSummary(activity, mode);
   return (
-    <section className="colony-decision-panel rounded-md border-2 border-[color:rgba(78,126,42,0.42)] bg-[rgba(78,126,42,0.08)] p-3">
-      <div className="colony-decision-head flex flex-wrap items-start justify-between gap-2">
+    <section className="mt-3 rounded-md border-2 border-[color:rgba(78,126,42,0.42)] bg-[rgba(78,126,42,0.08)] p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="eyebrow !text-green">{title}</p>
           <h3 className="truncate text-base font-bold text-ink">{activity.colony.name}</h3>
@@ -1748,14 +1514,14 @@ function ColonyDecisionPanel({
         <span className={`status-pill ${result.tone}`}>{result.badge}</span>
       </div>
 
-      <div className="colony-decision-cells mt-3 grid gap-2 md:grid-cols-3">
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
         <DecisionCell label="Ant consensus" value={decision.value} detail={decision.detail} tone={decision.tone} />
         <DecisionCell label="Colony action" value={commit.value} detail={commit.detail} tone={commit.tone} />
         <DecisionCell label="Sugar result" value={result.value} detail={result.detail} tone={result.cellTone} />
       </div>
 
       {activity.distribution.rows.length > 0 && (
-        <div className="colony-decision-votes mt-3">
+        <div className="mt-3">
           <div className="mb-1 flex items-center justify-between gap-3 text-xs font-bold text-ink-faint">
             <span>Colony vote split</span>
             <span>{activity.distribution.total} ants</span>
@@ -1796,7 +1562,7 @@ function DecisionCell({
         ? "text-rust"
         : "text-ink";
   return (
-    <div className="decision-cell well min-w-0 px-3 py-2">
+    <div className="well min-w-0 px-3 py-2">
       <p className="truncate text-[10px] font-bold text-ink-faint">{label}</p>
       <p className={`truncate text-sm font-bold ${color}`}>{value}</p>
       <p className="mt-1 truncate text-[11px] text-ink-faint">{detail}</p>
@@ -1847,17 +1613,9 @@ function PulseMetric({ label, value, tone }: { label: string; value: number | st
   );
 }
 
-function Distribution({
-  distribution,
-  title,
-  compact = false,
-}: {
-  distribution: ReturnType<typeof aggregateVotes>;
-  title?: string;
-  compact?: boolean;
-}) {
+function Distribution({ distribution, title }: { distribution: ReturnType<typeof aggregateVotes>; title?: string }) {
   return (
-    <div className={`distribution ${compact ? "is-compact" : ""}`}>
+    <div className="mt-3">
       {title && <p className="mb-2 text-xs font-bold text-ink-faint">{title}</p>}
       <div className="flex h-3 overflow-hidden rounded-full bg-[rgba(74,58,30,0.18)]" aria-label={`Vote distribution, ${distribution.total} ants`}>
         {distribution.rows.map((row) => (
@@ -1870,27 +1628,15 @@ function Distribution({
           />
         ))}
       </div>
-      {compact ? (
-        <div className="distribution-compact-legend">
-          {distribution.rows.slice(0, 3).map((row) => (
-            <span key={row.key}>
-              <i style={{ background: row.color }} />
-              <b>{row.label}</b>
-              {row.count}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, distribution.rows.length)}, minmax(0, 1fr))` }}>
-          {distribution.rows.map((row) => (
-            <div key={row.key} className="well px-2 py-2">
-              <p className="truncate text-xs font-bold" style={{ color: row.color }}>{row.label}</p>
-              <p className="font-mono text-xl font-bold">{row.count}</p>
-              <p className="text-[11px] text-ink-faint">{Math.round((row.count / Math.max(1, distribution.total)) * 100)}%</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(3, distribution.rows.length)}, minmax(0, 1fr))` }}>
+        {distribution.rows.map((row) => (
+          <div key={row.key} className="well px-2 py-2">
+            <p className="truncate text-xs font-bold" style={{ color: row.color }}>{row.label}</p>
+            <p className="font-mono text-xl font-bold">{row.count}</p>
+            <p className="text-[11px] text-ink-faint">{Math.round((row.count / Math.max(1, distribution.total)) * 100)}%</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
